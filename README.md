@@ -4,6 +4,16 @@ Time clock, pre-operational inspections, maintenance requests and payroll hours 
 
 It replaces the paper time sheet, the pre-op clipboard and the maintenance request form, and it does the hours math so nobody has to.
 
+![Time clock: sign in, GPS check, lunch countdown, and the day worked out as 12.75 − 0.50 = 12.25](docs/gallery-time-clock.png)
+
+![Pre-op checklist with OK, BO and N/A, the Do Not Operate tag, the steps to take, and the maintenance request](docs/gallery-pre-op.png)
+
+![Supervisor screens: crew board, who is on site, time log, corrections, payroll, maintenance requests, roster and the mine boundary](docs/gallery-supervisor.png)
+
+The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_sample.xlsx), [safety log sample](docs/samples/US-Mine-Safety-Log_sample.xlsx)):
+
+![Payroll summary sheet in Excel: regular, overtime and double time by employee](docs/excel-payroll.png)
+
 ## What it does
 
 **For everyone on the crew**
@@ -46,6 +56,7 @@ npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
 npm test           # 99 unit tests: hours, lunch rules, overtime, GPS, checklists, Excel
 npm run typecheck
+npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
 
 The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere.

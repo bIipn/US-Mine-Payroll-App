@@ -76,7 +76,7 @@ export function SiteMap({ site, you, youInside, height = 300 }: {
 
         {/* Mine pin */}
         <Circle cx={x(0)} cy={y(0)} r={6} fill={color.ink} />
-        <SvgText x={x(0) - 11} y={y(0) + 4} fill={color.ink} textAnchor="end" {...label}>Mine pin</SvgText>
+        <SvgText x={x(0)} y={y(0) + 20} fill={color.ink} textAnchor="middle" {...label}>Mine pin</SvgText>
         <SvgText x={x(0)} y={y(-site.radiusM) + 16} fill={color.ink} textAnchor="middle" {...label}>
           {`Clock-in boundary, ${fmtDistance(site.radiusM)} out`}
         </SvgText>

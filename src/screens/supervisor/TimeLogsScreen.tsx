@@ -29,6 +29,11 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
     .sort((a, b) => a.clockIn.at - b.clockIn.at);
   const turnedDown = denied.filter((d) => d.at >= day && d.at < next);
   const short = (ms?: number) => (ms ? fmtTime(ms).replace(' AM', 'a').replace(' PM', 'p') : '–');
+  /** "Whitfield, D." keeps long names inside the column, the same way the payroll table lists them. */
+  const rosterName = (id: string) => {
+    const e = employees.find((x) => x.id === id);
+    return e ? `${e.lastName}, ${e.firstName.charAt(0)}.` : 'Unknown';
+  };
 
   return (
     <Page
@@ -83,11 +88,11 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
                 style={({ pressed }) => [styles.line, pressed && { backgroundColor: color.kaolin }]}
               >
                 <View style={styles.lineRow}>
-                  <Txt v="smallStrong" style={styles.name} numberOfLines={1}>{employeeName(employees, shift.employeeId)}</Txt>
-                  <Txt v="small" style={styles.cell}>{short(shift.clockIn.at)}</Txt>
-                  <Txt v="small" style={styles.cell}>{short(lunch?.start.at)}</Txt>
-                  <Txt v="small" style={styles.cell}>{short(lunch?.end?.at)}</Txt>
-                  <Txt v="small" c={shift.clockOut ? color.ink : missing ? color.red : color.green} style={styles.cell}>
+                  <Txt v="smallStrong" style={styles.name} numberOfLines={1}>{rosterName(shift.employeeId)}</Txt>
+                  <Txt v="micro" style={styles.cell}>{short(shift.clockIn.at)}</Txt>
+                  <Txt v="micro" style={styles.cell}>{short(lunch?.start.at)}</Txt>
+                  <Txt v="micro" style={styles.cell}>{short(lunch?.end?.at)}</Txt>
+                  <Txt v="micro" c={shift.clockOut ? color.ink : missing ? color.red : color.green} style={styles.cell}>
                     {shift.clockOut ? short(shift.clockOut.at) : missing ? 'none' : 'here'}
                   </Txt>
                   <Txt v="strong" style={styles.paid}>{missing ? '–' : fmtHrs(totals.paid)}</Txt>
@@ -129,8 +134,8 @@ const styles = StyleSheet.create({
   line: { paddingHorizontal: space.md, paddingVertical: space.md, borderTopWidth: 1, borderTopColor: color.rule, gap: 6 },
   lineRow: { flexDirection: 'row', alignItems: 'center' },
   head: { flexDirection: 'row', borderTopWidth: 0, backgroundColor: color.kaolin, paddingVertical: space.sm },
-  name: { flex: 2.3 },
-  cell: { flex: 1.15, textAlign: 'right' },
-  paid: { flex: 1.1, textAlign: 'right' },
+  name: { flex: 2.4 },
+  cell: { flex: 1.12, textAlign: 'right' },
+  paid: { flex: 1.05, textAlign: 'right' },
   flags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
 });
