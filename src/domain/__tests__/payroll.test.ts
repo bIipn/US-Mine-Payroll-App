@@ -1,5 +1,6 @@
-import { computePayroll, computeWeek, sumPayroll } from '../payroll';
-import type { Employee, Shift } from '../types';
+import { ymd } from '../../util/format';
+import { computePayroll, computeRange, computeWeek, estimateGross, sumPayroll } from '../payroll';
+import type { Employee, LeaveEntry, LeaveType, Shift } from '../types';
 
 // Sunday Nov 8 2026 starts the workweek used in these tests.
 const WEEK = new Date(2026, 10, 8).getTime();
@@ -120,26 +121,113 @@ describe('timesheet decimals', () => {
   });
 });
 
+/** Pay periods used below: Nov 1-15 and Nov 16-30, 2026. */
+const NOV_1 = at(1, 0);
+const NOV_16 = at(16, 0);
+const DEC_1 = new Date(2026, 11, 1).getTime();
+const NO_LEAVE: LeaveEntry[] = [];
+const entry = (day: number, type: LeaveType, hours: number, employeeId = 'e1'): LeaveEntry => ({
+  id: `lv${day}${type}`, employeeId, day: at(day, 0), type, hours, enteredBy: 'sup', at: 0,
+});
+
+describe('computeRange', () => {
+  it('lists every day of the range', () => {
+    const range = computeRange([], NO_LEAVE, NOV_1, NOV_16, NOW);
+    expect(range.days).toHaveLength(15);
+    expect([ymd(range.days[0].dayStart), ymd(range.days[14].dayStart)]).toEqual(['2026-11-01', '2026-11-15']);
+  });
+
+  it('counts weekly overtime from the whole workweek when a pay period starts mid-week', () => {
+    // Workweek Sun Nov 15 to Sat Nov 21. Eight hours a day Sunday through Friday is 48,
+    // so Friday is overtime, even though Sunday the 15th falls in the earlier pay period.
+    const shifts = [15, 16, 17, 18, 19, 20].map((d) => worked(d, 8));
+    const first = computeRange(shifts, NO_LEAVE, NOV_1, NOV_16, NOW);
+    const second = computeRange(shifts, NO_LEAVE, NOV_16, DEC_1, NOW);
+    expect([first.reg, first.ot, first.paid]).toEqual([800, 0, 800]);
+    expect([second.reg, second.ot, second.paid]).toEqual([3200, 800, 4000]);
+  });
+
+  it('keeps paid leave out of overtime and adds it to the total', () => {
+    // Monday to Thursday worked, Friday PTO, Saturday worked: 40 hours worked, so no overtime.
+    const shifts = [2, 3, 4, 5, 7].map((d) => worked(d, 8));
+    const range = computeRange(shifts, [entry(6, 'pto', 800)], NOV_1, NOV_16, NOW);
+    expect([range.reg, range.ot, range.dt]).toEqual([4000, 0, 0]);
+    expect([range.holiday, range.pto, range.sick]).toEqual([0, 800, 0]);
+    expect(range.total).toBe(4800);
+    expect(range.leave).toHaveLength(1);
+  });
+
+  it('leaves out leave, days and flags that fall outside the range', () => {
+    const noLunch = (d: number): Shift => ({
+      id: `nl${d}`, employeeId: 'e1', clockIn: { at: at(d, 6) }, clockOut: { at: at(d, 14) }, lunches: [], breaks: [],
+    });
+    const range = computeRange(
+      [noLunch(13), noLunch(17)],
+      [entry(13, 'sick', 400), entry(17, 'sick', 800), entry(11, 'holiday', 800)],
+      NOV_1, NOV_16, NOW,
+    );
+    expect([range.daysWorked, range.mealFlags, range.flagCounts.no_lunch]).toEqual([1, 1, 1]);
+    expect([range.holiday, range.sick]).toEqual([800, 400]);
+    expect(range.total).toBe(800 + 800 + 400);
+  });
+
+  it('counts a shift with no clock-out as needing a fix, not as hours', () => {
+    const open: Shift = { id: 'open', employeeId: 'e1', clockIn: { at: at(10, 6) }, lunches: [], breaks: [] };
+    const range = computeRange([worked(9, 8), open], NO_LEAVE, NOV_1, NOV_16, NOW);
+    expect([range.paid, range.needsFix]).toEqual([800, 1]);
+  });
+});
+
 describe('computePayroll', () => {
   const employees: Employee[] = [
     { id: 'e1', firstName: 'Ana', lastName: 'Diaz', role: 'employee', active: true },
     { id: 'e2', firstName: 'Bo', lastName: 'Lee', role: 'employee', active: true },
   ];
 
-  it('totals a two-week period per employee with overtime worked out week by week', () => {
+  it('totals a period for each employee, with overtime worked out week by week', () => {
     const shifts = [
-      ...[9, 10, 11, 12, 13, 14].map((d) => worked(d, 8, 'e1')), // week 1: 40 + 8 OT
-      ...[16, 17, 18].map((d) => worked(d, 8, 'e1')), //             week 2: 24
+      ...[9, 10, 11, 12, 13, 14].map((d) => worked(d, 8, 'e1')), // workweek of Nov 8: 40 + 8 overtime
+      ...[16, 17, 18].map((d) => worked(d, 8, 'e1')), //             workweek of Nov 15: 24
       worked(9, 6, 'e2'),
     ];
-    const rows = computePayroll(employees, shifts, WEEK, 2, NOW);
-    expect(rows.map((r) => [hours(r.reg), hours(r.ot), hours(r.paid)])).toEqual([
-      [64, 8, 72],
-      [6, 0, 6],
+    const leave = [entry(19, 'pto', 800, 'e1'), entry(11, 'holiday', 800, 'e2')];
+    const rows = computePayroll(employees, shifts, leave, WEEK, at(22, 0), NOW);
+    expect(rows.map((r) => [r.reg, r.ot, r.paid, r.pto, r.holiday, r.total])).toEqual([
+      [6400, 800, 7200, 800, 0, 8000],
+      [600, 0, 600, 0, 800, 1400],
     ]);
-    expect(rows[0].weeks).toHaveLength(2);
     const all = sumPayroll(rows);
-    expect(hours(all.paid)).toBe(78);
-    expect(all.daysWorked).toBe(10);
+    expect([all.paid, all.daysWorked, all.pto, all.holiday, all.total]).toEqual([7800, 10, 800, 800, 9400]);
+  });
+});
+
+describe('estimateGross', () => {
+  const hours = { reg: 0, ot: 0, dt: 0, holiday: 0, pto: 0, sick: 0 };
+
+  it('pays overtime at time-and-a-half, double time at twice the rate, and leave at straight time', () => {
+    const estimate = estimateGross({ ...hours, reg: 8000, ot: 1050, dt: 25, pto: 800 }, 3000);
+    expect(estimate.lines.map((l) => [l.code, l.hours, l.rateCents, l.amountCents])).toEqual([
+      ['ST', 8000, 3000, 240000],
+      ['OT', 1050, 4500, 47250],
+      ['DT', 25, 6000, 1500],
+      ['PTO', 800, 3000, 24000],
+    ]);
+    expect(estimate.grossCents).toBe(312750);
+  });
+
+  it('rounds each line to the cent', () => {
+    // 0.33 hours of overtime at $25.55 an hour is 0.33 x $38.325 = $12.64725
+    expect(estimateGross({ ...hours, ot: 33 }, 2555).lines[0].amountCents).toBe(1265);
+  });
+
+  it('keeps a half-cent overtime rate exact, so the line multiplies out', () => {
+    // $24.25 an hour is $36.375 at time-and-a-half: 10 hours come to $363.75, not 10 x $36.38.
+    const [line] = estimateGross({ ...hours, ot: 1000 }, 2425).lines;
+    expect(line.rateCents).toBe(3637.5);
+    expect(line.amountCents).toBe(36375);
+  });
+
+  it('has no lines when there are no hours', () => {
+    expect(estimateGross(hours, 3000)).toEqual({ lines: [], grossCents: 0 });
   });
 });

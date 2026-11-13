@@ -180,3 +180,16 @@ export function fmtMeter(n: number): string {
   const [whole, frac] = fixed.split('.');
   return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${frac}`;
 }
+
+/** An hourly rate in cents: 2400 -> "$24.00". A half cent is kept: 3637.5 -> "$36.375". */
+export function fmtRate(cents: number): string {
+  return Number.isInteger(cents) ? fmtMoney(cents) : `$${(cents / 100).toFixed(3)}`;
+}
+
+/** Whole cents as dollars: 123456 -> "$1,234.56". */
+export function fmtMoney(cents: number): string {
+  const whole = Math.floor(Math.abs(cents) / 100)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${cents < 0 ? '-' : ''}$${whole}.${pad(Math.abs(cents) % 100)}`;
+}

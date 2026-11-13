@@ -30,8 +30,9 @@ Run the tests and the typecheck before calling any task done.
 - **Navigation is React Navigation, kept in memory** (`src/navigation/RootNavigator.tsx`), not Expo Router. There is no URL routing, so the web build can run from a single file or inside a frame. Do not add `linking` config or Expo Router without a reason that outweighs that.
 - **Rules live in `src/domain/` as pure functions with tests.** Hours, lunch rules, overtime, the GPS boundary, checklists and standards. Change a rule there and update its test; screens only display results.
 - **Hours are hundredths of an hour, as whole numbers** (1225 = 12.25). Convert minutes with `toHundredths` and never add up rounded floats. This matches the crew's paper timesheet method and keeps every screen and export in agreement.
+- **Pay periods are the 1st to the 15th (paid the 20th) and the 16th to the end of the month (paid the 5th)**, in `src/domain/payPeriod.ts`. A pay date on a weekend or bank holiday moves to the banking day before. Overtime is always figured over whole workweeks and then summed for the days in the range (`computeRange` in `src/domain/payroll.ts`); never compute overtime from a pay period's days alone. Holiday, PTO and sick hours are paid leave: they add to the total and never count toward overtime.
 - **Checklists and standards are data**, in `src/domain/templates.ts` and `src/domain/standards.ts`. A checklist item cites MSHA with `cfr` and OSHA with `osha`; both keys must exist in `STANDARDS` (a test enforces it). Do not cite a regulation you have not verified against the regulation text.
-- **State is one Zustand store** (`src/store/useStore.ts`) saved to device storage. Screens call store actions; they do not write state directly.
+- **State is one Zustand store** (`src/store/useStore.ts`) saved to device storage. Screens call store actions; they do not write state directly. When the saved shape changes, raise `STATE_VERSION` and add the step to `migratePersisted` in `src/store/migrate.ts`, with a test.
 - **Platform splits use file suffixes**: `notifications.native.ts` / `notifications.ts`, `saveFile.native.ts` / `saveFile.ts`. The plain file is the web version and the source of the shared types.
 - **Icons are imported one file at a time** through `src/components/icons.ts`. Importing from the `lucide-react-native` root pulls the whole library into the bundle.
 - **Fonts are imported one weight at a time** (`@expo-google-fonts/barlow/500Medium`), for the same reason.
@@ -50,4 +51,6 @@ Run the tests and the typecheck before calling any task done.
 - A punch that is turned down is logged; clock-out and lunch start are never blocked by location.
 - Punch times are never silently changed. A correction needs a reason and is appended to the shift's edit history.
 - Lunch flags are for review. Nothing is paid or docked automatically.
+- An hourly rate is entered by the person it belongs to, for their own pay estimate. It is never shown to anyone else and never goes in an export.
+- The pay estimate is labelled as an estimate of gross pay. The pay stub is the official figure.
 - Standards text in the app is a plain-language summary, labelled as such, not legal advice.

@@ -9,6 +9,7 @@ import type {
   GeoStamp,
   Inspection,
   InspectionAnswer,
+  LeaveEntry,
   Mrf,
   OperatingLog,
   Punch,
@@ -20,23 +21,33 @@ import { addDays, HOUR, MIN, startOfDay } from '../util/format';
 import { seededRandom } from '../util/hash';
 
 /**
- * Sample crew, fleet and two weeks of history so every screen has something to
- * show. All names and unit numbers are made up. "Today" is generated relative
- * to the moment the demo starts, so there is always a crew on the clock.
+ * Sample crew, fleet and history so every screen has something to show: about
+ * five weeks of time punches (enough to look back over a whole pay period) and
+ * two weeks of pre-ops. All names, unit numbers and pay figures are made up.
+ * "Today" is generated relative to the moment the demo starts, so there is
+ * always a crew on the clock.
  */
 
 export const DEMO_EMPLOYEE_ID = 'emp_demo';
 export const DEMO_SUPERVISOR_ID = 'sup_demo';
 
+/** Days of time punches to generate. The start of the last full pay period is at most 30 days back. */
+const HISTORY_DAYS = 36;
+/** Workdays of pre-ops and operating sheets to generate. */
+const PREOP_WORKDAYS = 12;
+
 export interface SeedData {
   employees: Employee[];
   accounts: Account[];
   shifts: Shift[];
+  leave: LeaveEntry[];
   equipment: Equipment[];
   inspections: Inspection[];
   opLogs: OperatingLog[];
   mrfs: Mrf[];
   mrfSeq: number;
+  /** Hourly rate each person entered for their own pay estimate, in cents. */
+  payRates: Record<string, number>;
 }
 
 type CrewRow = [id: string, first: string, last: string, role: Role, title: string, unit?: string];
@@ -101,7 +112,10 @@ export function defaultSettings(demo: boolean): Settings {
 
 /** The roster and fleet with no history — what a fresh production install starts from. */
 export function emptyData(): SeedData {
-  return { employees: [], accounts: [], shifts: [], equipment: [], inspections: [], opLogs: [], mrfs: [], mrfSeq: 1001 };
+  return {
+    employees: [], accounts: [], shifts: [], leave: [], equipment: [],
+    inspections: [], opLogs: [], mrfs: [], mrfSeq: 1001, payRates: {},
+  };
 }
 
 export function buildDemoData(now: number): SeedData {
@@ -144,6 +158,7 @@ export function buildDemoData(now: number): SeedData {
   const byUnit = new Map(equipment.map((e) => [e.unit, e]));
 
   const shifts: Shift[] = [];
+  const leave: LeaveEntry[] = [];
   const inspections: Inspection[] = [];
   const opLogs: OperatingLog[] = [];
   const mrfs: Mrf[] = [];
@@ -211,19 +226,21 @@ export function buildDemoData(now: number): SeedData {
     return inspection;
   }
 
-  // ---- Two weeks of history --------------------------------------------------------------
-  // Workdays (Monday to Saturday) in the last two weeks, oldest first. `back` counts
-  // workdays before today, so the examples below land on a real workday whatever
-  // day of the week the demo is opened.
+  // ---- History ---------------------------------------------------------------------------
+  // Workdays (Monday to Saturday), oldest first. `back` counts workdays before today,
+  // so the examples below land on a real workday whatever day of the week the demo
+  // is opened.
   const today = startOfDay(now);
   const workdays: number[] = [];
-  for (let d = 13; d >= 1; d--) {
+  for (let d = HISTORY_DAYS; d >= 1; d--) {
     const day = addDays(today, -d);
     if (new Date(day).getDay() !== 0) workdays.push(day);
   }
   const SCENARIOS: Record<string, number[]> = {
     e12: [1], e13: [1], e08: [2], e03: [3, 6], e04: [4], e10: [5], e05: [7],
   };
+  /** A day of paid leave in place of a shift: [workdays back, type]. */
+  const TIME_OFF: Record<string, [number, LeaveEntry['type']]> = { e11: [3, 'pto'], e07: [6, 'sick'] };
 
   for (let w = 0; w < workdays.length; w++) {
     const day = workdays[w];
@@ -231,6 +248,13 @@ export function buildDemoData(now: number): SeedData {
     const weekday = new Date(day).getDay();
 
     for (const [id, , , , title] of CREW) {
+      if (TIME_OFF[id]?.[0] === back) {
+        leave.push({
+          id: nextId('lv'), employeeId: id, day, type: TIME_OFF[id][1], hours: 800,
+          enteredBy: DEMO_SUPERVISOR_ID, at: day + 16 * HOUR,
+        });
+        continue;
+      }
       const scripted = SCENARIOS[id]?.includes(back) ?? false;
       const saturday = weekday === 6 && !scripted;
       const roll = rand();
@@ -287,9 +311,9 @@ export function buildDemoData(now: number): SeedData {
       }
       shifts.push(shift);
 
-      // Pre-op and operating sheet for people who run a unit.
+      // Pre-op and operating sheet for people who run a unit, for the recent workdays.
       const unit = unitOf.get(id);
-      if (!unit) continue;
+      if (!unit || back > PREOP_WORKDAYS) continue;
       const inspectAt = start + between(6, 14) * MIN;
       const parkAt = end - between(6, 14) * MIN;
 
@@ -395,5 +419,9 @@ export function buildDemoData(now: number): SeedData {
     runUnit({ employeeId: id, unit, inspectAt });
   }
 
-  return { employees, accounts, shifts, equipment, inspections, opLogs, mrfs, mrfSeq: 1044 };
+  return {
+    employees, accounts, shifts, leave, equipment, inspections, opLogs, mrfs, mrfSeq: 1044,
+    // A made-up rate so the sample employee's pay estimate has something to show.
+    payRates: { [DEMO_EMPLOYEE_ID]: 2800 },
+  };
 }

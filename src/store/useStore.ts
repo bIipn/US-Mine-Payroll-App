@@ -17,6 +17,7 @@ import type {
   GeoStamp,
   Inspection,
   InspectionAnswer,
+  LeaveType,
   MealNote,
   Mrf,
   MrfItem,
@@ -30,8 +31,9 @@ import type {
   ShiftEdit,
 } from '../domain/types';
 import { safeStorage } from '../services/storage';
-import { MIN } from '../util/format';
+import { MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
+import { migratePersisted, STATE_VERSION } from './migrate';
 import {
   buildDemoData,
   defaultSettings,
@@ -90,6 +92,16 @@ export interface EndUseInput {
   parkedSafely: boolean;
 }
 
+export interface LeaveInput {
+  employeeId: string;
+  /** Any moment on the day the hours are for. */
+  day: number;
+  type: LeaveType;
+  /** Hundredths of an hour. */
+  hours: number;
+  note?: string;
+}
+
 export interface ShiftTimesPatch {
   clockIn?: number;
   clockOut?: number;
@@ -139,6 +151,11 @@ interface Actions {
   setDemoLocation: (mode: DemoLocation) => void;
   setLunchReminders: (on: boolean) => void;
   setAllowSectionAllOk: (on: boolean) => void;
+
+  addLeave: (input: LeaveInput) => Result;
+  removeLeave: (leaveId: string) => void;
+  /** The signed-in person's own hourly rate for their pay estimate. `null` clears it. */
+  setMyRate: (cents: number | null) => Result;
 }
 
 export type Store = Data & Actions;
@@ -632,14 +649,64 @@ export const useStore = create<Store>()(
         setDemoLocation: (demoLocation) => set({ settings: { ...get().settings, demoLocation } }),
         setLunchReminders: (lunchReminders) => set({ settings: { ...get().settings, lunchReminders } }),
         setAllowSectionAllOk: (allowSectionAllOk) => set({ settings: { ...get().settings, allowSectionAllOk } }),
+
+        // ---- Paid leave and the pay estimate ----------------------------------------------
+        addLeave: ({ employeeId, day, type, hours, note }) => {
+          const { session, employees, leave } = get();
+          if (!session) return { ok: false, error: 'You are signed out.' };
+          if (employees.find((e) => e.id === session.employeeId)?.role !== 'supervisor') {
+            return { ok: false, error: 'Only a supervisor can record paid leave.' };
+          }
+          if (!employees.some((e) => e.id === employeeId)) return { ok: false, error: 'That person is not on the roster.' };
+          if (!Number.isFinite(hours) || hours <= 0 || hours > 2400) {
+            return { ok: false, error: 'Enter the hours for that day, between 0.25 and 24.' };
+          }
+          set({
+            leave: [...leave, {
+              id: uid('lv_'),
+              employeeId,
+              day: startOfDay(day),
+              type,
+              hours: Math.round(hours),
+              note: note && clean(note) ? clean(note) : undefined,
+              enteredBy: session.employeeId,
+              at: Date.now(),
+            }],
+          });
+          return { ok: true };
+        },
+
+        removeLeave: (leaveId) => {
+          const { session, employees, leave } = get();
+          // The same rule as adding it: paid leave is a supervisor's entry to make or undo.
+          if (employees.find((e) => e.id === session?.employeeId)?.role !== 'supervisor') return;
+          set({ leave: leave.filter((entry) => entry.id !== leaveId) });
+        },
+
+        setMyRate: (cents) => {
+          const { session, payRates } = get();
+          if (!session) return { ok: false, error: 'You are signed out.' };
+          const next = { ...payRates };
+          if (cents === null) {
+            delete next[session.employeeId];
+          } else {
+            if (!Number.isFinite(cents) || cents < 1 || cents > 100_000) {
+              return { ok: false, error: 'Enter your hourly rate in dollars, like 24.00.' };
+            }
+            next[session.employeeId] = Math.round(cents);
+          }
+          set({ payRates: next });
+          return { ok: true };
+        },
       };
     },
     {
       name: 'us-mine-crew',
-      version: 1,
+      version: STATE_VERSION,
+      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, DEMO_MODE) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
-      partialize: ({ session, employees, accounts, shifts, denied, equipment, inspections, opLogs, mrfs, mrfSeq, settings, seededAt }) => ({
-        session, employees, accounts, shifts, denied, equipment, inspections, opLogs, mrfs, mrfSeq, settings, seededAt,
+      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, mrfs, mrfSeq, payRates, settings, seededAt }) => ({
+        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, mrfs, mrfSeq, payRates, settings, seededAt,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();

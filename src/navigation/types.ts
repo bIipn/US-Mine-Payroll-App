@@ -18,7 +18,8 @@ export type RootStackParamList = {
   SafetyLog: undefined;
   MrfQueue: undefined;
   Payroll: undefined;
-  PayrollEmployee: { employeeId: string; weekStart: number };
+  /** `start` is any day inside the pay period or workweek to open on. */
+  PayrollEmployee: { employeeId: string; start: number; view: 'period' | 'week' };
   Roster: undefined;
   Fleet: undefined;
 };
@@ -36,6 +37,7 @@ export type ScreenProps<T extends keyof RootStackParamList> = NativeStackScreenP
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace ReactNavigation {
-    interface RootParamList extends RootStackParamList {}
+    // Tab names are included so a tab screen can jump to a sibling tab.
+    interface RootParamList extends RootStackParamList, TabParamList {}
   }
 }

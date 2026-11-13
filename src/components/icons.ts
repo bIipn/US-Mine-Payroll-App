@@ -3,9 +3,12 @@
  * icon library stays out of the bundle.
  */
 export { default as ArrowLeft } from 'lucide-react-native/icons/arrow-left';
+export { default as Banknote } from 'lucide-react-native/icons/banknote';
 export { default as BookOpen } from 'lucide-react-native/icons/book-open';
 export { default as CalendarClock } from 'lucide-react-native/icons/calendar-clock';
 export { default as CalendarDays } from 'lucide-react-native/icons/calendar-days';
+export { default as CalendarPlus } from 'lucide-react-native/icons/calendar-plus';
+export { default as Trash } from 'lucide-react-native/icons/trash';
 export { default as Check } from 'lucide-react-native/icons/check';
 export { default as ChevronLeft } from 'lucide-react-native/icons/chevron-left';
 export { default as ChevronRight } from 'lucide-react-native/icons/chevron-right';

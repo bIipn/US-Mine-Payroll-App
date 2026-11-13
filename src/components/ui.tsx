@@ -210,12 +210,14 @@ export function Divider({ inset = 0 }: { inset?: number }) {
 }
 
 /** A big figure with a plain label under it. */
-export function Stat({ value, label, tone, align = 'left' }: {
+export function Stat({ value, label, tone, align = 'left', compact }: {
   value: string; label: string; tone?: Tone; align?: 'left' | 'center';
+  /** Smaller figures, for totals that can run to four or five digits. */
+  compact?: boolean;
 }) {
   return (
     <View style={{ flex: 1, alignItems: align === 'center' ? 'center' : 'flex-start' }}>
-      <Txt v="num" c={tone ? toneColor[tone].fg : color.ink}>{value}</Txt>
+      <Txt v={compact ? 'numSm' : 'num'} c={tone ? toneColor[tone].fg : color.ink} numberOfLines={1}>{value}</Txt>
       <Txt v="small" c={color.silica}>{label}</Txt>
     </View>
   );

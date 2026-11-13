@@ -1,6 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
-import { Coffee, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
-import React, { useState } from 'react';
+import { ChevronRight, Coffee, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
+import React, { useMemo, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -11,6 +11,8 @@ import { TimeCard } from '../../components/TimeCard';
 import { Button, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Txt, UnitPlate } from '../../components/ui';
 import { DEMO_MODE } from '../../config';
 import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
+import { nextPayday, payPeriodOf } from '../../domain/payPeriod';
+import { computeRange } from '../../domain/payroll';
 import { canEndLunch, CA_RULES, MEAL_NOTE_LABEL, mealStatus, shiftTotals } from '../../domain/time';
 import type { DemoLocation, GeoStamp, MealNote, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
@@ -27,9 +29,11 @@ import {
   fmtDistance,
   fmtDur,
   fmtHrs,
+  fmtRange,
   fmtTime,
   fullName,
   HOUR,
+  MIN,
   startOfDay,
 } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -275,6 +279,8 @@ export function ClockScreen() {
             </Panel>
           ) : null}
 
+          <PayPeriodLine employeeId={me.id} now={now} />
+
           {DEMO_MODE ? <DemoControls onShift={!!shift} /> : null}
         </View>
       </ScrollView>
@@ -339,6 +345,52 @@ export function ClockScreen() {
         />
       </Sheet>
     </View>
+  );
+}
+
+/** Hours so far this pay period and when the next check lands. Opens My hours. */
+function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number }) {
+  const navigation = useNavigation();
+  const shifts = useStore((s) => s.shifts);
+  const leave = useStore((s) => s.leave);
+  const startsOn = useStore((s) => s.settings.workweekStartsOn);
+  // The figures move by the minute, so there is no need to redo them every second.
+  const minute = Math.floor(now / MIN);
+  const { period, total, payday } = useMemo(() => {
+    const at = minute * MIN;
+    const current = payPeriodOf(at);
+    const range = computeRange(
+      shifts.filter((s) => s.employeeId === employeeId),
+      leave.filter((l) => l.employeeId === employeeId),
+      current.start,
+      current.end,
+      at,
+      { weekStartsOn: startsOn },
+    );
+    return { period: current, total: range.total, payday: nextPayday(at).payDate };
+  }, [shifts, leave, employeeId, startsOn, minute]);
+
+  return (
+    <Pressable
+      testID="pay-period-line"
+      accessibilityRole="button"
+      accessibilityLabel={`Pay period ${fmtRange(period.start, period.lastDay)}, ${fmtHrs(total)} hours so far. Next payday ${fmtDate(payday)}. Open my hours.`}
+      onPress={() => {
+        haptic.tap();
+        navigation.navigate('Hours');
+      }}
+      style={({ pressed }) => [styles.payLine, pressed && { backgroundColor: color.kaolin }]}
+    >
+      <View style={{ flex: 1 }}>
+        <Txt v="small" c={color.silica}>Pay period {fmtRange(period.start, period.lastDay)}</Txt>
+        <Txt v="numSm" testID="pay-period-hours">{fmtHrs(total)} hours</Txt>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Txt v="small" c={color.silica}>{payday === startOfDay(now) ? 'Payday is today' : 'Next payday'}</Txt>
+        <Txt v="strong" testID="next-payday">{fmtDate(payday)}</Txt>
+      </View>
+      <ChevronRight color={color.silicaLight} size={22} />
+    </Pressable>
   );
 }
 
@@ -491,6 +543,18 @@ const styles = StyleSheet.create({
     borderColor: color.rule,
   },
   deadlineHead: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  payLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    minHeight: 68,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    backgroundColor: color.paper,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.rule,
+  },
   outMath: { gap: 4 },
   choice: {
     minHeight: 56,

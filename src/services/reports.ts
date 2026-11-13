@@ -1,8 +1,9 @@
+import { COMPANY } from '../config';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { standard } from '../domain/standards';
 import { CATEGORY_LABEL, countAnswers, findItem, isHazard, templateFor } from '../domain/templates';
 import { FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
-import type { Employee, Equipment, Inspection, Mrf, OperatingLog, Punch, Shift } from '../domain/types';
+import type { Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Shift } from '../domain/types';
 import { addDays, DAY, fmtDateTime, fmtDayShort, fmtWeekday, HOUR, startOfDay, ymd } from '../util/format';
 import { buildWorkbook, type CellInput, type Sheet } from './xlsx';
 
@@ -14,6 +15,7 @@ import { buildWorkbook, type CellInput, type Sheet } from './xlsx';
 export interface ReportData {
   employees: Employee[];
   shifts: Shift[];
+  leave: LeaveEntry[];
   equipment: Equipment[];
   inspections: Inspection[];
   opLogs: OperatingLog[];
@@ -47,36 +49,58 @@ function finish(name: string, sheets: Sheet[]): Report {
   };
 }
 
-/** Payroll for a period of whole workweeks: summary, daily detail, punch log and flags. */
-export function payrollReport(data: ReportData, periodStart: number, weeks: number, now: number): Report {
-  const periodEnd = addDays(periodStart, weeks * 7);
+export interface ReportRange {
+  start: number;
+  /** Start of the day after the last day. */
+  end: number;
+  /** Set for a pay period, so the sheets say when it is paid. */
+  payDate?: number;
+}
+
+const LEAVE_LABEL = { holiday: 'Holiday', pto: 'PTO', sick: 'Sick' } as const;
+
+/**
+ * Payroll for a pay period (or any run of days): summary, daily detail, paid
+ * leave, punch log and flags. The summary has one column for each earning line
+ * on the pay stub: ST, OT, DT, holiday, PTO and sick.
+ */
+export function payrollReport(data: ReportData, range: ReportRange, now: number): Report {
+  const periodStart = startOfDay(range.start);
+  const periodEnd = startOfDay(range.end);
   const lastDay = addDays(periodEnd, -1);
   const people = data.employees.filter((e) => e.active).sort(byName);
   const employeeOf = new Map(data.employees.map((e) => [e.id, e]));
-  const rows = computePayroll(people, data.shifts, periodStart, weeks, now);
+  const rows = computePayroll(people, data.shifts, data.leave, periodStart, periodEnd, now);
   const totals = sumPayroll(rows);
   const period = `${fmtDayShort(periodStart)} to ${fmtDayShort(lastDay)}, ${new Date(lastDay).getFullYear()}`;
-  const stamp = `Pay period ${period}. Generated ${fmtDateTime(now)}. Hours are decimals: time on site less unpaid lunch (6:15 AM to 7:00 PM less a 0.50 lunch is 12.25).`;
+  const paid = range.payDate
+    ? ` Pay date ${fmtWeekday(range.payDate)}, ${fmtDayShort(range.payDate)}, ${new Date(range.payDate).getFullYear()}.`
+    : '';
+  const stamp = `${range.payDate ? 'Pay period' : 'Period'} ${period}.${paid} Generated ${fmtDateTime(now)}. Hours are decimals: time on site less unpaid lunch (6:15 AM to 7:00 PM less a 0.50 lunch is 12.25).`;
 
   const summary: Sheet = {
     name: 'Payroll Summary',
-    title: 'US Mine payroll summary',
+    title: `${COMPANY} payroll summary`,
     subtitle: stamp,
     columns: [
       { header: 'Employee', width: 26 }, { header: 'Job title', width: 30 }, { header: 'Days worked', width: 12 },
-      { header: 'Regular', width: 11 }, { header: 'Overtime (1.5x)', width: 14 }, { header: 'Double time (2x)', width: 14 },
-      { header: 'Total paid hours', width: 14 }, { header: 'Hours on site', width: 13 }, { header: 'Unpaid lunch', width: 12 },
+      { header: 'ST hours', width: 11 }, { header: 'OT hours (1.5x)', width: 14 }, { header: 'DT hours (2x)', width: 13 },
+      { header: 'Holiday', width: 10 }, { header: 'PTO', width: 9 }, { header: 'Sick', width: 9 },
+      { header: 'Total hours', width: 12 }, { header: 'Hours on site', width: 13 }, { header: 'Unpaid lunch', width: 12 },
       { header: 'Meal flags', width: 11 }, { header: 'Shifts to fix', width: 12 },
     ],
     rows: rows.map((r) => [
       { v: nameOf(r.employee), s: 'bold' }, r.employee.title ?? '', { v: r.daysWorked, s: 'int' },
-      hrs(r.reg), hrs(r.ot), hrs(r.dt), { v: r.paid / 100, s: 'num2' }, hrs(r.gross), hrs(r.lunch),
+      hrs(r.reg), hrs(r.ot), hrs(r.dt), hrs(r.holiday), hrs(r.pto), hrs(r.sick),
+      hrs(r.total), hrs(r.gross), hrs(r.lunch),
       r.mealFlags > 0 ? { v: r.mealFlags, s: 'warn' } : { v: 0, s: 'int' },
       r.needsFix > 0 ? { v: r.needsFix, s: 'bad' } : { v: 0, s: 'int' },
     ]),
     totals: [
       { v: `Total, ${rows.length} employees`, s: 'total' }, { v: null, s: 'total' }, { v: totals.daysWorked, s: 'total' },
-      totalHrs(totals.reg), totalHrs(totals.ot), totalHrs(totals.dt), totalHrs(totals.paid), totalHrs(totals.gross), totalHrs(totals.lunch),
+      totalHrs(totals.reg), totalHrs(totals.ot), totalHrs(totals.dt),
+      totalHrs(totals.holiday), totalHrs(totals.pto), totalHrs(totals.sick),
+      totalHrs(totals.total), totalHrs(totals.gross), totalHrs(totals.lunch),
       { v: totals.mealFlags, s: 'total' }, { v: totals.needsFix, s: 'total' },
     ],
   };
@@ -88,30 +112,44 @@ export function payrollReport(data: ReportData, periodStart: number, weeks: numb
     columns: [
       { header: 'Employee', width: 26 }, { header: 'Date', width: 12 }, { header: 'Day', width: 7 },
       { header: 'In', width: 11 }, { header: 'Lunch out', width: 11 }, { header: 'Lunch in', width: 11 }, { header: 'Out', width: 11 },
-      { header: 'On site', width: 10 }, { header: 'Lunch', width: 9 }, { header: 'Paid', width: 9 },
-      { header: 'Regular', width: 10 }, { header: 'Overtime', width: 10 }, { header: 'Double', width: 9 },
+      { header: 'On site', width: 10 }, { header: 'Lunch', width: 9 }, { header: 'Worked', width: 9 },
+      { header: 'ST', width: 9 }, { header: 'OT', width: 9 }, { header: 'DT', width: 9 },
       { header: 'Flags', width: 34 }, { header: 'Employee note', width: 30 },
     ],
     rows: rows.flatMap((r) =>
-      r.weeks.flatMap((week) =>
-        week.days
-          .filter((day) => day.shifts.length > 0)
-          .map((day): CellInput[] => {
-            const first = day.shifts[0];
-            const lunch = first.lunches[0];
-            const missing = day.flags.includes('missing_out');
-            const note = day.shifts.map((s) => (s.mealNote ? MEAL_NOTE_LABEL[s.mealNote] : '')).filter(Boolean).join('; ');
-            return [
-              nameOf(r.employee), date(day.dayStart), fmtWeekday(day.dayStart),
-              time(day.firstIn), time(lunch?.start.at), time(lunch?.end?.at),
-              missing ? { v: 'MISSING', s: 'bad' } : day.open ? { v: 'On the clock', s: 'warn' } : time(day.lastOut),
-              missing ? null : hrs(day.gross), missing ? null : hrs(day.lunch), missing ? null : hrs(day.paid),
-              hrs(day.reg), hrs(day.ot), hrs(day.dt),
-              day.flags.length ? { v: day.flags.map((f) => FLAG_LABEL[f]).join(', '), s: missing ? 'bad' : 'warn' } : '',
-              note,
-            ];
-          }),
-      ),
+      r.days
+        .filter((day) => day.shifts.length > 0)
+        .map((day): CellInput[] => {
+          const first = day.shifts[0];
+          const lunch = first.lunches[0];
+          const missing = day.flags.includes('missing_out');
+          const note = day.shifts.map((s) => (s.mealNote ? MEAL_NOTE_LABEL[s.mealNote] : '')).filter(Boolean).join('; ');
+          return [
+            nameOf(r.employee), date(day.dayStart), fmtWeekday(day.dayStart),
+            time(day.firstIn), time(lunch?.start.at), time(lunch?.end?.at),
+            missing ? { v: 'MISSING', s: 'bad' } : day.open ? { v: 'On the clock', s: 'warn' } : time(day.lastOut),
+            missing ? null : hrs(day.gross), missing ? null : hrs(day.lunch), missing ? null : hrs(day.paid),
+            hrs(day.reg), hrs(day.ot), hrs(day.dt),
+            day.flags.length ? { v: day.flags.map((f) => FLAG_LABEL[f]).join(', '), s: missing ? 'bad' : 'warn' } : '',
+            note,
+          ];
+        }),
+    ),
+  };
+
+  const paidLeave: Sheet = {
+    name: 'Paid Leave',
+    title: 'Paid leave',
+    subtitle: `Holiday, PTO and sick hours in the period. Paid at straight time and never counted toward overtime. ${stamp}`,
+    columns: [
+      { header: 'Employee', width: 26 }, { header: 'Date', width: 12 }, { header: 'Day', width: 7 },
+      { header: 'Type', width: 10 }, { header: 'Hours', width: 9 }, { header: 'Note', width: 36 }, { header: 'Entered by', width: 26 },
+    ],
+    rows: rows.flatMap((r) =>
+      r.leave.map((entry): CellInput[] => [
+        nameOf(r.employee), date(entry.day), fmtWeekday(entry.day), LEAVE_LABEL[entry.type],
+        hrs(entry.hours), { v: entry.note ?? '', s: 'wrap' }, nameOf(employeeOf.get(entry.enteredBy)),
+      ]),
     ),
   };
 
@@ -163,7 +201,7 @@ export function payrollReport(data: ReportData, periodStart: number, weeks: numb
     ),
   };
 
-  return finish(`US-Mine-Payroll_${ymd(periodStart)}_to_${ymd(lastDay)}.xlsx`, [summary, daily, punches, flags]);
+  return finish(`US-Mine-Payroll_${ymd(periodStart)}_to_${ymd(lastDay)}.xlsx`, [summary, daily, paidLeave, punches, flags]);
 }
 
 /** Safety records for a date range: pre-ops, Bad Order items, equipment use, MRFs and time on site. */

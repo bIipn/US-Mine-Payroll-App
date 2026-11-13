@@ -165,3 +165,66 @@ describe('settings', () => {
     expect(s().settings.site.radiusM).toBe(2000);
   });
 });
+
+describe('paid leave', () => {
+  const day = new Date(2026, 10, 10, 9, 30).getTime();
+
+  it('lets a supervisor record leave against a day, and take it back off', () => {
+    s().signInDemo('supervisor');
+    const before = s().leave.length;
+    expect(s().addLeave({ employeeId: 'emp_demo', day, type: 'pto', hours: 800, note: ' Dentist ' })).toEqual({ ok: true });
+    const entry = s().leave[s().leave.length - 1];
+    expect(entry).toMatchObject({ employeeId: 'emp_demo', type: 'pto', hours: 800, note: 'Dentist', enteredBy: 'sup_demo' });
+    // Stored against the calendar day, not the time of day it was typed in.
+    expect(entry.day).toBe(new Date(2026, 10, 10).getTime());
+    s().removeLeave(entry.id);
+    expect(s().leave).toHaveLength(before);
+  });
+
+  it('is not something an employee can add for themselves', () => {
+    s().signInDemo('employee');
+    const before = s().leave.length;
+    expect(s().addLeave({ employeeId: 'emp_demo', day, type: 'sick', hours: 800 })).toMatchObject({ ok: false });
+    expect(s().leave).toHaveLength(before);
+  });
+
+  it('is not something an employee can take off the record', () => {
+    s().signInDemo('supervisor');
+    s().addLeave({ employeeId: 'emp_demo', day, type: 'pto', hours: 800 });
+    const entry = s().leave[s().leave.length - 1];
+    s().signInDemo('employee');
+    s().removeLeave(entry.id);
+    expect(s().leave).toContainEqual(entry);
+    s().signOut();
+    s().removeLeave(entry.id);
+    expect(s().leave).toContainEqual(entry);
+  });
+
+  it('refuses hours that are zero, negative or more than a day', () => {
+    s().signInDemo('supervisor');
+    for (const hours of [0, -100, 2401, Number.NaN]) {
+      expect(s().addLeave({ employeeId: 'emp_demo', day, type: 'holiday', hours })).toMatchObject({ ok: false });
+    }
+    expect(s().addLeave({ employeeId: 'emp_demo', day, type: 'holiday', hours: 2400 })).toEqual({ ok: true });
+  });
+});
+
+describe('pay rate for the estimate', () => {
+  it('is kept per person and can be cleared', () => {
+    s().signInDemo('supervisor');
+    expect(s().setMyRate(3150)).toEqual({ ok: true });
+    expect(s().payRates.sup_demo).toBe(3150);
+    s().signInDemo('employee');
+    expect(s().setMyRate(2800)).toEqual({ ok: true });
+    expect([s().payRates.sup_demo, s().payRates.emp_demo]).toEqual([3150, 2800]);
+    expect(s().setMyRate(null)).toEqual({ ok: true });
+    expect(s().payRates.emp_demo).toBeUndefined();
+  });
+
+  it('refuses a rate that is not a sensible hourly wage', () => {
+    s().signInDemo('employee');
+    for (const cents of [0, -500, 100001, Number.NaN]) {
+      expect(s().setMyRate(cents)).toMatchObject({ ok: false });
+    }
+  });
+});

@@ -1,6 +1,6 @@
-import { addDays, startOfDay, ymd } from '../util/format';
+import { addDays, startOfDay, startOfWeek, ymd } from '../util/format';
 import { CA_RULES, MEAL_FLAGS, shiftFlags, shiftTotals, type TimeRules } from './time';
-import type { Employee, Shift, ShiftFlag } from './types';
+import type { Employee, LeaveEntry, Shift, ShiftFlag } from './types';
 
 /**
  * Payroll hours.
@@ -47,11 +47,6 @@ export interface PayrollTotals {
 export interface WeekPayroll extends PayrollTotals {
   weekStart: number;
   days: DayLine[];
-}
-
-export interface EmployeePayroll extends PayrollTotals {
-  employee: Employee;
-  weeks: WeekPayroll[];
 }
 
 const emptyTotals = (): PayrollTotals => ({
@@ -174,36 +169,195 @@ function addTotals(into: PayrollTotals, from: PayrollTotals) {
   }
 }
 
-/** A pay period of one or more whole workweeks, for every employee given. */
+export interface RangePayroll extends PayrollTotals {
+  start: number;
+  /** Start of the day after the last day. */
+  end: number;
+  days: DayLine[];
+  /** Paid leave in the range, in hundredths of an hour. */
+  holiday: number;
+  pto: number;
+  sick: number;
+  /** Everything on the check: hours worked plus paid leave. */
+  total: number;
+  leave: LeaveEntry[];
+}
+
+export interface EmployeePayroll extends RangePayroll {
+  employee: Employee;
+}
+
+export interface PayrollOptions {
+  rules?: TimeRules;
+  /** 0 = Sunday. */
+  weekStartsOn?: number;
+}
+
+/**
+ * One employee's hours for any run of days, such as a pay period.
+ *
+ * Overtime is always worked out on whole workweeks first, then the days that
+ * fall inside the range are added up. A pay period that starts on a Wednesday
+ * still counts Monday and Tuesday toward that week's 40 hours.
+ *
+ * Paid leave (holiday, PTO, sick) is added to the total but is never counted as
+ * hours worked, so it cannot push a week into overtime.
+ */
+export function computeRange(
+  shifts: Shift[],
+  leave: LeaveEntry[],
+  start: number,
+  end: number,
+  now: number,
+  options: PayrollOptions = {},
+): RangePayroll {
+  const rules = options.rules ?? CA_RULES;
+  const from = startOfDay(start);
+  const to = startOfDay(end);
+
+  const days: DayLine[] = [];
+  for (let week = startOfWeek(from, options.weekStartsOn ?? 0); week < to; week = addDays(week, 7)) {
+    for (const day of computeWeek(shifts, week, now, rules).days) {
+      if (day.dayStart >= from && day.dayStart < to) days.push(day);
+    }
+  }
+
+  const totals = emptyTotals();
+  for (const day of days) {
+    totals.gross += day.gross;
+    totals.lunch += day.lunch;
+    totals.paid += day.paid;
+    totals.reg += day.reg;
+    totals.ot += day.ot;
+    totals.dt += day.dt;
+    if (day.shifts.length > 0) totals.daysWorked += 1;
+    for (const shift of day.shifts) {
+      for (const flag of shiftFlags(shift, now, rules)) {
+        totals.flagCounts[flag] = (totals.flagCounts[flag] ?? 0) + 1;
+        if (MEAL_FLAGS.includes(flag)) totals.mealFlags += 1;
+        if (flag === 'missing_out') totals.needsFix += 1;
+      }
+    }
+  }
+
+  const inRange = leave.filter((entry) => entry.day >= from && entry.day < to).sort((a, b) => a.day - b.day);
+  const sum = (type: LeaveEntry['type']) =>
+    inRange.reduce((hours, entry) => (entry.type === type ? hours + entry.hours : hours), 0);
+  const holiday = sum('holiday');
+  const pto = sum('pto');
+  const sick = sum('sick');
+
+  return {
+    ...totals,
+    start: from,
+    end: to,
+    days,
+    holiday,
+    pto,
+    sick,
+    total: totals.paid + holiday + pto + sick,
+    leave: inRange,
+  };
+}
+
+/** Hours for every employee given, over any run of days. */
 export function computePayroll(
   employees: Employee[],
   shifts: Shift[],
-  periodStart: number,
-  weeks: number,
+  leave: LeaveEntry[],
+  start: number,
+  end: number,
   now: number,
-  rules: TimeRules = CA_RULES,
+  options: PayrollOptions = {},
 ): EmployeePayroll[] {
-  const byEmployee = new Map<string, Shift[]>();
+  const shiftsOf = new Map<string, Shift[]>();
   for (const shift of shifts) {
-    const list = byEmployee.get(shift.employeeId);
+    const list = shiftsOf.get(shift.employeeId);
     if (list) list.push(shift);
-    else byEmployee.set(shift.employeeId, [shift]);
+    else shiftsOf.set(shift.employeeId, [shift]);
   }
-  return employees.map((employee) => {
-    const own = byEmployee.get(employee.id) ?? [];
-    const totals = emptyTotals();
-    const weekRows: WeekPayroll[] = [];
-    for (let w = 0; w < weeks; w++) {
-      const week = computeWeek(own, addDays(periodStart, w * 7), now, rules);
-      weekRows.push(week);
-      addTotals(totals, week);
-    }
-    return { employee, weeks: weekRows, ...totals };
-  });
+  const leaveOf = new Map<string, LeaveEntry[]>();
+  for (const entry of leave) {
+    const list = leaveOf.get(entry.employeeId);
+    if (list) list.push(entry);
+    else leaveOf.set(entry.employeeId, [entry]);
+  }
+  return employees.map((employee) => ({
+    employee,
+    ...computeRange(shiftsOf.get(employee.id) ?? [], leaveOf.get(employee.id) ?? [], start, end, now, options),
+  }));
 }
 
-export function sumPayroll(rows: PayrollTotals[]): PayrollTotals {
+export interface PayrollSum extends PayrollTotals {
+  holiday: number;
+  pto: number;
+  sick: number;
+  total: number;
+}
+
+export function sumPayroll(rows: RangePayroll[]): PayrollSum {
   const totals = emptyTotals();
-  for (const row of rows) addTotals(totals, row);
-  return totals;
+  let holiday = 0;
+  let pto = 0;
+  let sick = 0;
+  for (const row of rows) {
+    addTotals(totals, row);
+    holiday += row.holiday;
+    pto += row.pto;
+    sick += row.sick;
+  }
+  return { ...totals, holiday, pto, sick, total: totals.paid + holiday + pto + sick };
+}
+
+// ---- Gross pay estimate ------------------------------------------------------------------
+
+export type EarningCode = 'ST' | 'OT' | 'DT' | 'Holiday' | 'PTO' | 'Sick';
+
+export interface PayLine {
+  code: EarningCode;
+  label: string;
+  /** Hundredths of an hour. */
+  hours: number;
+  /** The rate for this line. Time-and-a-half on an odd-cent rate ends in half a cent. */
+  rateCents: number;
+  /** Whole cents. */
+  amountCents: number;
+}
+
+type EarningField = 'reg' | 'ot' | 'dt' | 'holiday' | 'pto' | 'sick';
+
+/** Earning lines in the order they appear on the pay stub, each with its pay multiple as a fraction. */
+const EARNINGS: { code: EarningCode; label: string; field: EarningField; times: [number, number] }[] = [
+  { code: 'ST', label: 'Straight time', field: 'reg', times: [1, 1] },
+  { code: 'OT', label: 'Overtime', field: 'ot', times: [3, 2] },
+  { code: 'DT', label: 'Double time', field: 'dt', times: [2, 1] },
+  { code: 'Holiday', label: 'Holiday', field: 'holiday', times: [1, 1] },
+  { code: 'PTO', label: 'PTO', field: 'pto', times: [1, 1] },
+  { code: 'Sick', label: 'Sick', field: 'sick', times: [1, 1] },
+];
+
+/**
+ * Gross pay for a set of hours at one hourly rate: straight time at the rate,
+ * overtime at 1.5 times, double time at 2 times, and paid leave at the rate.
+ * Each line is rounded to the cent, the way a pay stub shows it. It is an
+ * estimate before taxes and deductions; the pay stub is the official figure.
+ */
+export function estimateGross(
+  hours: Record<EarningField, number>,
+  rateCents: number,
+): { lines: PayLine[]; grossCents: number } {
+  const lines: PayLine[] = [];
+  for (const earning of EARNINGS) {
+    const worked = hours[earning.field];
+    if (worked <= 0) continue;
+    const [up, down] = earning.times;
+    lines.push({
+      code: earning.code,
+      label: earning.label,
+      hours: worked,
+      rateCents: (rateCents * up) / down,
+      amountCents: Math.round((worked * rateCents * up) / (100 * down)),
+    });
+  }
+  return { lines, grossCents: lines.reduce((sum, line) => sum + line.amountCents, 0) };
 }

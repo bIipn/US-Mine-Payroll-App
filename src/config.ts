@@ -8,5 +8,6 @@
 export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO !== '0';
 
 export const APP_NAME = 'US Mine Crew';
-export const COMPANY = 'US Mine Corp';
+/** The legal name, the way it is printed on the pay stub. */
+export const COMPANY = 'U.S. Mine Corp.';
 export const SITE_LABEL = 'Ione, California';

@@ -47,7 +47,12 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
           label="Export this week to Excel"
           icon={FileSpreadsheet}
           kind="ink"
-          onPress={() => exportReport(() => payrollReport({ ...useStore.getState() }, startOfWeek(day, startsOn), 1, Date.now()))}
+          onPress={() =>
+            exportReport(() => {
+              const weekStart = startOfWeek(day, startsOn);
+              return payrollReport({ ...useStore.getState() }, { start: weekStart, end: addDays(weekStart, 7) }, Date.now());
+            })
+          }
         />
       }
     >

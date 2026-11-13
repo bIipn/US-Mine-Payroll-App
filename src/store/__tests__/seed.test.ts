@@ -1,4 +1,5 @@
-import { computePayroll } from '../../domain/payroll';
+import { payPeriodOf, previousPayPeriod } from '../../domain/payPeriod';
+import { computePayroll, computeRange } from '../../domain/payroll';
 import { shiftFlags } from '../../domain/time';
 import { payrollReport, safetyReport } from '../../services/reports';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
@@ -51,19 +52,48 @@ describe('sample data', () => {
     }
   });
 
+  it.each(DAYS)('has a full earlier pay period to look back on when opened at %d', (now) => {
+    const data = buildDemoData(now);
+    const last = previousPayPeriod(payPeriodOf(now));
+    const own = data.shifts.filter((s) => s.employeeId === 'emp_demo');
+    const range = computeRange(own, [], last.start, last.end, now);
+    expect(range.daysWorked).toBeGreaterThanOrEqual(8);
+    expect(range.needsFix).toBe(0);
+  });
+
+  it.each(DAYS)('includes paid leave on days the person did not work, opened at %d', (now) => {
+    const data = buildDemoData(now);
+    expect(data.leave.map((l) => l.type).sort()).toEqual(['pto', 'sick']);
+    for (const entry of data.leave) {
+      expect(entry.hours).toBe(800);
+      const workedThatDay = data.shifts.some(
+        (s) => s.employeeId === entry.employeeId && s.clockIn.at >= entry.day && s.clockIn.at < addDays(entry.day, 1),
+      );
+      expect(workedThatDay).toBe(false);
+    }
+  });
+
+  it('gives the sample employee a rate so the pay estimate has something to show', () => {
+    expect(buildDemoData(DAYS[4]).payRates.emp_demo).toBeGreaterThan(0);
+  });
+
   it('feeds reports whose totals agree with the payroll screen', () => {
     const now = DAYS[4];
     const data = buildDemoData(now);
     const week = startOfWeek(now, 0);
-    const rows = computePayroll(data.employees, data.shifts, addDays(week, -7), 2, now);
+    const period = payPeriodOf(now);
+    const rows = computePayroll(data.employees, data.shifts, data.leave, period.start, period.end, now);
     for (const r of rows) {
       expect(r.reg + r.ot + r.dt).toBe(r.paid);
       expect(r.gross - r.lunch).toBe(r.paid);
+      expect(r.paid + r.holiday + r.pto + r.sick).toBe(r.total);
     }
-    const payroll = payrollReport(data, addDays(week, -7), 2, now);
-    expect(payroll.name).toBe('US-Mine-Payroll_2026-11-01_to_2026-11-14.xlsx');
-    expect(payroll.sheets).toBe(4);
+    const payroll = payrollReport(data, { start: period.start, end: period.end, payDate: period.payDate }, now);
+    expect(payroll.name).toBe('US-Mine-Payroll_2026-11-01_to_2026-11-15.xlsx');
+    expect(payroll.sheets).toBe(5);
     expect(payroll.bytes.slice(0, 2)).toEqual(new Uint8Array([0x50, 0x4b]));
+    // A plain workweek still exports, for the weekly time log.
+    expect(payrollReport(data, { start: week, end: addDays(week, 7) }, now).name).toBe('US-Mine-Payroll_2026-11-08_to_2026-11-14.xlsx');
 
     const to = addDays(startOfDay(now), 1);
     const safety = safetyReport(data, addDays(to, -30), to, now);

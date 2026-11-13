@@ -86,6 +86,22 @@ export interface Shift {
   edits?: ShiftEdit[];
 }
 
+/** Paid hours that are not worked. They show on the pay stub as their own lines. */
+export type LeaveType = 'holiday' | 'pto' | 'sick';
+
+export interface LeaveEntry {
+  id: string;
+  employeeId: string;
+  /** The day the hours are for, at the start of the day. */
+  day: number;
+  type: LeaveType;
+  /** Hundredths of an hour: 800 = 8.00. */
+  hours: number;
+  note?: string;
+  enteredBy: string;
+  at: number;
+}
+
 export type ShiftFlag =
   | 'late_lunch'
   | 'no_lunch'
