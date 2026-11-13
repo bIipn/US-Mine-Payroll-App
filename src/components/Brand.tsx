@@ -1,52 +1,41 @@
 import React from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 
 import type { AuthProvider } from '../domain/types';
-import { color, font } from '../theme/theme';
+import { color } from '../theme/theme';
+import { LOGO_ART } from './logoArt';
 
 /**
- * The app mark: the mine's name on an equipment plate, the same black-on-yellow
- * plate used for unit numbers across the app.
+ * US Mine Corporation's logo: the navy lettering over the gold stepped rule.
+ * It is drawn from the traced artwork in logoArt.ts at whatever width is asked
+ * for, always in its own proportions and its own colours.
  */
-export function BrandPlate({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
-  const dims = {
-    sm: { f: 20, padH: 9, padV: 2, border: 2, stripes: 3 },
-    md: { f: 30, padH: 12, padV: 3, border: 2.5, stripes: 4 },
-    lg: { f: 54, padH: 20, padV: 6, border: 4, stripes: 7 },
-  }[size];
+export const Logo = React.memo(function Logo({ width }: { width: number }) {
+  const height = (width * LOGO_ART.height) / LOGO_ART.width;
+  return (
+    <Svg width={width} height={height} viewBox={`0 0 ${LOGO_ART.width} ${LOGO_ART.height}`}>
+      <Path d={LOGO_ART.lettering} fill={LOGO_ART.navy} fillRule="evenodd" />
+      <Path d={LOGO_ART.rule} fill="none" stroke={LOGO_ART.gold} strokeWidth={LOGO_ART.ruleWidth} />
+    </Svg>
+  );
+});
+
+/**
+ * The logo on the white plate it is made for, so it reads the same on any of
+ * the app's coloured backgrounds. The stepped rule runs to both edges of the
+ * plate, the way it runs to the edges of the company's own artwork.
+ */
+export function LogoPlate({ width, radius = 8 }: { width: number; radius?: number }) {
   return (
     <View
+      testID="brand-logo"
       accessibilityRole="image"
-      accessibilityLabel="US Mine"
-      style={{
-        alignSelf: 'flex-start',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: dims.padH * 0.7,
-        backgroundColor: color.yellow,
-        borderColor: color.ink,
-        borderWidth: dims.border,
-        borderRadius: 6,
-        paddingHorizontal: dims.padH,
-        paddingVertical: dims.padV,
-      }}
+      accessibilityLabel="US Mine Corporation"
+      style={{ alignSelf: 'flex-start', width, backgroundColor: color.white, borderRadius: radius, overflow: 'hidden' }}
     >
-      <Benches size={dims.f * 0.72} weight={dims.stripes} />
-      <Text style={{ fontFamily: font.condBold, fontSize: dims.f, lineHeight: dims.f * 1.12, color: color.ink, letterSpacing: 0.5 }}>
-        US MINE
-      </Text>
+      <Logo width={width} />
     </View>
-  );
-}
-
-/** Three pit benches stepping down: the cut face of an open pit, seen from the side. */
-export function Benches({ size, weight, tint = color.ink }: { size: number; weight: number; tint?: string }) {
-  const w = (weight / size) * 24;
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24">
-      <Path d="M1 5 H9 V11 H16 V17 H23" stroke={tint} strokeWidth={w} fill="none" strokeLinejoin="miter" strokeLinecap="square" />
-    </Svg>
   );
 }
 

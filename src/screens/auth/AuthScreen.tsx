@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BrandPlate, ProviderMark } from '../../components/Brand';
+import { LogoPlate, ProviderMark } from '../../components/Brand';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
 import { DEMO_MODE, SITE_LABEL } from '../../config';
 import type { AuthProvider, Role } from '../../domain/types';
@@ -77,7 +77,7 @@ export function AuthScreen() {
         contentContainerStyle={{ paddingBottom: insets.bottom + space.xxl }}
       >
         <View style={[styles.field, { paddingTop: insets.top + space.xxl }]}>
-          <BrandPlate size="lg" />
+          <LogoPlate width={264} radius={10} />
           <Txt v="h1" c={color.white} style={{ marginTop: space.xl }}>
             Clock in. Check your machine. Get paid right.
           </Txt>

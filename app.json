@@ -13,7 +13,7 @@
     "android": {
       "package": "com.usmine.crew",
       "adaptiveIcon": {
-        "backgroundColor": "#FFC400",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -35,9 +35,9 @@
         "expo-splash-screen",
         {
           "image": "./assets/splash-icon.png",
-          "imageWidth": 180,
+          "imageWidth": 280,
           "resizeMode": "contain",
-          "backgroundColor": "#1C1B19"
+          "backgroundColor": "#FFFFFF"
         }
       ],
       [

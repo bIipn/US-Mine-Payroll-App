@@ -5,7 +5,7 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
-import { BrandPlate } from '../../components/Brand';
+import { LogoPlate } from '../../components/Brand';
 import { SiteMap } from '../../components/SiteMap';
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Txt, UnitPlate } from '../../components/ui';
@@ -181,7 +181,7 @@ export function ClockScreen() {
         {/* The whole top of the screen takes the colour of where you stand. */}
         <View testID={`status-${status}`} style={[styles.field, { backgroundColor: field.bg, paddingTop: insets.top + space.md }]}>
           <View style={styles.fieldTop}>
-            <BrandPlate size="sm" />
+            <LogoPlate width={136} radius={6} />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`${gpsLine}. Open the boundary map.`}

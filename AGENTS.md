@@ -42,6 +42,7 @@ Run the tests and the typecheck before calling any task done.
 ## Design
 
 - Palette, type and spacing are in `src/theme/theme.ts`. Build screens from `src/components/ui.tsx`; do not hand-roll buttons or inputs.
+- The logo is US Mine Corporation's own. Draw it with `Logo` or `LogoPlate` from `src/components/Brand.tsx`, always on white. Do not redraw it, recolour it, stretch it, set it in a font, or edit the generated `src/components/logoArt.ts` by hand.
 - Tap targets are at least 56 px. The crew works in gloves and in sunlight: large type, strong contrast, light backgrounds.
 - The top of the Clock screen takes the colour of the person's status (off, on, at lunch, overdue). Do not reuse those field colours for decoration.
 - Copy is plain and in sentence case. Buttons say what happens ("Clock in", "Send maintenance request"). Errors say what went wrong and what to do next.

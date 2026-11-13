@@ -126,8 +126,15 @@ The summaries in the app are a field aid in plain language. They are not legal a
 | Boundary | `src/domain/site.ts`, or in the app |
 | Sample crew and fleet | `src/store/seed.ts` |
 | Colours and type | `src/theme/theme.ts` |
+| Company logo | `src/components/logoArt.ts`, drawn by `Logo` in `src/components/Brand.tsx` |
 
 The real roster and fleet can also be entered in the app: Crew → Roster → Add people → Paste a list.
+
+## The logo
+
+The sign-in screen, the Clock screen, the app icon and the launch screen carry US Mine Corporation's own logo: the navy lettering over the gold stepped rule. It is always shown on white, in its own colours and proportions.
+
+The logo in this build was traced from a screenshot the company's artwork was supplied in, so it is sharp at any size but its finest details are only as good as that screenshot. Before a store release, regenerate `src/components/logoArt.ts` and the files in `assets/` from the company's original artwork (an SVG, PDF or large PNG), and have the company sign off on how its logo is used.
 
 ## How the code is laid out
 
@@ -147,4 +154,5 @@ Built with Expo (React Native) and TypeScript.
 - Connect the backend and turn off preview mode (`EXPO_PUBLIC_DEMO=0`).
 - Set the real app identifiers in `app.json` (`ios.bundleIdentifier`, `android.package`). They are placeholders now and cannot be changed after the first release.
 - Apple Developer Program and Google Play Console accounts in the company's name.
+- The logo regenerated from the company's original artwork, with the company's sign-off on its use.
 - A privacy policy that covers the location check.
