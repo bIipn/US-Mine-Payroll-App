@@ -51,6 +51,40 @@ describe('accounts', () => {
   });
 });
 
+describe('the build owner', () => {
+  const owner = { firstName: 'Riley', lastName: 'Quinn' };
+  const signUp = () => s().signUp({ firstName: 'riley', lastName: 'QUINN', email: 'riley@example.com', password: 'haulroad88' });
+
+  it('is on the roster from the first start, so they can create their own account', () => {
+    s().ensureSeeded(owner);
+    expect(signUp()).toEqual({ ok: true });
+    const me = s().employees.find((e) => e.id === s().session?.employeeId)!;
+    expect(me).toMatchObject({ firstName: 'Riley', lastName: 'Quinn', role: 'supervisor', active: true });
+    // The name comes with no made-up hours, leave or pre-ops.
+    expect(s().shifts.some((x) => x.employeeId === me.id)).toBe(false);
+    expect(s().leave.some((x) => x.employeeId === me.id)).toBe(false);
+    expect(s().inspections.some((x) => x.employeeId === me.id)).toBe(false);
+  });
+
+  it('is added once, to a roster that was already saved on the phone', () => {
+    const before = s().employees.length;
+    s().ensureSeeded(owner);
+    s().ensureSeeded(owner);
+    expect(s().employees).toHaveLength(before + 1);
+    expect(s().shifts.length).toBeGreaterThan(100); // the saved records are untouched
+  });
+
+  it('is still there after the sample data is reset', () => {
+    s().resetDemo(owner);
+    expect(signUp()).toEqual({ ok: true });
+  });
+
+  it('is nobody when the build names no owner', () => {
+    s().ensureSeeded(null);
+    expect(signUp()).toMatchObject({ ok: false });
+  });
+});
+
 describe('time clock', () => {
   beforeEach(() => {
     s().signInDemo('employee');

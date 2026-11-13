@@ -49,6 +49,7 @@ Run the tests and the typecheck before calling any task done.
 
 ## Privacy and safety rules that must hold
 
+- **This repository is public.** Never commit a real person's name, contact details, pay or any other personal detail: not in code, tests, `src/store/seed.ts`, commit messages, screenshots or sample workbooks. The sample crew is made up and stays that way. The person a build is made for is named in `.env.local` (`EXPO_PUBLIC_ROSTER_OWNER`), which git ignores; `withOwner` in `src/domain/roster.ts` puts them on the roster. Build anything that goes into `docs/` with that setting empty (`EXPO_PUBLIC_ROSTER_OWNER= npm run build:web`).
 - Location is read only at the moment of a punch. Never add background location.
 - A punch that is turned down is logged; clock-out and lunch start are never blocked by location.
 - Punch times are never silently changed. A correction needs a reason and is appended to the shift's edit history.

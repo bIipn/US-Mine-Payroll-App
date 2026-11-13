@@ -62,12 +62,24 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 187 unit tests: hours, lunch rules, overtime, pay periods, GPS, checklists, Excel
+npm test           # 202 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, checklists, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
 
 The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere. While at lunch, "Skip to the end of lunch" shows what happens when the 30 minutes are up without waiting for them.
+
+## Signing in under your own name
+
+Only names on the roster can create an account, and the sample crew is made up. To use a build as yourself, name the person the build is for in a file called `.env.local` in the project folder:
+
+```
+EXPO_PUBLIC_ROSTER_OWNER=First Last
+```
+
+That person is always on the roster as a supervisor. They create an account with their own name, email and password like anyone else, start with no hours, and can add the rest of the crew from Crew → Roster. In a live build this is also how the first supervisor gets in.
+
+`.env.local` is not committed, and that is the point: **this repository is public.** Keep real names, pay figures and other personal details out of the code, out of `src/store/seed.ts`, and out of the screenshots and sample workbooks in `docs/`.
 
 ## How the hours are figured
 
@@ -151,6 +163,7 @@ Built with Expo (React Native) and TypeScript.
 
 ## Before the first store release
 
+- Make this repository private, or keep the real roster in the backend only. The real employee names must never be committed while it is public.
 - Connect the backend and turn off preview mode (`EXPO_PUBLIC_DEMO=0`).
 - Set the real app identifiers in `app.json` (`ios.bundleIdentifier`, `android.package`). They are placeholders now and cannot be changed after the first release.
 - Apple Developer Program and Google Play Console accounts in the company's name.

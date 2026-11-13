@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { DEMO_MODE } from '../config';
+import { DEMO_MODE, ROSTER_OWNER } from '../config';
+import { cleanText, parsePersonName, sameName, titleCase, withOwner, type PersonName } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { findItem, inspectionResult, isHazard, templateFor } from '../domain/templates';
 import { CA_RULES, lunchEndAt, startedLunch } from '../domain/time';
@@ -117,8 +118,9 @@ interface Actions {
   showToast: (message: string, tone?: ToastTone) => void;
   clearToast: () => void;
 
-  ensureSeeded: () => void;
-  resetDemo: () => void;
+  /** Load the starting data on first run, and make sure the build's owner is on the roster. */
+  ensureSeeded: (owner?: PersonName | null) => void;
+  resetDemo: (owner?: PersonName | null) => void;
 
   signUp: (input: SignUpInput) => Result;
   signIn: (email: string, password: string) => Result;
@@ -160,11 +162,7 @@ interface Actions {
 
 export type Store = Data & Actions;
 
-const clean = (text: string) => text.trim().replace(/\s+/g, ' ');
-const sameName = (e: Employee, first: string, last: string) =>
-  e.firstName.toLowerCase() === clean(first).toLowerCase() && e.lastName.toLowerCase() === clean(last).toLowerCase();
-const titleCase = (text: string) =>
-  clean(text).replace(/(^|[\s'-])([a-z])/g, (_, lead: string, ch: string) => lead + ch.toUpperCase());
+const clean = cleanText;
 const hashPassword = (password: string, salt: string) => sha256(`${salt}:${password}`);
 
 /** The shift a person is on right now. A shift left open for 16+ hours no longer counts. */
@@ -237,14 +235,21 @@ export const useStore = create<Store>()(
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
         clearToast: () => set({ toast: null }),
 
-        ensureSeeded: () => {
-          if (get().seededAt != null) return;
-          const now = Date.now();
-          set({ ...(DEMO_MODE ? buildDemoData(now) : emptyData()), seededAt: now });
+        ensureSeeded: (owner = ROSTER_OWNER) => {
+          if (get().seededAt == null) {
+            const now = Date.now();
+            set({ ...(DEMO_MODE ? buildDemoData(now) : emptyData()), seededAt: now });
+          }
+          // The person this build was made for is always on the roster, including on
+          // a phone whose data was saved before they were named.
+          const { employees } = get();
+          const roster = withOwner(employees, owner);
+          if (roster !== employees) set({ employees: roster });
         },
-        resetDemo: () => {
+        resetDemo: (owner = ROSTER_OWNER) => {
           const now = Date.now();
-          set({ ...initialData(), ...buildDemoData(now), seededAt: now });
+          const data = buildDemoData(now);
+          set({ ...initialData(), ...data, employees: withOwner(data.employees, owner), seededAt: now });
         },
 
         // ---- Accounts ----------------------------------------------------------------
@@ -594,20 +599,12 @@ export const useStore = create<Store>()(
           let added = 0;
           let skipped = 0;
           for (const raw of text.split(/[\n;]+/)) {
-            let line = clean(raw.replace(/^\d+[.)]\s*/, ''));
+            const line = clean(raw.replace(/^\d+[.)]\s*/, ''));
             if (!line) continue;
-            // Accept "Last, First" as well as "First Last".
-            if (line.includes(',')) {
-              const [last, first] = line.split(',').map(clean);
-              line = `${first} ${last}`;
-            }
-            const parts = line.split(' ');
-            if (parts.length < 2) {
-              skipped += 1;
-              continue;
-            }
-            const result = get().addEmployee(parts[0], parts.slice(1).join(' '));
-            if (result.ok) added += 1;
+            // "Last, First" is read as well as "First Last".
+            const name = parsePersonName(line);
+            const result = name ? get().addEmployee(name.firstName, name.lastName) : undefined;
+            if (result?.ok) added += 1;
             else skipped += 1;
           }
           return { added, skipped };
