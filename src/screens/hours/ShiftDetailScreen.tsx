@@ -1,11 +1,11 @@
-import { MapPin, PenLine } from '../../components/icons';
+import { Clock, MapPin, PenLine } from '../../components/icons';
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Divider, Field, Notice, Page, Panel, Sheet, Tag, Txt } from '../../components/ui';
 import { flagTone } from '../../components/WeekSheet';
-import { FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
+import { backFromLunchAt, FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
 import type { Punch, ShiftEdit } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -23,6 +23,7 @@ const EDIT_FIELD: Record<ShiftEdit['field'], string> = {
 };
 
 function where(punch?: Punch): string {
+  if (punch?.auto) return 'Automatic, 30 minutes after lunch started';
   if (!punch?.geo) return 'Entered by a supervisor';
   const { geo } = punch;
   const source = geo.source === 'demo' ? ' (demo GPS)' : '';
@@ -103,7 +104,10 @@ export function ShiftDetailScreen({ navigation, route }: ScreenProps<'ShiftDetai
     { label: 'Clock in', punch: shift.clockIn },
     ...shift.lunches.flatMap((l, i) => [
       { label: shift.lunches.length > 1 ? `Lunch ${i + 1} start` : 'Lunch start', punch: l.start },
-      ...(l.end ? [{ label: shift.lunches.length > 1 ? `Lunch ${i + 1} end` : 'Back from lunch', punch: l.end }] : []),
+      // The end of a lunch is listed once it has happened.
+      ...(l.end && backFromLunchAt(l, now) != null
+        ? [{ label: shift.lunches.length > 1 ? `Back on the clock from lunch ${i + 1}` : 'Back on the clock', punch: l.end }]
+        : []),
     ]),
     ...(shift.clockOut ? [{ label: 'Clock out', punch: shift.clockOut }] : []),
   ];
@@ -178,7 +182,11 @@ export function ShiftDetailScreen({ navigation, route }: ScreenProps<'ShiftDetai
               <View style={{ flex: 1 }}>
                 <Txt v="strong">{p.label}</Txt>
                 <View style={styles.where}>
-                  <MapPin size={14} color={p.punch?.geo ? (p.punch.geo.inside ? color.green : color.red) : color.silica} />
+                  {p.punch?.auto ? (
+                    <Clock size={14} color={color.silica} />
+                  ) : (
+                    <MapPin size={14} color={p.punch?.geo ? (p.punch.geo.inside ? color.green : color.red) : color.silica} />
+                  )}
                   <Txt v="small" c={color.silica} style={{ flex: 1 }}>{where(p.punch)}</Txt>
                 </View>
               </View>

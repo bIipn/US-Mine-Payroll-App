@@ -29,9 +29,40 @@ describe('migratePersisted', () => {
     expect(next.payRates).toEqual({});
   });
 
+  describe('from before lunch ended by itself', () => {
+    const start = new Date(2026, 10, 13, 11, 0).getTime();
+    const v2 = {
+      ...v1,
+      leave: [{ id: 'lv1' }],
+      payRates: { e1: 2500 },
+      shifts: [
+        { id: 's1', lunches: [{ start: { at: start } }] },
+        { id: 's2', lunches: [{ start: { at: start }, end: { at: start + 34 * 60_000, geo: { inside: true } } }] },
+        { id: 's3', lunches: [] },
+      ],
+    };
+
+    it('gives a lunch saved with no end its automatic end, 30 minutes after it started', () => {
+      const next = migratePersisted(v2, 2, false) as typeof v2;
+      expect(next.shifts[0].lunches[0]).toEqual({ start: { at: start }, end: { at: start + 30 * 60_000, auto: true } });
+      // A lunch that was punched back in from stays exactly as it was recorded.
+      expect(next.shifts[1]).toEqual(v2.shifts[1]);
+      expect(next.shifts[2]).toEqual(v2.shifts[2]);
+      expect(next.session).toEqual(v1.session);
+      expect(next.leave).toEqual([{ id: 'lv1' }]);
+    });
+
+    it('reloads the sample data in a preview build, so its lunches follow the new rule', () => {
+      const next = migratePersisted(v2, 2, true);
+      expect(next.seededAt).toBeNull();
+      expect(next.session).toBeNull();
+      expect(next.payRates).toEqual({ e1: 2500 });
+    });
+  });
+
   it('leaves data from the current version alone', () => {
-    const v2 = { ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 } };
-    expect(migratePersisted(v2, 2, true)).toEqual(v2);
+    const v3 = { ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 } };
+    expect(migratePersisted(v3, 3, true)).toEqual(v3);
   });
 
   it('copes with nothing saved', () => {

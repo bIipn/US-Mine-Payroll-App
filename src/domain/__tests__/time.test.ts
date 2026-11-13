@@ -1,5 +1,16 @@
 import { fmtHM, fmtHrs, HOUR, MIN, minuteDecimal, toHundredths } from '../../util/format';
-import { CA_RULES, canEndLunch, lunchReminders, mealStatus, shiftFlags, shiftTotals } from '../time';
+import {
+  backFromLunchAt,
+  CA_RULES,
+  lunchEndAt,
+  lunchOverReminder,
+  lunchReminders,
+  mealStatus,
+  reminderPlan,
+  shiftFlags,
+  shiftTotals,
+  startedLunch,
+} from '../time';
 import type { GeoStamp, Shift } from '../types';
 
 const at = (h: number, m = 0, day = 9) => new Date(2026, 10, day, h, m, 0).getTime();
@@ -20,7 +31,7 @@ describe('shiftTotals', () => {
     expect(shiftTotals(s, at(20))).toMatchObject({ grossMin: 510, lunchMin: 30, paidMin: 480, open: false });
   });
 
-  it('deducts the actual lunch length when it runs past 30 minutes', () => {
+  it('deducts the recorded length when a lunch was corrected to run past 30 minutes', () => {
     const s = shift({
       clockOut: { at: at(15) },
       lunches: [{ start: { at: at(10) }, end: { at: at(10, 47) } }],
@@ -41,10 +52,50 @@ describe('shiftTotals', () => {
   it('runs an open shift up to now and reports lunch and break state', () => {
     const working = shift();
     expect(shiftTotals(working, at(9, 15))).toMatchObject({ paidMin: 195, open: true, onLunch: false });
-    const eating = shift({ lunches: [{ start: { at: at(10) } }] });
+    const eating = shift({ lunches: [startedLunch({ at: at(10) })] });
     expect(shiftTotals(eating, at(10, 20))).toMatchObject({ grossMin: 260, lunchMin: 20, paidMin: 240, onLunch: true });
     const resting = shift({ breaks: [{ start: at(8) }] });
     expect(shiftTotals(resting, at(8, 5)).onBreak).toBe(true);
+  });
+});
+
+describe('automatic lunch', () => {
+  it('sets a lunch to end by itself 30 minutes after it starts', () => {
+    expect(startedLunch({ at: at(11), geo: geo(true) })).toEqual({
+      start: { at: at(11), geo: geo(true) },
+      end: { at: at(11, 30), auto: true },
+    });
+  });
+
+  it('puts the person back on the clock when the 30 minutes are up', () => {
+    const s = shift({ lunches: [startedLunch({ at: at(10) })] });
+    expect(shiftTotals(s, at(10, 29))).toMatchObject({ onLunch: true, lunchMin: 29, paidMin: 240 });
+    expect(shiftTotals(s, at(10, 30))).toMatchObject({ onLunch: false, lunchMin: 30, paidMin: 240 });
+    expect(shiftTotals(s, at(12))).toMatchObject({ onLunch: false, lunchMin: 30, paidMin: 330 });
+    expect(mealStatus(s, at(10, 29)).state).toBe('at_lunch');
+    expect(mealStatus(s, at(10, 30)).state).toBe('taken');
+  });
+
+  it('never leaves anyone stuck at lunch when a record has no end time', () => {
+    const s = shift({ lunches: [{ start: { at: at(10) } }] });
+    expect(lunchEndAt(s.lunches[0])).toBe(at(10, 30));
+    expect(shiftTotals(s, at(10, 20)).onLunch).toBe(true);
+    expect(shiftTotals(s, at(11))).toMatchObject({ onLunch: false, lunchMin: 30 });
+    expect(mealStatus(s, at(11)).state).toBe('taken');
+  });
+
+  it('gives the time back on the clock only once that time has come', () => {
+    const lunch = startedLunch({ at: at(11) });
+    expect(backFromLunchAt(lunch, at(11, 29))).toBeUndefined();
+    expect(backFromLunchAt(lunch, at(11, 30))).toBe(at(11, 30));
+    expect(backFromLunchAt(undefined, at(12))).toBeUndefined();
+  });
+
+  it('comes off the day as exactly 0.50 and is never flagged as short', () => {
+    // Started 37 seconds past the minute: the end carries the same seconds, so it is still 30 minutes.
+    const s = shift({ clockOut: { at: at(14, 30) }, lunches: [startedLunch({ at: at(10, 30) + 37_000 })] });
+    expect(shiftTotals(s, at(20)).lunch).toBe(50);
+    expect(shiftFlags(s, at(20))).toEqual([]);
   });
 });
 
@@ -96,17 +147,27 @@ describe('mealStatus', () => {
     expect(mealStatus(s, at(10, 15)).remainingMs).toBe(45 * MIN);
     expect(mealStatus(s, at(11, 30)).remainingMs).toBe(0);
   });
-  it('tracks the 30-minute minimum while at lunch', () => {
-    const eating = shift({ lunches: [{ start: { at: at(10) } }] });
-    const status = mealStatus(eating, at(10, 12));
-    expect(status).toMatchObject({ state: 'at_lunch', lunchElapsedMs: 12 * MIN, lunchRemainingMs: 18 * MIN });
-    expect(canEndLunch(eating, at(10, 29))).toBe(false);
-    expect(canEndLunch(eating, at(10, 30))).toBe(true);
+  it('counts down to the automatic end while at lunch', () => {
+    const eating = shift({ lunches: [startedLunch({ at: at(10) })] });
+    expect(mealStatus(eating, at(10, 12))).toMatchObject({
+      state: 'at_lunch',
+      lunchElapsedMs: 12 * MIN,
+      lunchRemainingMs: 18 * MIN,
+      lunchEndsAt: at(10, 30),
+    });
+  });
+  it('never shows more time left than the lunch is long', () => {
+    // The screen's clock ticks once a second, so it can be a moment behind the tap that started lunch.
+    const eating = shift({ lunches: [startedLunch({ at: at(10) })] });
+    expect(mealStatus(eating, at(10) - 600)).toMatchObject({
+      state: 'at_lunch',
+      lunchElapsedMs: 0,
+      lunchRemainingMs: 30 * MIN,
+    });
   });
   it('is taken once a lunch is finished', () => {
     const done = shift({ lunches: [{ start: { at: at(10) }, end: { at: at(10, 30) } }] });
     expect(mealStatus(done, at(12)).state).toBe('taken');
-    expect(canEndLunch(done, at(12))).toBe(false);
   });
 });
 
@@ -159,5 +220,51 @@ describe('lunchReminders', () => {
     expect(reminders.map((r) => r.at)).toEqual([at(10), at(10, 30), at(10, 45), at(11)]);
     expect(reminders.map((r) => r.id)).toEqual(['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0']);
     expect(CA_RULES.mealMinMs).toBe(30 * MIN);
+  });
+
+  it('asks the person to start lunch, not to clock out for it', () => {
+    expect(lunchReminders(at(6)).map((r) => r.body).join(' ')).not.toMatch(/clock out/i);
+  });
+});
+
+describe('lunchOverReminder', () => {
+  it('tells the person they are back on the clock, at the moment lunch ends', () => {
+    expect(lunchOverReminder(at(11, 30))).toEqual({
+      id: 'lunch-end',
+      at: at(11, 30),
+      title: 'Lunch is over',
+      body: 'You are back on the clock as of 11:30 AM.',
+    });
+  });
+});
+
+describe('reminderPlan', () => {
+  const DEADLINE_IDS = ['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0'];
+  const ids = (plan: { schedule: { id: string }[] }) => plan.schedule.map((r) => r.id);
+
+  it('schedules nothing and clears everything when off the clock', () => {
+    expect(reminderPlan(undefined, true, at(9))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
+    const done = shift({ clockOut: { at: at(14) }, lunches: [startedLunch({ at: at(10) })] });
+    expect(reminderPlan(done, true, at(15))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
+  });
+
+  it('reminds about the lunch deadline until lunch starts, when reminders are on', () => {
+    expect(ids(reminderPlan(shift(), true, at(7)))).toEqual(DEADLINE_IDS);
+    expect(reminderPlan(shift(), false, at(7))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
+  });
+
+  it('always sends the lunch-is-over notice, even with deadline reminders turned off', () => {
+    const eating = shift({ lunches: [startedLunch({ at: at(10) })] });
+    for (const remindersOn of [true, false]) {
+      expect(reminderPlan(eating, remindersOn, at(10, 5))).toEqual({
+        schedule: [lunchOverReminder(at(10, 30))],
+        cancel: DEADLINE_IDS,
+      });
+    }
+  });
+
+  it('has nothing left to send once lunch is over', () => {
+    const back = shift({ lunches: [startedLunch({ at: at(10) })] });
+    expect(reminderPlan(back, true, at(10, 30))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
   });
 });

@@ -49,8 +49,17 @@ export interface GeoStamp extends LatLng {
 export interface Punch {
   at: number;
   geo?: GeoStamp;
+  /**
+   * Set by the app rather than tapped: the end of a lunch, 30 minutes after it
+   * started. No location is read for it.
+   */
+  auto?: boolean;
 }
 
+/**
+ * An unpaid meal period. One tap starts it. It ends by itself 30 minutes later,
+ * so `end` is written when the lunch starts and there is no punch to end it.
+ */
 export interface Lunch {
   start: Punch;
   end?: Punch;

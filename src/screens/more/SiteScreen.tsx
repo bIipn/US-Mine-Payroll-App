@@ -70,21 +70,21 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
         <View style={styles.fact}>
           <Txt v="strong">{fmtDistance(site.radiusM)} around the mine pin</Txt>
           <Txt v="body" c={color.inkSoft}>
-            About {commas(circleAcres(site.radiusM))} acres. You have to be inside it to clock in or to come back from lunch.
+            About {commas(circleAcres(site.radiusM))} acres. You have to be inside it to clock in.
           </Txt>
         </View>
         <Divider inset={space.lg} />
         <View style={styles.fact}>
           <Txt v="strong">Town is outside it</Txt>
           <Txt v="body" c={color.inkSoft}>
-            Downtown Ione is {fmtDistance(townDistance)} from the pin, {fmtDistance(gap)} beyond the boundary. A punch from town is turned down.
+            Downtown Ione is {fmtDistance(townDistance)} from the pin, {fmtDistance(gap)} beyond the boundary. A clock-in from town is turned down.
           </Txt>
         </View>
         <Divider inset={space.lg} />
         <View style={styles.fact}>
           <Txt v="strong">Your location is read only when you punch</Txt>
           <Txt v="body" c={color.inkSoft}>
-            The app never follows you in the background. Clocking out and starting lunch are never blocked: the location is noted, and an off-site clock-out is flagged for review.
+            The app never follows you in the background. Clocking out and starting lunch are never blocked: the location is noted, and an off-site clock-out is flagged for review. Lunch ends by itself after 30 minutes, so no location is read then.
           </Txt>
         </View>
       </Panel>

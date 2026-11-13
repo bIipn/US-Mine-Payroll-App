@@ -1,6 +1,7 @@
 import { destination, toGeoStamp } from '../domain/geofence';
 import { DEFAULT_SITE } from '../domain/site';
 import { inspectionResult, templateFor, templateItems } from '../domain/templates';
+import { CA_RULES, startedLunch } from '../domain/time';
 import type {
   Account,
   Employee,
@@ -262,24 +263,23 @@ export function buildDemoData(now: number): SeedData {
 
       const office = title === 'Scale House' || title.startsWith('Lab');
       const start = day + (office ? 7 : 6) * HOUR + between(-11, 14) * MIN;
-      const lunchStart = start + 4 * HOUR + between(0, 38) * MIN;
-      const lunchEnd = lunchStart + between(30, 36) * MIN;
+      // One tap starts lunch; it ends by itself 30 minutes later.
+      const lunch = startedLunch(punch(start + 4 * HOUR + between(0, 38) * MIN));
       const paid = saturday ? between(300, 380) : rand() < 0.12 ? between(540, 610) : between(468, 496);
-      let end = start + paid * MIN + (lunchEnd - lunchStart);
+      let end = start + paid * MIN + CA_RULES.mealMinMs;
 
       const shift: Shift = {
         id: nextId('sh'),
         employeeId: id,
         clockIn: punch(start),
         clockOut: punch(end),
-        lunches: [{ start: punch(lunchStart), end: punch(lunchEnd) }],
+        lunches: [lunch],
         breaks: [],
       };
 
       // A handful of realistic exceptions for payroll and safety to review.
       if (id === 'e03' && back === 3) {
-        const late = start + 5 * HOUR + 12 * MIN;
-        shift.lunches = [{ start: punch(late), end: punch(late + 31 * MIN) }];
+        shift.lunches = [startedLunch(punch(start + 5 * HOUR + 12 * MIN))];
       }
       if (id === 'e10' && back === 5) {
         shift.lunches = [];
@@ -369,27 +369,26 @@ export function buildDemoData(now: number): SeedData {
   }
 
   // ---- Today: a crew on the clock at different points in their shift ------------------------
-  type Live = [id: string, inAgoMin: number, lunchAtMin?: number, lunchLenMin?: number];
+  // `lunchAtMin` is how far into the shift lunch started. Sam Nakamura (e07) started
+  // 14 minutes ago, so he is the one at lunch; the others' lunches are long over.
+  type Live = [id: string, inAgoMin: number, lunchAtMin?: number];
   const live: Live[] = [
     ['e03', 190],
     ['e13', 262],
     ['e05', 284],
     ['e10', 318],
     ['e07', 290, 276],
-    ['e08', 365, 255, 31],
-    ['e04', 390, 250, 30],
-    ['e06', 340, 270, 32],
-    ['e14', 370, 262, 30],
+    ['e08', 365, 255],
+    ['e04', 390, 250],
+    ['e06', 340, 270],
+    ['e14', 370, 262],
     ['e09', 125],
-    [DEMO_SUPERVISOR_ID, 380, 258, 30],
+    [DEMO_SUPERVISOR_ID, 380, 258],
   ];
-  for (const [id, inAgo, lunchAt, lunchLen] of live) {
+  for (const [id, inAgo, lunchAt] of live) {
     const start = now - inAgo * MIN - between(0, 40) * 1000;
     const shift: Shift = { id: nextId('sh'), employeeId: id, clockIn: punch(start), lunches: [], breaks: [] };
-    if (lunchAt != null) {
-      const ls = start + lunchAt * MIN;
-      shift.lunches.push(lunchLen != null ? { start: punch(ls), end: punch(ls + lunchLen * MIN) } : { start: punch(ls) });
-    }
+    if (lunchAt != null) shift.lunches.push(startedLunch(punch(start + lunchAt * MIN)));
     shifts.push(shift);
 
     const unit = unitOf.get(id);

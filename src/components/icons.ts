@@ -4,6 +4,7 @@
  */
 export { default as ArrowLeft } from 'lucide-react-native/icons/arrow-left';
 export { default as Banknote } from 'lucide-react-native/icons/banknote';
+export { default as BellRing } from 'lucide-react-native/icons/bell-ring';
 export { default as BookOpen } from 'lucide-react-native/icons/book-open';
 export { default as CalendarClock } from 'lucide-react-native/icons/calendar-clock';
 export { default as CalendarDays } from 'lucide-react-native/icons/calendar-days';
@@ -19,6 +20,7 @@ export { default as Clock } from 'lucide-react-native/icons/clock';
 export { default as Coffee } from 'lucide-react-native/icons/coffee';
 export { default as Eye } from 'lucide-react-native/icons/eye';
 export { default as EyeOff } from 'lucide-react-native/icons/eye-off';
+export { default as FastForward } from 'lucide-react-native/icons/fast-forward';
 export { default as FileSpreadsheet } from 'lucide-react-native/icons/file-spreadsheet';
 export { default as HardHat } from 'lucide-react-native/icons/hard-hat';
 export { default as LocateFixed } from 'lucide-react-native/icons/locate-fixed';

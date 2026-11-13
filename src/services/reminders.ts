@@ -1,43 +1,22 @@
-import { CA_RULES, lunchReminders } from '../domain/time';
+import { reminderPlan } from '../domain/time';
 import type { Shift } from '../domain/types';
-import { cancelLocal, scheduleLocal, type LocalReminder } from './notifications';
-
-const LUNCH_IDS = ['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0'];
-const LUNCH_END_ID = 'lunch-end';
+import { cancelLocal, scheduleLocal } from './notifications';
 
 /**
- * Bring the scheduled reminders in line with where the shift stands.
- * Safe to call after every punch and at app start.
+ * Bring the scheduled notifications in line with where the shift stands.
+ * Safe to call after every punch and at app start. What gets scheduled is
+ * decided by `reminderPlan`; this only hands the plan to the phone.
  *
- *   on the clock, no lunch yet  -> remind 60/30/15 minutes before the fifth hour ends, and at the deadline
- *   at lunch                    -> one notice when the 30 minutes are up
- *   lunch done / off the clock  -> nothing
+ * `remindersOn` is the person's Lunch reminders setting. It covers the
+ * reminders before the lunch deadline. The notice that lunch is over is sent
+ * either way.
  */
-export async function syncReminders(shift: Shift | undefined, enabled: boolean): Promise<void> {
+export async function syncReminders(shift: Shift | undefined, remindersOn: boolean): Promise<void> {
   try {
-    if (!shift || shift.clockOut || !enabled) {
-      await cancelLocal([...LUNCH_IDS, LUNCH_END_ID]);
-      return;
-    }
-    const current = shift.lunches[shift.lunches.length - 1];
-    if (current && !current.end) {
-      await cancelLocal(LUNCH_IDS);
-      const done: LocalReminder = {
-        id: LUNCH_END_ID,
-        at: current.start.at + CA_RULES.mealMinMs,
-        title: 'Lunch is up',
-        body: 'Your 30 minutes are done. Clock back in when you are at the mine.',
-      };
-      await scheduleLocal([done]);
-      return;
-    }
-    if (shift.lunches.length > 0) {
-      await cancelLocal([...LUNCH_IDS, LUNCH_END_ID]);
-      return;
-    }
-    await cancelLocal([LUNCH_END_ID]);
-    await scheduleLocal(lunchReminders(shift.clockIn.at));
+    const plan = reminderPlan(shift, remindersOn, Date.now());
+    await cancelLocal(plan.cancel);
+    await scheduleLocal(plan.schedule);
   } catch {
-    // Reminders are a convenience; a failure here must never block a punch.
+    // Notifications are a convenience; a failure here must never block a punch.
   }
 }

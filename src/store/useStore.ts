@@ -4,7 +4,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { DEMO_MODE } from '../config';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { findItem, inspectionResult, isHazard, templateFor } from '../domain/templates';
-import { CA_RULES } from '../domain/time';
+import { CA_RULES, lunchEndAt, startedLunch } from '../domain/time';
 import type {
   Account,
   AuthProvider,
@@ -24,6 +24,7 @@ import type {
   MrfPriority,
   MrfStatus,
   OperatingLog,
+  Punch,
   Role,
   Session,
   Settings,
@@ -31,7 +32,7 @@ import type {
   ShiftEdit,
 } from '../domain/types';
 import { safeStorage } from '../services/storage';
-import { MIN, startOfDay } from '../util/format';
+import { fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
 import {
@@ -127,7 +128,6 @@ interface Actions {
 
   clockIn: (geo: GeoStamp) => Result<{ shift: Shift }>;
   startLunch: (geo?: GeoStamp) => Result<{ shift: Shift }>;
-  endLunch: (geo: GeoStamp) => Result<{ shift: Shift }>;
   toggleBreak: () => Result<{ shift: Shift }>;
   clockOut: (geo?: GeoStamp, mealNote?: MealNote) => Result<{ shift: Shift }>;
   logDenied: (action: DeniedPunch['action'], reason: DeniedPunch['reason'], geo?: GeoStamp) => void;
@@ -337,20 +337,13 @@ export const useStore = create<Store>()(
           return { ok: true, shift };
         },
 
+        // One tap starts lunch. It ends by itself 30 minutes later, so there is no action to end it.
         startLunch: (geo) =>
           updateOpenShift((shift, now) => {
             const last = shift.lunches[shift.lunches.length - 1];
-            if (last && !last.end) return 'You are already at lunch.';
+            if (last && now < lunchEndAt(last)) return 'You are already at lunch.';
             const breaks = shift.breaks.map((b) => (b.end ? b : { ...b, end: now }));
-            return { ...shift, breaks, lunches: [...shift.lunches, { start: { at: now, geo } }] };
-          }),
-
-        endLunch: (geo) =>
-          updateOpenShift((shift, now) => {
-            const last = shift.lunches[shift.lunches.length - 1];
-            if (!last || last.end) return 'You are not at lunch.';
-            if (now - last.start.at < CA_RULES.mealMinMs) return 'Your lunch has to run the full 30 minutes.';
-            return { ...shift, lunches: [...shift.lunches.slice(0, -1), { ...last, end: { at: now, geo } }] };
+            return { ...shift, breaks, lunches: [...shift.lunches, startedLunch({ at: now, geo })] };
           }),
 
         toggleBreak: () =>
@@ -365,7 +358,9 @@ export const useStore = create<Store>()(
         clockOut: (geo, mealNote) =>
           updateOpenShift((shift, now) => {
             const last = shift.lunches[shift.lunches.length - 1];
-            if (last && !last.end) return 'End your lunch before you clock out.';
+            if (last && now < lunchEndAt(last)) {
+              return `You are at lunch until ${fmtTime(lunchEndAt(last))}. Clock out after that.`;
+            }
             const breaks = shift.breaks.map((b) => (b.end ? b : { ...b, end: now }));
             return { ...shift, breaks, clockOut: { at: now, geo }, mealNote: mealNote ?? shift.mealNote };
           }),
@@ -415,14 +410,15 @@ export const useStore = create<Store>()(
           record('lunchEnd', firstLunch?.end?.at, patch.lunchEnd);
           if (edits.length === (shift.edits?.length ?? 0)) return { ok: false, error: 'Nothing was changed.' };
 
-          const manual = (time: number, existing?: { at: number; geo?: GeoStamp }) =>
+          const manual = (time: number, existing?: Punch): Punch =>
             existing && existing.at === time ? existing : { at: time };
           const lunches = [...shift.lunches];
           if (next.lunchStart != null && next.lunchEnd != null) {
-            lunches[0] = {
-              start: manual(next.lunchStart, firstLunch?.start),
-              end: manual(next.lunchEnd, firstLunch?.end),
-            };
+            const start = manual(next.lunchStart, firstLunch?.start);
+            const end: Punch = manual(next.lunchEnd, firstLunch?.end);
+            // An end is only "automatic" while it is still the 30 minutes the app set.
+            const stillAutomatic = end.auto === true && end.at - start.at === CA_RULES.mealMinMs;
+            lunches[0] = { start, end: stillAutomatic ? end : { at: end.at, geo: end.geo } };
           }
           const updated: Shift = {
             ...shift,

@@ -1,5 +1,5 @@
-import { HOUR, MIN, toHundredths } from '../util/format';
-import type { Shift, ShiftFlag } from './types';
+import { fmtTime, HOUR, MIN, toHundredths } from '../util/format';
+import type { Lunch, Punch, Shift, ShiftFlag } from './types';
 
 /**
  * Timekeeping rules. Defaults follow California law for meal periods
@@ -36,6 +36,34 @@ export const CA_RULES: TimeRules = {
 /** Punches count to the minute, the way a wall time clock does. */
 export const floorMin = (ms: number) => Math.floor(ms / MIN) * MIN;
 
+/**
+ * A lunch, from the one tap that starts it. Nobody punches back in: the lunch
+ * ends by itself when the 30-minute meal period is up and the person is back on
+ * the clock. The end is written down at the start so the record is complete.
+ */
+export function startedLunch(start: Punch, rules: TimeRules = CA_RULES): Lunch {
+  return { start, end: { at: start.at + rules.mealMinMs, auto: true } };
+}
+
+/**
+ * When a lunch is over. A record with no end time still ends when the meal
+ * period is up, so a bad record can never leave someone stuck at lunch.
+ */
+export function lunchEndAt(lunch: Lunch, rules: TimeRules = CA_RULES): number {
+  return lunch.end?.at ?? lunch.start.at + rules.mealMinMs;
+}
+
+/**
+ * The time a person was back on the clock from a lunch, once that time has
+ * come. Until then there is nothing to show: the end of a lunch is written down
+ * when it starts, but it has not happened yet.
+ */
+export function backFromLunchAt(lunch: Lunch | undefined, now: number, rules: TimeRules = CA_RULES): number | undefined {
+  if (!lunch) return undefined;
+  const end = lunchEndAt(lunch, rules);
+  return now >= end ? end : undefined;
+}
+
 export interface ShiftTotals {
   /** Clock-in to clock-out (or now), in minutes. */
   grossMin: number;
@@ -63,7 +91,8 @@ export function shiftTotals(shift: Shift, now: number): ShiftTotals {
   let lunchMs = 0;
   for (const lunch of shift.lunches) {
     const ls = Math.max(start, floorMin(lunch.start.at));
-    const le = Math.min(end, floorMin(lunch.end?.at ?? now));
+    // While the person is still at lunch, only the part already taken has come off.
+    const le = Math.min(end, floorMin(lunchEndAt(lunch)));
     lunchMs += Math.max(0, le - ls);
   }
   const grossMin = (end - start) / MIN;
@@ -80,7 +109,7 @@ export function shiftTotals(shift: Shift, now: number): ShiftTotals {
     lunch,
     paid: Math.max(0, gross - lunch),
     open: !shift.clockOut,
-    onLunch: !shift.clockOut && !!lastLunch && !lastLunch.end,
+    onLunch: !shift.clockOut && !!lastLunch && now < lunchEndAt(lastLunch),
     onBreak: !shift.clockOut && !!lastBreak && !lastBreak.end,
   };
 }
@@ -103,9 +132,11 @@ export interface MealStatus {
   deadlineAt: number;
   /** Time left to start lunch (0 once overdue or taken). */
   remainingMs: number;
-  /** While at lunch: time already taken and time left until the 30-minute minimum. */
+  /** While at lunch: time already taken, and time left until it ends by itself. */
   lunchElapsedMs: number;
   lunchRemainingMs: number;
+  /** While at lunch: the moment the person goes back on the clock. */
+  lunchEndsAt?: number;
   /** 0–1 share of the five-hour window used up. */
   progress: number;
 }
@@ -117,14 +148,18 @@ export function mealStatus(shift: Shift, now: number, rules: TimeRules = CA_RULE
   const current = shift.lunches[shift.lunches.length - 1];
   const base = { deadlineAt, remainingMs: 0, lunchElapsedMs: 0, lunchRemainingMs: 0, progress: 1 };
 
-  if (current && !current.end) {
-    const elapsed = Math.max(0, now - current.start.at);
-    return {
-      ...base,
-      state: 'at_lunch',
-      lunchElapsedMs: elapsed,
-      lunchRemainingMs: Math.max(0, rules.mealMinMs - elapsed),
-    };
+  if (current) {
+    const lunchEndsAt = lunchEndAt(current, rules);
+    if (now < lunchEndsAt) {
+      return {
+        ...base,
+        state: 'at_lunch',
+        lunchElapsedMs: Math.max(0, now - current.start.at),
+        // A screen clock that is a moment behind the tap must not show more than the whole lunch.
+        lunchRemainingMs: Math.min(lunchEndsAt - now, lunchEndsAt - current.start.at),
+        lunchEndsAt,
+      };
+    }
   }
   if (first) return { ...base, state: 'taken' };
 
@@ -135,13 +170,6 @@ export function mealStatus(shift: Shift, now: number, rules: TimeRules = CA_RULE
   else if (remainingMs <= 30 * MIN) state = 'urgent';
   else if (remainingMs <= HOUR) state = 'soon';
   return { ...base, state, remainingMs: Math.max(0, remainingMs), progress };
-}
-
-/** True once the 30-minute minimum has been taken and the lunch can be ended. */
-export function canEndLunch(shift: Shift, now: number, rules: TimeRules = CA_RULES): boolean {
-  const current = shift.lunches[shift.lunches.length - 1];
-  if (!current || current.end) return false;
-  return now - current.start.at >= rules.mealMinMs;
 }
 
 /** Things on a shift that payroll or safety should look at. */
@@ -242,7 +270,7 @@ export function lunchReminders(clockInAt: number, rules: TimeRules = CA_RULES): 
       id: 'lunch-15',
       at: deadline - 15 * MIN,
       title: 'Start lunch now',
-      body: '15 minutes left before your fifth hour ends. Clock out for lunch.',
+      body: '15 minutes left before your fifth hour ends. Tap Start lunch.',
     },
     {
       id: 'lunch-0',
@@ -251,4 +279,41 @@ export function lunchReminders(clockInAt: number, rules: TimeRules = CA_RULES): 
       body: 'Your fifth hour has ended with no lunch on record. Start lunch and tell your supervisor.',
     },
   ];
+}
+
+/** The notice sent when a lunch ends by itself and the person is back on the clock. */
+export function lunchOverReminder(lunchEndsAt: number): LunchReminder {
+  return {
+    id: LUNCH_OVER_ID,
+    at: lunchEndsAt,
+    title: 'Lunch is over',
+    body: `You are back on the clock as of ${fmtTime(lunchEndsAt)}.`,
+  };
+}
+
+const LUNCH_OVER_ID = 'lunch-end';
+const DEADLINE_IDS = ['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0'];
+
+/**
+ * The notifications a shift should have waiting right now, and the ones to clear.
+ *
+ *   on the clock, no lunch yet  -> the lunch-deadline reminders, if the person has them turned on
+ *   at lunch                    -> the lunch-is-over notice, always: it is how they
+ *                                  learn they are back on the clock
+ *   lunch done or off the clock -> nothing
+ */
+export function reminderPlan(
+  shift: Shift | undefined,
+  remindersOn: boolean,
+  now: number,
+  rules: TimeRules = CA_RULES,
+): { schedule: LunchReminder[]; cancel: string[] } {
+  const nothing = { schedule: [], cancel: [...DEADLINE_IDS, LUNCH_OVER_ID] };
+  if (!shift || shift.clockOut) return nothing;
+  const current = shift.lunches[shift.lunches.length - 1];
+  if (current && now < lunchEndAt(current, rules)) {
+    return { schedule: [lunchOverReminder(lunchEndAt(current, rules))], cancel: DEADLINE_IDS };
+  }
+  if (current || !remindersOn) return nothing;
+  return { schedule: lunchReminders(shift.clockIn.at, rules), cancel: [LUNCH_OVER_ID] };
 }

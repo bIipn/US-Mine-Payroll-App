@@ -20,8 +20,9 @@ The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_
 
 **For everyone on the crew**
 
-- **Clock in and out with a GPS check.** A punch only goes through from inside the mine boundary. The location is read at the moment of the punch and never in the background.
-- **Lunch, handled.** Lunch is unpaid, runs the full 30 minutes, and comes off the day automatically. The app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes.
+- **Clock in and out with a GPS check.** A clock-in only goes through from inside the mine boundary. The location is read at the moment of the punch and never in the background.
+- **Lunch is one tap.** Tap Start lunch and that is it. Thirty minutes later the app puts you back on the clock by itself and sends a notification that lunch is over. Nobody clocks back in. Lunch is unpaid and comes off the day as 0.50.
+- **Lunch reminders.** The app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes.
 - **Hours the way the timesheet does them.** Minutes become hundredths of an hour (15 min = .25, 45 min = .75). 6:15 AM to 7:00 PM with a 30-minute lunch is 12.75 − 0.50 = **12.25**.
 - **Pay periods the way the checks are cut.** The 1st to the 15th is paid on the 20th, and the 16th to the end of the month is paid on the 5th. The clock screen shows the hours so far and the next payday. My hours splits the period into straight time, overtime and double time, the same lines as the pay stub.
 - **What the check should come to.** Enter your hourly rate once and the app estimates gross pay for the period. The rate stays on your phone.
@@ -51,6 +52,7 @@ This is a working preview. Every flow above runs, on sample data.
 | **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet |
 | **Not connected yet** | The shared cloud database and real Apple, Google and Microsoft sign-in. The buttons and the account screens are built; they need the backend behind them |
 | **Not yet tried on a phone** | The iPhone and Android bundles build cleanly, and the app has been driven end to end in a browser. It has not been installed on a physical phone yet |
+| **Notifications** | On a phone, the lunch reminders and the lunch-is-over notice are handed to the operating system, so they arrive with the app closed or the phone locked. In a browser they only arrive while the page is open. Delivery on a real phone has not been tried yet |
 
 Going live for the whole crew needs the cloud backend first, so a supervisor's phone can see everyone's punches.
 
@@ -60,12 +62,12 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 161 unit tests: hours, lunch rules, overtime, pay periods, GPS, checklists, Excel
+npm test           # 187 unit tests: hours, lunch rules, overtime, pay periods, GPS, checklists, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
 
-The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere.
+The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere. While at lunch, "Skip to the end of lunch" shows what happens when the 30 minutes are up without waiting for them.
 
 ## How the hours are figured
 
@@ -74,7 +76,16 @@ The sign-in screen has two shortcuts, "Open as an employee" and "Open as a super
 3. Lunch becomes a decimal the same way and comes off: paid = on site − lunch.
 4. Days add up to weeks as whole hundredths, so the app, the timesheet and the Excel export always agree.
 
-Lunch is taken off by the minutes actually punched, so a 30-minute lunch is 0.50 and a 34-minute lunch is 0.57. Paid rest breaks can be logged but are never taken off.
+Lunch ends by itself 30 minutes after it starts, so it comes off as 0.50. A second lunch on a long day works the same way. If a supervisor corrects a lunch to a different length, the corrected minutes come off instead. Paid rest breaks can be logged but are never taken off.
+
+## How lunch works
+
+1. The person taps **Start lunch**. That is the only tap.
+2. The app writes down the end of the lunch right then: 30 minutes after the start. The screen turns blue and counts down.
+3. When the 30 minutes are up the person is back on the clock, whether the app is open or not. Nothing has to be running for this to happen, because being at lunch is worked out from the two times.
+4. The phone shows a notification: "Lunch is over. You are back on the clock as of 11:30 AM." If the app is open it says so on screen as well.
+
+A lunch cannot be cut short or stretched from the phone, and there is no clock-out while it is running. There is no punch at the end of lunch, so no location is read then: the app does not check that someone is back at the mine when their lunch ends. Supervisors can still correct lunch times, with a reason, from the shift record.
 
 Overtime follows California rules: over 8 hours in a day or 40 straight-time hours in a week is time-and-a-half, over 12 in a day is double time, and the seventh-day rule applies. The lunch deadline follows California Labor Code §512: the first meal starts before the end of the fifth hour. Flags are for a supervisor to review. Nothing is paid or docked automatically.
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, Platform, StyleSheet, Text, View } from 'react-native';
 
-import { shiftTotals } from '../domain/time';
+import { backFromLunchAt, shiftTotals } from '../domain/time';
 import type { Shift } from '../domain/types';
 import { color, font, radius, space } from '../theme/theme';
 import { clockParts, fmtHM, fmtHrs } from '../util/format';
@@ -24,7 +24,8 @@ export function TimeCard({ shift, now, name, dateLabel, corner }: {
   const slots: { key: string; head: string; at?: number }[] = [
     { key: 'in', head: 'In', at: shift?.clockIn.at },
     { key: 'lunch', head: 'Lunch', at: lunch?.start.at },
-    { key: 'back', head: 'Back', at: lunch?.end?.at },
+    // Stamped the moment the lunch ends by itself, not before.
+    { key: 'back', head: 'Back', at: backFromLunchAt(lunch, now) },
     { key: 'out', head: 'Out', at: shift?.clockOut?.at },
   ];
   const extraLunches = (shift?.lunches.length ?? 0) - 1;

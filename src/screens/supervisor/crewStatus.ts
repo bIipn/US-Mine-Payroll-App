@@ -1,7 +1,7 @@
 import { mealStatus, shiftFlags, shiftTotals, type MealState } from '../../domain/time';
 import type { Employee, Shift } from '../../domain/types';
 import type { Tone } from '../../theme/theme';
-import { fmtDur } from '../../util/format';
+import { fmtDur, fmtTime } from '../../util/format';
 
 export type Presence = 'working' | 'lunch' | 'off';
 
@@ -35,7 +35,8 @@ export function crewNow(employees: Employee[], shifts: Shift[], now: number): Cr
       const base = { employee, shift, meal: meal.state, paid };
       switch (meal.state) {
         case 'at_lunch':
-          return { ...base, presence: 'lunch', label: `At lunch ${fmtDur(meal.lunchElapsedMs)}`, tone: 'info', urgency: 1 };
+          // Lunch ends by itself, so the board can say when the person is back on the clock.
+          return { ...base, presence: 'lunch', label: `At lunch until ${fmtTime(meal.lunchEndsAt ?? now)}`, tone: 'info', urgency: 1 };
         case 'overdue':
           return { ...base, presence: 'working', label: 'Lunch overdue', tone: 'bo', solid: true, urgency: 5 };
         case 'urgent':

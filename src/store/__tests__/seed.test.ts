@@ -1,6 +1,6 @@
 import { payPeriodOf, previousPayPeriod } from '../../domain/payPeriod';
 import { computePayroll, computeRange } from '../../domain/payroll';
-import { shiftFlags } from '../../domain/time';
+import { shiftFlags, shiftTotals } from '../../domain/time';
 import { payrollReport, safetyReport } from '../../services/reports';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
 import { buildDemoData } from '../seed';
@@ -71,6 +71,18 @@ describe('sample data', () => {
       );
       expect(workedThatDay).toBe(false);
     }
+  });
+
+  it.each(DAYS)('has every lunch end by itself after 30 minutes, opened at %d', (now) => {
+    const data = buildDemoData(now);
+    const lunches = data.shifts.flatMap((s) => s.lunches);
+    expect(lunches.length).toBeGreaterThan(100);
+    for (const lunch of lunches) {
+      expect(lunch.end).toEqual({ at: lunch.start.at + 30 * 60_000, auto: true });
+    }
+    // Somebody is at lunch right now, so the board has one to show.
+    const eating = data.shifts.filter((s) => !s.clockOut && shiftTotals(s, now).onLunch);
+    expect(eating.map((s) => s.employeeId)).toEqual(['e07']);
   });
 
   it('gives the sample employee a rate so the pay estimate has something to show', () => {

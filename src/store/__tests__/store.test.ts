@@ -56,16 +56,16 @@ describe('time clock', () => {
     s().signInDemo('employee');
   });
 
-  it('runs a whole day and pays it the timesheet way', () => {
+  it('runs a whole day with one tap for lunch and pays it the timesheet way', () => {
     expect(s().clockIn(onSite)).toMatchObject({ ok: true });
     expect(s().clockIn(onSite)).toMatchObject({ ok: false });
     jest.setSystemTime(at(11, 0));
-    expect(s().startLunch(onSite)).toMatchObject({ ok: true });
-    expect(s().clockOut(onSite)).toMatchObject({ ok: false }); // still at lunch
+    const lunch = s().startLunch(onSite);
+    // The end of lunch is set the moment it starts: 30 minutes on, with no punch to make.
+    expect(lunch).toMatchObject({ ok: true, shift: { lunches: [{ start: { at: at(11, 0), geo: onSite }, end: { at: at(11, 30), auto: true } }] } });
     jest.setSystemTime(at(11, 20));
-    expect(s().endLunch(onSite)).toMatchObject({ ok: false }); // 30-minute lockout
-    jest.setSystemTime(at(11, 30));
-    expect(s().endLunch(onSite)).toMatchObject({ ok: true });
+    expect(s().startLunch(onSite)).toMatchObject({ ok: false }); // already at lunch
+    expect(s().clockOut(onSite)).toMatchObject({ ok: false, error: 'You are at lunch until 11:30 AM. Clock out after that.' });
     jest.setSystemTime(at(19, 0));
     const result = s().clockOut(onSite);
     expect(result.ok).toBe(true);
@@ -73,6 +73,22 @@ describe('time clock', () => {
     const totals = shiftTotals(result.shift, Date.now());
     expect([totals.gross, totals.lunch, totals.paid]).toEqual([1275, 50, 1225]);
     expect(openShiftOf(s().shifts, 'emp_demo', Date.now())).toBeUndefined();
+  });
+
+  it('has no end-of-lunch punch, so a lunch cannot be cut short', () => {
+    expect('endLunch' in s()).toBe(false);
+  });
+
+  it('puts the person back on the clock after 30 minutes and allows a second lunch later', () => {
+    s().clockIn(onSite);
+    jest.setSystemTime(at(10, 0));
+    s().startLunch(onSite);
+    jest.setSystemTime(at(10, 30));
+    expect(shiftTotals(openShiftOf(s().shifts, 'emp_demo', Date.now())!, Date.now()).onLunch).toBe(false);
+    jest.setSystemTime(at(16, 0));
+    expect(s().startLunch(onSite)).toMatchObject({ ok: true });
+    const shift = openShiftOf(s().shifts, 'emp_demo', Date.now())!;
+    expect(shift.lunches.map((l) => [l.start.at, l.end?.at])).toEqual([[at(10, 0), at(10, 30)], [at(16, 0), at(16, 30)]]);
   });
 
   it('keeps an audit trail when a supervisor corrects a shift', () => {
@@ -89,6 +105,25 @@ describe('time clock', () => {
     expect(shift.edits).toHaveLength(3);
     expect(shift.edits?.every((e) => e.byEmployeeId === 'sup_demo' && e.reason === 'Forgot to punch')).toBe(true);
     expect(shiftFlags(shift, Date.now())).toEqual(['edited']);
+  });
+
+  it('stops calling a lunch end automatic once a supervisor moves the lunch', () => {
+    s().clockIn(onSite);
+    jest.setSystemTime(at(11, 0));
+    s().startLunch(onSite);
+    jest.setSystemTime(at(15, 0));
+    const shiftId = openShiftOf(s().shifts, 'emp_demo', Date.now())!.id;
+    const lunch = () => s().shifts.find((x) => x.id === shiftId)!.lunches[0];
+    expect(lunch().end?.auto).toBe(true);
+    s().signInDemo('supervisor');
+    // A correction to something else leaves the lunch as it was recorded.
+    expect(s().editShiftTimes(shiftId, { clockIn: at(6, 0) }, 'Came in early')).toEqual({ ok: true });
+    expect(lunch().end).toEqual({ at: at(11, 30), auto: true });
+    // Moving the start makes it a 45-minute lunch that a supervisor set, not an automatic one.
+    expect(s().editShiftTimes(shiftId, { lunchStart: at(10, 45) }, 'Started lunch earlier')).toEqual({ ok: true });
+    expect(lunch().start.at).toBe(at(10, 45));
+    expect(lunch().end?.at).toBe(at(11, 30));
+    expect(lunch().end?.auto).toBeUndefined();
   });
 });
 

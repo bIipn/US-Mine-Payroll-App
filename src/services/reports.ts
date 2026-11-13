@@ -2,7 +2,7 @@ import { COMPANY } from '../config';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { standard } from '../domain/standards';
 import { CATEGORY_LABEL, countAnswers, findItem, isHazard, templateFor } from '../domain/templates';
-import { FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
+import { backFromLunchAt, FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
 import type { Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Shift } from '../domain/types';
 import { addDays, DAY, fmtDateTime, fmtDayShort, fmtWeekday, HOUR, startOfDay, ymd } from '../util/format';
 import { buildWorkbook, type CellInput, type Sheet } from './xlsx';
@@ -126,7 +126,7 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
           const note = day.shifts.map((s) => (s.mealNote ? MEAL_NOTE_LABEL[s.mealNote] : '')).filter(Boolean).join('; ');
           return [
             nameOf(r.employee), date(day.dayStart), fmtWeekday(day.dayStart),
-            time(day.firstIn), time(lunch?.start.at), time(lunch?.end?.at),
+            time(day.firstIn), time(lunch?.start.at), time(backFromLunchAt(lunch, now)),
             missing ? { v: 'MISSING', s: 'bad' } : day.open ? { v: 'On the clock', s: 'warn' } : time(day.lastOut),
             missing ? null : hrs(day.gross), missing ? null : hrs(day.lunch), missing ? null : hrs(day.paid),
             hrs(day.reg), hrs(day.ot), hrs(day.dt),
@@ -157,20 +157,26 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
     .filter((s) => s.clockIn.at >= periodStart && s.clockIn.at < periodEnd)
     .sort((a, b) => a.clockIn.at - b.clockIn.at);
 
+  const source = (punch: Punch): string => {
+    if (punch.auto) return 'Automatic, 30 minutes after lunch start';
+    if (!punch.geo) return 'Entered by supervisor';
+    return punch.geo.mocked ? 'Simulated GPS' : punch.geo.source === 'demo' ? 'Demo GPS' : 'Phone GPS';
+  };
+  // A lunch end is written down when the lunch starts, so one still in the future is left out.
   const punchRow = (shift: Shift, label: string, punch?: Punch): CellInput[] | null =>
-    punch
+    punch && punch.at <= now
       ? [
           nameOf(employeeOf.get(shift.employeeId)), date(punch.at), time(punch.at), label,
           punch.geo ? (punch.geo.inside ? { v: 'Yes', s: 'ok' } : { v: 'No', s: 'bad' }) : '',
           feet(punch.geo?.distanceM), feet(punch.geo?.accuracyM),
-          punch.geo ? (punch.geo.mocked ? 'Simulated GPS' : punch.geo.source === 'demo' ? 'Demo GPS' : 'Phone GPS') : 'Entered by supervisor',
+          source(punch),
         ]
       : null;
 
   const punches: Sheet = {
     name: 'Punch Log',
     title: 'Punch log',
-    subtitle: `Every punch with where the phone was. ${stamp}`,
+    subtitle: `Every punch with where the phone was. Lunch ends by itself 30 minutes after it starts, so a lunch end has no location. ${stamp}`,
     columns: [
       { header: 'Employee', width: 26 }, { header: 'Date', width: 12 }, { header: 'Time', width: 11 }, { header: 'Punch', width: 16 },
       { header: 'At the mine', width: 12 }, { header: 'Feet from mine pin', width: 14 }, { header: 'GPS accuracy (ft)', width: 14 }, { header: 'Source', width: 22 },
@@ -344,7 +350,7 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
         const missing = shiftFlags(s, now).includes('missing_out');
         const lunch = s.lunches[0];
         return [
-          nameOf(employeeOf.get(s.employeeId)), date(s.clockIn.at), time(s.clockIn.at), time(lunch?.start.at), time(lunch?.end?.at),
+          nameOf(employeeOf.get(s.employeeId)), date(s.clockIn.at), time(s.clockIn.at), time(lunch?.start.at), time(backFromLunchAt(lunch, now)),
           s.clockOut ? time(s.clockOut.at) : missing ? { v: 'MISSING', s: 'bad' } : { v: 'On site now', s: 'ok' },
           missing ? null : hrs(shiftTotals(s, now).gross),
           s.clockOut?.geo ? (s.clockOut.geo.inside ? 'Yes' : { v: 'No', s: 'warn' }) : '',

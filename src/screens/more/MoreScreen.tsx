@@ -74,7 +74,7 @@ export function MoreScreen() {
           <Toggle
             testID="toggle-reminders"
             label="Lunch reminders"
-            sub="60, 30 and 15 minutes before your fifth hour ends, and when your 30 minutes are up."
+            sub="60, 30 and 15 minutes before your fifth hour ends. You are told when your lunch is over either way."
             value={settings.lunchReminders}
             onChange={toggleReminders}
           />

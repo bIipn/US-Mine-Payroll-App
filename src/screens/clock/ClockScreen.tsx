@@ -1,6 +1,6 @@
 import { useNavigation } from '@react-navigation/native';
-import { ChevronRight, Coffee, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
-import React, { useMemo, useState } from 'react';
+import { BellRing, ChevronRight, Coffee, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -13,11 +13,11 @@ import { DEMO_MODE } from '../../config';
 import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
 import { nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
-import { canEndLunch, CA_RULES, MEAL_NOTE_LABEL, mealStatus, shiftTotals } from '../../domain/time';
+import { CA_RULES, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals } from '../../domain/time';
 import type { DemoLocation, GeoStamp, MealNote, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
-import { requestNotificationPermission } from '../../services/notifications';
+import { requestNotificationPermission, scheduleLocal } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { openLogs, openShiftOf, staleShiftOf, useMe, useStore } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
@@ -32,15 +32,15 @@ import {
   fmtRange,
   fmtTime,
   fullName,
-  HOUR,
   MIN,
   startOfDay,
 } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
 type Status = 'off' | 'on' | 'lunch' | 'overdue';
+/** Why a clock-in did not go through. Clock-in is the only punch that needs the person at the mine. */
 type Problem =
-  | { kind: Exclude<FixVerdict, 'inside'>; geo: GeoStamp; action: 'clock_in' | 'end_lunch' }
+  | { kind: Exclude<FixVerdict, 'inside'>; geo: GeoStamp }
   | { kind: 'denied' | 'unavailable' };
 
 const FIELD: Record<Status, { bg: string; fg: string; muted: string; label: string; bar: 'light' | 'dark' }> = {
@@ -65,6 +65,8 @@ export function ClockScreen() {
   const [problem, setProblem] = useState<Problem | null>(null);
   const [confirmOut, setConfirmOut] = useState(false);
   const [mealNote, setMealNote] = useState<MealNote | null>(null);
+  /** Whether the phone will let the lunch-is-over notice through. Unknown until a lunch is started. */
+  const [notifyOk, setNotifyOk] = useState<boolean | null>(null);
 
   if (!me) return null;
 
@@ -83,9 +85,13 @@ export function ClockScreen() {
   const needsMealNote = !!shift && shift.lunches.length === 0 && now - shift.clockIn.at >= CA_RULES.mealDeadlineMs;
   const canWaive = !!shift && now - shift.clockIn.at <= CA_RULES.mealWaiverMaxMs;
 
-  /** Read the phone's position for a punch. Returns null when the punch must not go ahead. */
-  const readLocation = async (action: 'clock_in' | 'end_lunch' | 'start_lunch' | 'clock_out'): Promise<GeoStamp | undefined | null> => {
-    const mustBeOnSite = action === 'clock_in' || action === 'end_lunch';
+  /**
+   * Read the phone's position for a punch. Returns null when the punch must not
+   * go ahead. Only clock-in has to be made at the mine. There is no punch at the
+   * end of lunch, so no location is read then.
+   */
+  const readLocation = async (action: 'clock_in' | 'start_lunch' | 'clock_out'): Promise<GeoStamp | undefined | null> => {
+    const mustBeOnSite = action === 'clock_in';
     setBusy(action);
     const result = await locate(settings.site, settings.demoLocation);
     setBusy(null);
@@ -99,8 +105,8 @@ export function ClockScreen() {
     const geo = toGeoStamp(settings.site, result.fix, result.source);
     if (mustBeOnSite && check.verdict !== 'inside') {
       haptic.error();
-      actions.logDenied(action as 'clock_in' | 'end_lunch', check.verdict === 'outside' ? 'outside' : check.verdict, geo);
-      setProblem({ kind: check.verdict, geo, action: action as 'clock_in' | 'end_lunch' });
+      actions.logDenied('clock_in', check.verdict === 'outside' ? 'outside' : check.verdict, geo);
+      setProblem({ kind: check.verdict, geo });
       return null;
     }
     return geo;
@@ -114,24 +120,32 @@ export function ClockScreen() {
     }
     haptic.success();
     actions.showToast(message);
-    void syncReminders(off ? undefined : result.shift, settings.lunchReminders);
+    void armNotices(off ? undefined : result.shift);
+  };
+
+  /**
+   * Line the phone's scheduled notices up with the shift. While on a shift it
+   * first asks, once, whether notices are allowed: the lunch-is-over notice can
+   * only reach a locked phone if they are. This runs after the punch is on
+   * record, so answering the phone's question never changes a punch time.
+   */
+  const armNotices = async (current: Shift | undefined) => {
+    if (current) setNotifyOk(await requestNotificationPermission());
+    await syncReminders(current, settings.lunchReminders);
   };
 
   const clockIn = async () => {
     const geo = await readLocation('clock_in');
     if (!geo) return;
-    if (settings.lunchReminders) void requestNotificationPermission();
     finish(actions.clockIn(geo), `Clocked in at ${fmtTime(Date.now())}`);
   };
+  // One tap. The lunch ends by itself 30 minutes later and the app says so.
   const startLunch = async () => {
     const geo = await readLocation('start_lunch');
     if (geo === null) return;
-    finish(actions.startLunch(geo), `Lunch started at ${fmtTime(Date.now())}`);
-  };
-  const endLunch = async () => {
-    const geo = await readLocation('end_lunch');
-    if (!geo) return;
-    finish(actions.endLunch(geo), `Back from lunch at ${fmtTime(Date.now())}`);
+    const result = actions.startLunch(geo);
+    const lunch = result.ok ? result.shift.lunches[result.shift.lunches.length - 1] : undefined;
+    finish(result, lunch ? `Lunch started. Back on the clock at ${fmtTime(lunchEndAt(lunch))}.` : '');
   };
   const toggleBreak = () => {
     const wasOnBreak = totals?.onBreak;
@@ -145,12 +159,12 @@ export function ClockScreen() {
     setMealNote(null);
   };
   const retry = () => {
-    const action = problem && 'action' in problem ? problem.action : shift ? 'end_lunch' : 'clock_in';
     setProblem(null);
-    void (action === 'end_lunch' ? endLunch() : clockIn());
+    void clockIn();
   };
 
-  const lastGeo = shift ? (shift.lunches[shift.lunches.length - 1]?.end?.geo ?? shift.clockIn.geo) : undefined;
+  const lastLunch = shift?.lunches[shift.lunches.length - 1];
+  const lastGeo = shift?.clockIn.geo;
   const gpsLine =
     settings.demoLocation === 'at_mine'
       ? 'Demo GPS: at the mine'
@@ -203,21 +217,17 @@ export function ClockScreen() {
             <Button testID="clock-in" label="Clock in" icon={LogIn} size="xl" kind="yellow" loading={busy === 'clock_in'} onPress={clockIn} />
           ) : null}
 
-          {status === 'lunch' && shift && meal ? (
-            <LunchTimer shift={shift} now={now} remainingMs={meal.lunchRemainingMs} elapsedMs={meal.lunchElapsedMs}>
-              <Button
-                testID="end-lunch"
-                label="End lunch"
-                sub={canEndLunch(shift, now) ? 'You have to be at the mine' : `Opens in ${fmtCountdown(meal.lunchRemainingMs)}`}
-                icon={LogIn}
-                size="xl"
-                kind="ink"
-                disabled={!canEndLunch(shift, now)}
-                loading={busy === 'end_lunch'}
-                onPress={endLunch}
-              />
-            </LunchTimer>
+          {/* At lunch there is nothing to tap: it ends by itself and the app says so. */}
+          {status === 'lunch' && lastLunch && meal ? (
+            <LunchTimer
+              startedAt={lastLunch.start.at}
+              endsAt={lunchEndAt(lastLunch)}
+              remainingMs={meal.lunchRemainingMs}
+              elapsedMs={meal.lunchElapsedMs}
+              notifyOk={notifyOk !== false}
+            />
           ) : null}
+          <LunchOverWatcher atLunch={status === 'lunch'} shiftId={shift?.id} />
 
           {(status === 'on' || status === 'overdue') && shift && meal ? (
             <>
@@ -245,7 +255,7 @@ export function ClockScreen() {
                   onPress={toggleBreak}
                 />
                 {shift.lunches.length > 0 ? (
-                  <Button testID="another-lunch" style={{ flex: 1 }} label="Another lunch" icon={Utensils} size="md" kind="quiet" onPress={startLunch} />
+                  <Button testID="another-lunch" style={{ flex: 1 }} label={shift.lunches.length === 1 ? '2nd lunch' : 'Lunch again'} icon={Utensils} size="md" kind="quiet" loading={busy === 'start_lunch'} onPress={startLunch} />
                 ) : null}
               </View>
             </>
@@ -281,7 +291,7 @@ export function ClockScreen() {
 
           <PayPeriodLine employeeId={me.id} now={now} />
 
-          {DEMO_MODE ? <DemoControls onShift={!!shift} /> : null}
+          {DEMO_MODE ? <DemoControls onShift={!!shift} lunchRemainingMs={status === 'lunch' ? meal?.lunchRemainingMs : undefined} /> : null}
         </View>
       </ScrollView>
 
@@ -424,31 +434,61 @@ function LunchDeadline({ shift, now }: { shift: Shift; now: number }) {
   );
 }
 
-function LunchTimer({ shift, now, remainingMs, elapsedMs, children }: {
-  shift: Shift; now: number; remainingMs: number; elapsedMs: number; children: React.ReactNode;
+/** The countdown to the end of lunch. There is no button: the lunch ends by itself. */
+function LunchTimer({ startedAt, endsAt, remainingMs, elapsedMs, notifyOk }: {
+  startedAt: number; endsAt: number; remainingMs: number; elapsedMs: number;
+  /** False when the phone has notifications turned off for the app. */
+  notifyOk: boolean;
 }) {
-  const lunch = shift.lunches[shift.lunches.length - 1];
-  const done = remainingMs <= 0;
   return (
     <>
       <View testID="lunch-timer" style={styles.deadline}>
         <View style={styles.deadlineHead}>
           <View style={{ flex: 1 }}>
-            <Txt v="lead">{done ? 'Your 30 minutes are up' : 'Time left on lunch'}</Txt>
-            <Txt v="small" c={color.silica}>
-              Started {fmtTime(lunch.start.at)}, unpaid. {done ? `${fmtDur(elapsedMs)} so far.` : `Lunch runs the full 30 minutes, to ${fmtTime(lunch.start.at + CA_RULES.mealMinMs)}.`}
-            </Txt>
+            <Txt v="lead">Time left on lunch</Txt>
+            <Txt v="small" c={color.silica}>Started {fmtTime(startedAt)}, unpaid. Back on the clock at {fmtTime(endsAt)}.</Txt>
           </View>
-          <Txt v="num" c={done ? color.green : color.blue}>{done ? fmtDur(elapsedMs) : fmtCountdown(remainingMs)}</Txt>
+          <Txt v="num" c={color.blue} testID="lunch-countdown">{fmtCountdown(remainingMs)}</Txt>
         </View>
-        <ProgressBar value={Math.min(1, elapsedMs / CA_RULES.mealMinMs)} tone={done ? 'ok' : 'info'} />
+        <ProgressBar value={Math.min(1, elapsedMs / Math.max(1, elapsedMs + remainingMs))} tone="info" />
       </View>
-      {children}
-      {now - lunch.start.at > HOUR ? (
-        <Notice tone="warn" title="Lunch has run over an hour" body="If you forgot to clock back in, end lunch now and ask your supervisor to correct the time." />
-      ) : null}
+      {notifyOk ? (
+        <Notice
+          tone="info"
+          icon={BellRing}
+          title="Nothing to tap"
+          body={`At ${fmtTime(endsAt)} the app puts you back on the clock by itself and sends you a notification that lunch is over.`}
+        />
+      ) : (
+        <View testID="lunch-no-notice">
+          <Notice
+            tone="warn"
+            icon={BellRing}
+            title="Notifications are off for this app"
+            body={`Lunch still ends by itself at ${fmtTime(endsAt)}, but the app cannot tell you when it does. Turn notifications on in your phone settings.`}
+          />
+        </View>
+      )}
     </>
   );
+}
+
+/**
+ * Says so the moment a lunch ends by itself while this screen is open. The
+ * phone's own notification covers the times it is not.
+ */
+function LunchOverWatcher({ atLunch, shiftId }: { atLunch: boolean; shiftId?: string }) {
+  const before = useRef({ atLunch, shiftId });
+  useEffect(() => {
+    const was = before.current;
+    before.current = { atLunch, shiftId };
+    if (was.atLunch && !atLunch && shiftId != null && was.shiftId === shiftId) {
+      haptic.success();
+      // Short enough for one line, so it does not cover the status above the time card.
+      useStore.getState().showToast('Lunch is over. Back on the clock.');
+    }
+  }, [atLunch, shiftId]);
+  return null;
 }
 
 function problemTitle(problem: Problem | null): string {
@@ -467,7 +507,7 @@ function ProblemBody({ problem }: { problem: Problem }) {
   let text = '';
   if (problem.kind === 'outside') {
     const outside = Math.max(0, problem.geo.distanceM - site.radiusM);
-    text = `Your phone puts you ${fmtDistance(problem.geo.distanceM)} from the mine pin, ${fmtDistance(outside)} outside the clock-in boundary. ${problem.action === 'end_lunch' ? 'End lunch' : 'Clock in'} once you are on site.`;
+    text = `Your phone puts you ${fmtDistance(problem.geo.distanceM)} from the mine pin, ${fmtDistance(outside)} outside the clock-in boundary. Clock in once you are on site.`;
   } else if (problem.kind === 'weak_gps') {
     text = `Your phone can only place you to within ${fmtDistance(problem.geo.accuracyM ?? 0)}. Step out into the open, give it a few seconds and try again.`;
   } else if (problem.kind === 'mocked') {
@@ -481,7 +521,7 @@ function ProblemBody({ problem }: { problem: Problem }) {
 }
 
 /** Preview-only controls for showing the app away from the mine. */
-function DemoControls({ onShift }: { onShift: boolean }) {
+function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRemainingMs?: number }) {
   const demoLocation = useStore((s) => s.settings.demoLocation);
   const lunchReminders = useStore((s) => s.settings.lunchReminders);
   const { setDemoLocation, demoRewindShift, showToast } = useStore.getState();
@@ -502,7 +542,26 @@ function DemoControls({ onShift }: { onShift: boolean }) {
           { value: 'gps', label: 'Real GPS' },
         ]}
       />
-      {onShift ? (
+      {lunchRemainingMs != null ? (
+        // Thirty minutes is a long time to wait in a demo: move the punches back so lunch is over now.
+        <Button
+          testID="demo-end-lunch"
+          label="Skip to the end of lunch"
+          icon={FastForward}
+          size="md"
+          kind="outline"
+          style={{ marginTop: space.sm }}
+          onPress={() => {
+            const moved = demoRewindShift(Math.ceil(lunchRemainingMs / MIN));
+            const lunch = moved?.lunches[moved.lunches.length - 1];
+            if (!moved || !lunch) return;
+            // Send the real notice as well, a few seconds from now, so it can be seen in a demo.
+            void syncReminders(moved, lunchReminders).then(() =>
+              scheduleLocal([{ ...lunchOverReminder(lunchEndAt(lunch)), at: Date.now() + 3000 }]),
+            );
+          }}
+        />
+      ) : onShift ? (
         <Button
           testID="demo-rewind"
           label="Move my clock-in back 1 hour"

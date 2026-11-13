@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Button, EmptyState, IconButton, Page, Panel, Row, Tag, Txt, Divider } from '../../components/ui';
 import { flagTone } from '../../components/WeekSheet';
-import { FLAG_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
+import { backFromLunchAt, FLAG_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
 import type { ScreenProps } from '../../navigation/types';
 import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
@@ -96,7 +96,7 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
                   <Txt v="smallStrong" style={styles.name} numberOfLines={1}>{rosterName(shift.employeeId)}</Txt>
                   <Txt v="micro" style={styles.cell}>{short(shift.clockIn.at)}</Txt>
                   <Txt v="micro" style={styles.cell}>{short(lunch?.start.at)}</Txt>
-                  <Txt v="micro" style={styles.cell}>{short(lunch?.end?.at)}</Txt>
+                  <Txt v="micro" style={styles.cell}>{short(backFromLunchAt(lunch, now))}</Txt>
                   <Txt v="micro" c={shift.clockOut ? color.ink : missing ? color.red : color.green} style={styles.cell}>
                     {shift.clockOut ? short(shift.clockOut.at) : missing ? 'none' : 'here'}
                   </Txt>
@@ -120,7 +120,7 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
               {i > 0 ? <Divider inset={space.lg} /> : null}
               <Row
                 title={employeeName(employees, d.employeeId)}
-                sub={`${fmtTime(d.at)}, tried to ${d.action === 'clock_in' ? 'clock in' : 'end lunch'}${
+                sub={`${fmtTime(d.at)}, tried to ${d.action === 'clock_in' ? 'clock in' : 'come back from lunch'}${
                   d.geo ? ` ${fmtDistance(d.geo.distanceM)} from the mine pin` : ''
                 }`}
                 right={<Tag label={d.reason === 'outside' ? 'Off site' : d.reason === 'mocked' ? 'Simulated GPS' : 'Weak GPS'} tone="bo" />}
