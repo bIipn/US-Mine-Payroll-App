@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "US Mine Crew",
+    "slug": "us-mine-crew",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.usmine.crew"
+    },
+    "android": {
+      "package": "com.usmine.crew",
+      "adaptiveIcon": {
+        "backgroundColor": "#FFC400",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sharing",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#1C1B19"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "US Mine Crew reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#FFC400",
+          "defaultChannel": "lunch"
+        }
+      ]
+    ]
+  }
+}

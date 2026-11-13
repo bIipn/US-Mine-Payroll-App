@@ -1,0 +1,55 @@
+import * as Location from 'expo-location';
+
+import { destination, type RawFix } from '../domain/geofence';
+import { IONE_TOWN_CENTER } from '../domain/site';
+import type { DemoLocation, GeoStamp, SiteConfig } from '../domain/types';
+
+export type LocateResult =
+  | { ok: true; fix: RawFix; source: GeoStamp['source'] }
+  | { ok: false; reason: 'denied' | 'unavailable' };
+
+const GPS_TIMEOUT_MS = 15_000;
+
+/**
+ * One location reading, taken at the moment of a punch.
+ *
+ * The app asks only for "while using the app" permission and never tracks
+ * anyone in the background: a position is read when a button is pressed,
+ * stamped on that punch, and that is all.
+ */
+export async function locate(site: SiteConfig, demo: DemoLocation): Promise<LocateResult> {
+  if (demo === 'at_mine') {
+    // A spot by the plant, a little off the pin, as a phone would report it.
+    const jitter = (Date.now() % 40) - 20;
+    return { ok: true, source: 'demo', fix: { ...destination(site.center, 90 + jitter, -60), accuracyM: 6 } };
+  }
+  if (demo === 'in_town') {
+    return { ok: true, source: 'demo', fix: { ...IONE_TOWN_CENTER, accuracyM: 8 } };
+  }
+
+  try {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (!permission.granted) return { ok: false, reason: 'denied' };
+
+    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), GPS_TIMEOUT_MS));
+    const reading = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+      timeout,
+    ]);
+    const position = reading ?? (await Location.getLastKnownPositionAsync({ maxAge: 60_000 }));
+    if (!position) return { ok: false, reason: 'unavailable' };
+
+    return {
+      ok: true,
+      source: 'gps',
+      fix: {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracyM: position.coords.accuracy,
+        mocked: position.mocked,
+      },
+    };
+  } catch {
+    return { ok: false, reason: 'unavailable' };
+  }
+}
