@@ -68,15 +68,42 @@ export const AREA_CONDITIONS: AreaCondition[] = [
   { id: 'chemicals', label: 'Chemical storage / labeling / SDS access', refs: ['47.41'] },
 ];
 
+/** The shifts, in the order they run. The paper leaves "Date+Shift" blank; these are what goes in it. */
 export const SHIFTS: { id: ShiftName; label: string }[] = [
   { id: 'day', label: 'Day' },
+  { id: 'swing', label: 'Swing' },
   { id: 'night', label: 'Night' },
 ];
 
-/** The shift a time of day falls in, as a starting choice. The person can change it. */
-export function shiftAt(ms: number): ShiftName {
-  const hour = new Date(ms).getHours();
-  return hour >= 4 && hour < 16 ? 'day' : 'night';
+/** A shift as it is written in the blank. One this version does not know is shown as it was saved. */
+export function shiftLabel(shift: ShiftName): string {
+  return SHIFTS.find((s) => s.id === shift)?.label ?? shift;
+}
+
+/** The hour of the day each shift's crew starts to come in. Nights run on past midnight, until the day crew's hour. */
+const DAY_CREW_FROM = 3;
+const SWING_CREW_FROM = 11;
+const NIGHT_CREW_FROM = 17;
+
+/**
+ * The shift someone who clocked in at this time is on.
+ *
+ * The mine has not given its shift times, so the hours are wide enough to take an eight hour
+ * pattern or a twelve hour one. It is a guess at a starting choice and nothing more: do not
+ * decide from it that an exam is due or done.
+ */
+export function shiftAt(clockedInAt: number): ShiftName {
+  const hour = new Date(clockedInAt).getHours();
+  if (hour >= NIGHT_CREW_FROM || hour < DAY_CREW_FROM) return 'night';
+  return hour >= SWING_CREW_FROM ? 'swing' : 'day';
+}
+
+/**
+ * The shift an exam form starts on: the one the person clocked in for, however late in it they
+ * make the exam. Off the clock there is only the time to go by. The person can change it.
+ */
+export function startingShift(clockedInAt: number | undefined, now: number): ShiftName {
+  return shiftAt(clockedInAt ?? now);
 }
 
 // ---- Area sheets ---------------------------------------------------------------------------

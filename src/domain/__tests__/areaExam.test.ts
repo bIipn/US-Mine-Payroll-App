@@ -12,13 +12,16 @@ import {
   rowAnswer,
   SAMPLE_AREA_SHEETS,
   shiftAt,
+  shiftLabel,
+  SHIFTS,
+  startingShift,
   withFix,
   withMrf,
   withSheets,
   type ExamDraft,
 } from '../areaExam';
 import { STANDARDS } from '../standards';
-import type { AreaExam, AreaSheet } from '../types';
+import type { AreaExam, AreaSheet, ShiftName } from '../types';
 
 const at = (h: number, m = 0, day = 13) => new Date(2026, 10, day, h, m).getTime();
 
@@ -66,8 +69,31 @@ describe('the sheet itself', () => {
     expect(STANDARDS['56.18002'].agency).toBe('MSHA');
   });
 
-  it('takes the shift from the time of day', () => {
-    expect([shiftAt(at(6, 15)), shiftAt(at(15, 59)), shiftAt(at(18, 0)), shiftAt(at(2, 30))]).toEqual(['day', 'day', 'night', 'night']);
+  it('offers the three shifts in the order they run: day, swing, night', () => {
+    expect(SHIFTS.map((s) => [s.id, s.label])).toEqual([['day', 'Day'], ['swing', 'Swing'], ['night', 'Night']]);
+  });
+
+  it('names a shift the way it goes in the "Date+Shift" blank', () => {
+    expect((['day', 'swing', 'night'] as const).map(shiftLabel)).toEqual(['Day', 'Swing', 'Night']);
+    // A signed record is not rewritten: a shift this version does not know is shown as it was saved.
+    expect(shiftLabel('graveyard' as ShiftName)).toBe('graveyard');
+  });
+
+  it('puts someone on the shift whose crew clocks in at that time of day', () => {
+    const on = (times: [number, number][]) => times.map(([h, m]) => shiftAt(at(h, m)));
+    // Day crews come in from 3 AM, swing from 11 AM, nights from 5 PM until 3 AM.
+    expect(on([[3, 0], [5, 45], [10, 59]])).toEqual(['day', 'day', 'day']);
+    expect(on([[11, 0], [13, 45], [16, 59]])).toEqual(['swing', 'swing', 'swing']);
+    expect(on([[17, 0], [21, 45], [0, 10], [2, 59]])).toEqual(['night', 'night', 'night', 'night']);
+  });
+
+  it('starts an exam on the shift the person clocked in for, however late in it the exam is made', () => {
+    // In at 5:50 AM and examining a second area at 1 PM: still the day shift.
+    expect(startingShift(at(5, 50), at(13, 0))).toBe('day');
+    // In at 9:40 PM and examining at 1:30 the next morning: still nights.
+    expect(startingShift(at(21, 40, 12), at(1, 30, 13))).toBe('night');
+    // Off the clock there is only the time to go by.
+    expect(startingShift(undefined, at(13, 0))).toBe('swing');
   });
 });
 

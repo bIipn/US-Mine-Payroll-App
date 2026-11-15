@@ -6,11 +6,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, IconButton, MultiChoice, Notice, ProgressBar, Segmented, Sheet, Tag, TopBar, Txt, TriChoice } from '../../components/ui';
-import { AREA_CONDITIONS, EXAM_COLUMNS, openFindings, shiftAt, SHIFTS, type ExamDraft, type Finding } from '../../domain/areaExam';
+import { AREA_CONDITIONS, EXAM_COLUMNS, openFindings, shiftLabel, SHIFTS, startingShift, type ExamDraft, type Finding } from '../../domain/areaExam';
 import type { Answer, ExamColumn, ShiftName } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { useMe, useStore } from '../../store/useStore';
+import { openShiftOf, useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtTime, fullName } from '../../util/format';
 
@@ -47,7 +47,10 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
   const positions = useRef<Record<string, number>>({});
   const nextKey = useRef(1);
 
-  const [shift, setShift] = useState<ShiftName>(shiftAt(startedAt));
+  // The form starts on the shift the person clocked in for. They can change it.
+  const [shift, setShift] = useState<ShiftName>(() =>
+    startingShift(me ? openShiftOf(useStore.getState().shifts, me.id, startedAt)?.clockIn.at : undefined, startedAt),
+  );
   const [rows, setRows] = useState<Record<string, LineDraft>>({});
   const [others, setOthers] = useState<OtherLine[]>([]);
   const [conditions, setConditions] = useState<Record<string, LineDraft>>({});
@@ -357,7 +360,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
       </View>
 
       <Sheet testID="exam-sign-sheet" visible={signing} onClose={() => setSigning(false)} title="Sign the exam">
-        <Txt v="strong">{sheet.title}, {SHIFTS.find((s) => s.id === shift)?.label.toLowerCase()} shift</Txt>
+        <Txt v="strong">{sheet.title}, {shiftLabel(shift).toLowerCase()} shift</Txt>
         <View style={styles.tally}>
           <Tag label={`${counts.ok} OK`} tone="ok" />
           <Tag label={`${counts.bo} Bad Order`} tone={counts.bo ? 'bo' : 'neutral'} solid={counts.bo > 0} />

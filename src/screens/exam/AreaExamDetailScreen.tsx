@@ -7,7 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { ExamSheet } from '../../components/ExamSheet';
 import { StandardRefs, StepCard } from '../../components/Standards';
 import { Button, Field, IconButton, Sheet, Tag, Txt } from '../../components/ui';
-import { examCounts, examFindings, openFindings, SHIFTS, type Finding } from '../../domain/areaExam';
+import { examCounts, examFindings, openFindings, shiftLabel, type Finding } from '../../domain/areaExam';
 import { AREA_CONDITION_STEPS, AREA_DANGER_STEPS } from '../../domain/standards';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -39,7 +39,7 @@ export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExa
   const danger = open.some((f) => f.danger);
   const counts = examCounts(exam);
   const examiner = employeeName(employees, exam.employeeId);
-  const shift = SHIFTS.find((s) => s.id === exam.shift)?.label.toLowerCase() ?? exam.shift;
+  const shift = shiftLabel(exam.shift).toLowerCase();
   const canFix = me.role === 'supervisor' || exam.employeeId === me.id;
   const mrfOf = (id?: string) => mrfs.find((m) => m.id === id);
   // The same line found again on another exam of this area is a record of its own: each keeps

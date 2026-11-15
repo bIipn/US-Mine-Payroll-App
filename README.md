@@ -57,7 +57,8 @@ This is a working preview. Every flow above runs, on sample data.
 | **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export |
 | **Sample data** | 14 made-up employees, 14 made-up units, 3 made-up work areas, about five weeks of punches and two weeks of checklists and exams. Nothing in it is a real US Mine record |
 | **The mine's own sheets** | The equipment checklist and the conditions page are the mine's, line for line. The area sheets in this repository are made-up samples: a build names the real ones in `.env.local`, or a supervisor types them in (see The paper forms) |
-| **To confirm with the mine** | Which lines of the equipment checklist are safety items that always red tag the unit (the app uses fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls). What "DROPS" on the card stands for (it is shown as printed). Which shifts there are (the paper leaves "Date+Shift" blank; the app offers day and night). Whether N/A belongs on the pre shift exam (the paper has only OK and Bad Order; the app adds N/A so a line that does not apply can still be answered). Whether to keep the one spelling the app puts right on the conditions page ("accesible"). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks) |
+| **Settled with the crew** | The safety items that always red tag a unit: fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls. N/A stays on the pre shift exam. The one spelling the app puts right on the conditions page stays put right. There is a swing shift as well as day and night |
+| **To confirm with the mine** | The hours each shift runs (see Pre Shift Exam under The paper forms for what the app assumes until then). What "DROPS" on the card stands for (it is shown as printed). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks) |
 | **To confirm with payroll** | Which way a pay date moves when the 5th or 20th is a weekend or bank holiday (the app moves it to the banking day before), and which holidays are paid |
 | **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet |
 | **Keep the paper for now** | The standard asks for exam records to be kept for a year and shown to MSHA on request. Until the shared backend holds them, a record made in this preview lives on one device, so it does not replace the paper yet |
@@ -73,7 +74,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 328 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
+npm test           # 339 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -104,14 +105,15 @@ BO = Bad Order, Needs Repair (Safety items; red tag and report immediately.)
 N/A = Not applicable to specific equipment
 ```
 
-That is the legend at the foot of the card, word for word, and it is what the app shows. The card does not say which lines are the safety items, so the app has to: see "To confirm with the mine" above. A note written on a Bad Order goes on the record only while the line is a Bad Order; change the line back to OK and the note is withdrawn with it.
+That is the legend at the foot of the card, word for word, and it is what the app shows. The card does not say which lines are the safety items, so the app has to: fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls. A Bad Order on one of those always red tags the unit. A note written on a Bad Order goes on the record only while the line is a Bad Order; change the line back to OK and the note is withdrawn with it.
 
 The unit goes on the person's card for the day with its equipment hours at the start. Ending use adds the hours at the end and any gallons added. The card screen lays the day out as the paper does: up to four numbered columns against the lines, the comments, and the legend. A fifth unit starts a second card.
 
-**Pre Shift Exam.** The examination of a work area before work starts in it on the shift. Page one is the area's own sheet: each line is checked for guarding, electrical and safe access. Page two is the same for every area: 20 conditions, each OK or Bad Order. On the phone a line is one tap for OK or N/A; a Bad Order asks which column it is in and what was found. A Bad Order stays open on the area, and on the supervisor's board, until its date fixed is recorded. That happens one of two ways: the examiner or a supervisor marks it fixed, or the maintenance request it was sent on is completed.
+**Pre Shift Exam.** The examination of a work area before work starts in it on the shift. Page one is the area's own sheet: each line is checked for guarding, electrical and safe access. Page two is the same for every area: 20 conditions, each OK or Bad Order. The paper has only those two; the app adds N/A, so a line that does not apply can still be answered. On the phone a line is one tap for OK or N/A; a Bad Order asks which column it is in and what was found. A Bad Order stays open on the area, and on the supervisor's board, until its date fixed is recorded. That happens one of two ways: the examiner or a supervisor marks it fixed, or the maintenance request it was sent on is completed.
 
 A few things the phone does that the paper leaves to the person:
 
+- The "Date+Shift" blank is filled in: the date, and the shift, which is day, swing or night. The form starts on the shift the person clocked in for, and they can change it. Until the mine gives the hours its shifts run, the app takes day crews to come in from 3 AM, swing from 11 AM and nights from 5 PM, and uses that for the starting choice only. The work-area list names the shift an area was last examined for, so the next crew can see that theirs is still to do; it does not work out for them that an exam is due.
 - What is written goes under the line it belongs to, under the paper's "Notes / Date fixed" heading, because a phone has no room for that column.
 - A line with a condition still open says so when the area is examined again, and "Rest are OK" passes over it, so it is looked at and marked by hand. Marking it OK does not close the earlier finding: only its own date fixed does. The same line found again on a later exam is a record of its own.
 - A Bad Order marked as a danger shows as "Danger, keep out" wherever the area is listed, ahead of anything else that is open.

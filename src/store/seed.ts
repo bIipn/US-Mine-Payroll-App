@@ -459,9 +459,10 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
   // Each sheet has its examiner, who goes round the area a few minutes after clocking in.
   // The first sheet is left unexamined today, so whoever opens the preview has one to do.
   const today0 = startOfDay(now);
-  const clear = (sheet: AreaSheet, startedAt: number, signedAt: number): ExamDraft => ({
+  const clear = (sheet: AreaSheet, startedAt: number, clockedInAt: number): ExamDraft => ({
     sheetId: sheet.id,
-    shift: shiftAt(signedAt),
+    // The shift the examiner clocked in for, as the form would have started on.
+    shift: shiftAt(clockedInAt),
     startedAt,
     rows: Object.fromEntries(sheet.rows.map((row) => [row.id, { answer: 'ok' as const }])),
     others: [],
@@ -478,7 +479,7 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
       if (shift.employeeId !== examiner || shift.clockIn.at < firstExamDay) continue;
       if (leftForToday && shift.clockIn.at >= today0) continue;
       const submittedAt = shift.clockIn.at + pick(14, 26) * MIN;
-      const built = buildExam(sheet, clear(sheet, submittedAt - pick(6, 11) * MIN, submittedAt), {
+      const built = buildExam(sheet, clear(sheet, submittedAt - pick(6, 11) * MIN, shift.clockIn.at), {
         id: nextId('exam'), employeeId: examiner, submittedAt,
       });
       if (built.ok) exams.push(built.exam);

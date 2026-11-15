@@ -285,7 +285,7 @@ export interface Mrf {
 /** The three columns of a Pre Shift Exam sheet. */
 export type ExamColumn = 'guarding' | 'electrical' | 'access';
 
-export type ShiftName = 'day' | 'night';
+export type ShiftName = 'day' | 'swing' | 'night';
 
 /** A work-area sheet: the paper Pre Shift Exam for one part of the plant. */
 export interface AreaSheet {

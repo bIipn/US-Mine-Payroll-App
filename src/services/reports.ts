@@ -1,5 +1,5 @@
 import { COMPANY } from '../config';
-import { AREA_CONDITIONS, examCounts, examFindings, examResult, rowAnswer, SHIFTS } from '../domain/areaExam';
+import { AREA_CONDITIONS, examCounts, examFindings, examResult, rowAnswer, shiftLabel } from '../domain/areaExam';
 import { cardsBetween } from '../domain/checklistCard';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { standard } from '../domain/standards';
@@ -342,12 +342,11 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
 
   // ---- Pre shift exams: the record 30 CFR 56.18002 asks for -----------------------------------
   const exams = data.exams.filter((x) => within(x.submittedAt)).sort((a, b) => a.submittedAt - b.submittedAt);
-  const shiftLabel = (exam: AreaExam) => SHIFTS.find((s) => s.id === exam.shift)?.label ?? exam.shift;
   const conditionLabel = new Map(AREA_CONDITIONS.map((c) => [c.id, c.label]));
   const cites = (refs: string[], agency: 'MSHA' | 'OSHA') =>
     refs.map(standard).filter((std) => std?.agency === agency).map((std) => std?.cite).join('; ');
   const fixedOn = (at?: number): CellInput => (at == null ? null : { v: new Date(at), s: 'datetime' });
-  const examHead = (exam: AreaExam): CellInput[] => [date(exam.submittedAt), shiftLabel(exam), exam.area, nameOf(employeeOf.get(exam.employeeId))];
+  const examHead = (exam: AreaExam): CellInput[] => [date(exam.submittedAt), shiftLabel(exam.shift), exam.area, nameOf(employeeOf.get(exam.employeeId))];
 
   const examSheet: Sheet = {
     name: 'Pre Shift Exams',

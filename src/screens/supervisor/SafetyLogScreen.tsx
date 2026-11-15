@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Button, Chips, Divider, EmptyState, Page, Panel, Row, Segmented, Tag, Txt, UnitPlate } from '../../components/ui';
-import { examFindings, examResult } from '../../domain/areaExam';
+import { examFindings, examResult, shiftLabel } from '../../domain/areaExam';
 import { cardsBetween } from '../../domain/checklistCard';
 import type { ScreenProps } from '../../navigation/types';
 import { exportReport } from '../../services/exportReport';
@@ -117,13 +117,17 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
                   title={exam.area}
                   sub={`${employeeName(employees, exam.employeeId)}, ${fmtDateTime(exam.submittedAt)}`}
                   below={
-                    result === 'clear' ? (
-                      <Tag label="Clear" tone="ok" />
-                    ) : open === 0 ? (
-                      <Tag label="Found and fixed" tone="ok" />
-                    ) : (
-                      <Tag label={result === 'danger' ? `${open} open, danger` : `${open} open`} tone="bo" solid />
-                    )
+                    <>
+                      {/* The paper's "Date+Shift": with three shifts in a day, the date alone does not say which exam this is. */}
+                      <Tag label={`${shiftLabel(exam.shift)} shift`} tone="neutral" />
+                      {result === 'clear' ? (
+                        <Tag label="Clear" tone="ok" />
+                      ) : open === 0 ? (
+                        <Tag label="Found and fixed" tone="ok" />
+                      ) : (
+                        <Tag label={result === 'danger' ? `${open} open, danger` : `${open} open`} tone="bo" solid />
+                      )}
+                    </>
                   }
                   chevron
                   onPress={() => navigation.navigate('AreaExamDetail', { examId: exam.id })}

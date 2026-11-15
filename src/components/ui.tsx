@@ -346,7 +346,7 @@ export function Segmented<T extends string>({ options, value, onChange, testID }
 }) {
   return (
     <View style={styles.segmented} accessibilityRole="tablist">
-      {options.map((option) => {
+      {options.map((option, i) => {
         const on = option.value === value;
         return (
           <Pressable
@@ -358,7 +358,8 @@ export function Segmented<T extends string>({ options, value, onChange, testID }
               haptic.tap();
               onChange(option.value);
             }}
-            style={[styles.segment, on && styles.segmentOn]}
+            // A line between choices, so two that are both off still read as two.
+            style={[styles.segment, i > 0 && styles.segmentNext, on && styles.segmentOn]}
           >
             <Text style={[VARIANT.smallStrong, { color: on ? color.white : color.ink }]} numberOfLines={1}>
               {option.label}
@@ -742,6 +743,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   segment: { flex: 1, minHeight: 46, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  segmentNext: { borderLeftWidth: 2, borderLeftColor: color.ink },
   segmentOn: { backgroundColor: color.ink },
   chips: { gap: space.sm, paddingRight: space.xl },
   chip: {

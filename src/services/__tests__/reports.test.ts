@@ -110,6 +110,15 @@ describe('safety report', () => {
     expect(headers(report.bytes, 6)).toEqual(['Date', 'Shift', 'Area', 'Examined by', 'Page', 'Line', 'Guarding', 'Electrical', 'Safe access', 'Result', 'Notes', 'Date fixed']);
   });
 
+  it('names the swing shift on an exam made for it, and on each of its lines', () => {
+    const last = data.exams[data.exams.length - 1];
+    const swing = { ...data, exams: data.exams.map((exam) => (exam === last ? { ...exam, shift: 'swing' as const } : exam)) };
+    const bytes = safetyReport(swing, addDays(to, -30), to, now).bytes;
+    const exams = table(bytes, 4);
+    expect(exams[exams.length - 1].Shift).toBe('Swing');
+    expect(table(bytes, 6).filter((line) => line.Shift === 'Swing')).toHaveLength(last.rows.length + last.conditions.length);
+  });
+
   it('lists each condition found, with the date it was fixed once there is one', () => {
     const found = table(report.bytes, 5);
     expect(found.map((r) => [r.Area, r.Line, r['Found in'], r['MRF #'], r.Status])).toEqual([

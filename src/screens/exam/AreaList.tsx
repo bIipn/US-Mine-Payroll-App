@@ -5,13 +5,13 @@ import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
 import { Button, Divider, EmptyState, Notice, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
-import { openFindings, SHIFTS } from '../../domain/areaExam';
+import { openFindings, shiftLabel } from '../../domain/areaExam';
 import type { AreaExam } from '../../domain/types';
 import { employeeName, useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtRelativeDay, fmtTime, shortName, startOfDay } from '../../util/format';
 
-/** The work areas, each with today's pre shift exam and the conditions still open in it. */
+/** The work areas, each with today's latest pre shift exam, the shift it was for, and the conditions still open in it. */
 export function AreaList({ now }: { now: number }) {
   const navigation = useNavigation();
   const me = useMe();
@@ -41,6 +41,9 @@ export function AreaList({ now }: { now: number }) {
     const who = employees.find((e) => e.id === exam.employeeId);
     return who ? shortName(who) : 'someone';
   };
+  // An exam is for one shift, and the next crew makes its own. So the row names the shift
+  // it was made for, and leaves it to the person to see that theirs is still to do.
+  const onShift = (exam: AreaExam) => `${shiftLabel(exam.shift).toLowerCase()} shift`;
 
   return (
     <>
@@ -74,7 +77,7 @@ export function AreaList({ now }: { now: number }) {
                   below={
                     <>
                       {danger ? <Tag label="Danger, keep out" tone="bo" solid icon={Siren} /> : null}
-                      <Tag label={exam ? 'Examined today' : 'Exam due'} tone={exam ? 'ok' : 'warn'} />
+                      <Tag label={exam ? `Examined, ${onShift(exam)}` : 'Exam due'} tone={exam ? 'ok' : 'warn'} />
                       {waiting > 0 ? <Tag label={`${waiting} open`} tone="bo" solid={!danger} /> : null}
                     </>
                   }
@@ -103,7 +106,7 @@ export function AreaList({ now }: { now: number }) {
           <>
             <Txt v="body" c={color.inkSoft}>
               {sheetExam
-                ? `Examined today at ${fmtTime(sheetExam.submittedAt)} by ${employeeName(employees, sheetExam.employeeId)}, ${(SHIFTS.find((x) => x.id === sheetExam.shift)?.label ?? '').toLowerCase()} shift.`
+                ? `Examined today at ${fmtTime(sheetExam.submittedAt)} by ${employeeName(employees, sheetExam.employeeId)}, ${onShift(sheetExam)}.`
                 : 'Nobody has examined this area yet today.'}
               {` The sheet has ${sheet.rows.length} ${sheet.rows.length === 1 ? 'line' : 'lines'} of its own and the 20 conditions.`}
             </Txt>

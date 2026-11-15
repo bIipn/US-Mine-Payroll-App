@@ -180,11 +180,44 @@ describe('sample data', () => {
     expect(new Set(haulRoads('Yard'))).toEqual(new Set(['ok']));
   });
 
-  it('puts an exam made in the small hours on the night shift', () => {
-    // Opened at 6:15 AM, the crew that is already hours into its shift came in around midnight.
-    const data = buildDemoData(new Date(2026, 10, 13, 6, 15).getTime());
-    expect(data.exams.some((exam) => new Date(exam.submittedAt).getHours() < 4)).toBe(true);
-    for (const exam of data.exams) expect(exam.shift).toBe(shiftAt(exam.submittedAt));
+  describe('the shift on a sample exam', () => {
+    /** The sample data as it is when the preview is opened at this time, and the exams made that day. */
+    const openedAt = (hour: number, minute: number) => {
+      const now = new Date(2026, 10, 13, hour, minute).getTime();
+      const data = buildDemoData(now);
+      return { data, today: data.exams.filter((exam) => exam.submittedAt >= startOfDay(now)) };
+    };
+    /** The time-clock shift an exam was made on: the examiner's last clock-in before it. */
+    const clockInOf = (data: ReturnType<typeof buildDemoData>, exam: { employeeId: string; submittedAt: number }) =>
+      Math.max(...data.shifts.filter((s) => s.employeeId === exam.employeeId && s.clockIn.at <= exam.submittedAt).map((s) => s.clockIn.at));
+
+    it.each([[6, 15], [10, 42], [13, 0], [20, 30]])('is the one its examiner clocked in for, opened at %d:%d', (hour, minute) => {
+      const { data } = openedAt(hour, minute);
+      expect(data.exams.length).toBeGreaterThan(20);
+      for (const exam of data.exams) expect(exam.shift).toBe(shiftAt(clockInOf(data, exam)));
+    });
+
+    it('is the day shift for a crew that came in that morning', () => {
+      expect(openedAt(10, 42).today.map((exam) => exam.shift)).toEqual(['day', 'day']);
+    });
+
+    it('is the swing shift for someone who came in after lunch, and nights for someone who came in that evening', () => {
+      // Opened at 8:30 PM: one examiner has been on since 2 PM, the other since 6:25 PM.
+      expect(openedAt(20, 30).today.map((exam) => exam.shift)).toEqual(['swing', 'night']);
+    });
+
+    it('is nights for a crew that came in around midnight', () => {
+      // Opened at 6:15 AM: one examiner has been on since 11:45 PM, the other came in at 4:10 AM for days.
+      expect(openedAt(6, 15).today.map((exam) => exam.shift)).toEqual(['night', 'day']);
+    });
+
+    it('stays the shift they clocked in for when the exam is signed after the next one has started', () => {
+      // Opened at 1 PM: the lab's examiner clocked in just before 11 and signed the exam just after.
+      const { data, today } = openedAt(13, 0);
+      const late = today[today.length - 1];
+      expect([new Date(clockInOf(data, late)).getHours(), new Date(late.submittedAt).getHours()]).toEqual([10, 11]);
+      expect(late.shift).toBe('day');
+    });
   });
 
   it('makes the sample exams on whatever sheets a build names', () => {

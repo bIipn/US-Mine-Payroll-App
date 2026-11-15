@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 
 import { Divider, EmptyState, Page, Panel, Row, Segmented, Tag, Txt, UnitPlate } from '../../components/ui';
-import { examFindings } from '../../domain/areaExam';
+import { examFindings, shiftLabel } from '../../domain/areaExam';
 import { cardsBetween } from '../../domain/checklistCard';
 import type { ScreenProps } from '../../navigation/types';
 import { useMe, useStore } from '../../store/useStore';
@@ -99,7 +99,7 @@ export function MyRecordsScreen({ navigation, route }: ScreenProps<'MyRecords'>)
                     testID={`my-exam-${n}`}
                     left={<Factory color={color.ink} size={24} />}
                     title={exam.area}
-                    sub={fmtDateTime(exam.submittedAt)}
+                    sub={`${fmtDateTime(exam.submittedAt)}, ${shiftLabel(exam.shift).toLowerCase()} shift`}
                     right={<Tag label={found.length === 0 ? 'Clear' : open ? `${open} open` : 'Fixed'} tone={open ? 'bo' : 'ok'} />}
                     onPress={() => navigation.navigate('AreaExamDetail', { examId: exam.id })}
                   />

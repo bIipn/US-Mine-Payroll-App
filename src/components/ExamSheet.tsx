@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { AREA_CONDITIONS, EXAM_COLUMNS, SHIFTS } from '../domain/areaExam';
+import { AREA_CONDITIONS, EXAM_COLUMNS, shiftLabel } from '../domain/areaExam';
 import type { AreaExam, ExamCondition, ExamRow } from '../domain/types';
 import { color, font, space } from '../theme/theme';
 import { fmtDate, fmtDateTime } from '../util/format';
@@ -23,7 +23,7 @@ export function ExamSheet({ exam, examiner, nameOf, mrfNumber }: {
   /** The number of the maintenance request a line was sent on. */
   mrfNumber: (mrfId: string) => number | undefined;
 }) {
-  const shift = SHIFTS.find((s) => s.id === exam.shift)?.label ?? exam.shift;
+  const shift = shiftLabel(exam.shift);
   const conditionOf = new Map(AREA_CONDITIONS.map((c) => [c.id, c]));
 
   const notes = (line: ExamRow | ExamCondition) => {
