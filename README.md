@@ -1,20 +1,24 @@
 # US Mine Crew
 
-Time clock, pre-operational inspections, maintenance requests and payroll hours for the crew at the U.S. Mine Corp. plant in Ione, California. One codebase builds the iPhone app, the Android app and a web version.
+Time clock, the equipment checklist, the pre shift exam of each work area, maintenance requests and payroll hours for the crew at the U.S. Mine Corp. plant in Ione, California. One codebase builds the iPhone app, the Android app and a web version.
 
-It replaces the paper time sheet, the pre-op clipboard and the maintenance request form, and it does the hours math so nobody has to.
+It replaces the paper time sheet, the Operator Equipment Checklist card, the Pre Shift Exam sheets and the Maintenance Request form, and it does the hours math so nobody has to.
 
 ![Time clock: sign in, GPS check, lunch countdown, and the day worked out as 12.75 − 0.50 = 12.25](docs/gallery-time-clock.png)
 
 ![Pay periods: hours and next payday on the clock screen, the period split into straight time, overtime and double time, the pay estimate, a moved payday, crew payroll and paid leave](docs/gallery-pay-period.png)
 
-![Pre-op checklist with OK, BO and N/A, the Do Not Operate tag, the steps to take, and the maintenance request](docs/gallery-pre-op.png)
+![Operator equipment checklist: the 21 lines of the card with OK, BO and N/A, a Bad Order with the Do Not Operate tag and the steps to take, and the day laid out as the paper card](docs/gallery-equipment-checklist.png)
+
+![Pre shift exam: the work areas, an area's lines with guarding, electrical and safe access, the 20 conditions, what was found, the exam as the paper sheet, the maintenance request form and adding an area sheet](docs/gallery-pre-shift-exam.png)
 
 ![Supervisor screens: crew board, who is on site, time log, corrections, safety log, maintenance requests, roster and the mine boundary](docs/gallery-supervisor.png)
 
 The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_sample.xlsx), [safety log sample](docs/samples/US-Mine-Safety-Log_sample.xlsx)):
 
 ![Payroll summary sheet in Excel: straight time, overtime, double time, holiday, PTO and sick hours by employee for the pay period](docs/excel-payroll.png)
+
+![Safety log in Excel: each unit on a card as a row with the 21 lines of the checklist as columns, and the conditions found on pre shift exams with the date fixed](docs/excel-safety-log.png)
 
 ## What it does
 
@@ -26,19 +30,23 @@ The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_
 - **Hours the way the timesheet does them.** Minutes become hundredths of an hour (15 min = .25, 45 min = .75). 6:15 AM to 7:00 PM with a 30-minute lunch is 12.75 − 0.50 = **12.25**.
 - **Pay periods the way the checks are cut.** The 1st to the 15th is paid on the 20th, and the 16th to the end of the month is paid on the 5th. The clock screen shows the hours so far and the next payday. My hours splits the period into straight time, overtime and double time, the same lines as the pay stub.
 - **What the check should come to.** Enter your hourly rate once and the app estimates gross pay for the period. The rate stays on your phone.
-- **Pre-op any unit in a couple of minutes.** Big OK / BO / N/A buttons, a checklist for each type of machine, and the MSHA standard (with the matching OSHA rule) behind every safety check.
-- **Bad Order guidance.** A safety defect takes the unit out of service, shows the steps to tag it out with the standard for each step, and pre-fills the maintenance request (MRF).
-- **Equipment operating sheet.** Who ran which unit, from when to when, with the meter readings and fuel.
+- **The Operator Equipment Checklist, the same card for every machine.** The 21 lines of the paper card, in its order and its wording, marked OK, BO or N/A with one big tap each. It takes the equipment hours at the start and the end, the gallons added and the comments. Each line shows the MSHA standard behind it, with the matching OSHA rule.
+- **Your card for the day.** Every unit you check gets a numbered column, laid out the way the paper is, with the total daily hours worked filled in from the time clock.
+- **Bad Order guidance.** A Bad Order on a safety item red tags the unit, shows the steps to take with the standard for each one, and pre-fills the maintenance request.
+- **The Pre Shift Exam of your work area.** The area's own sheet, each line checked for guarding, electrical and safe access, then the 20 conditions of the second page, with room for "Other (specify)" lines. Anything found stays open on the area until the date it was fixed is recorded.
+- **Maintenance requests like the paper form.** By, date, location and problem, then assigned to, date completed, time spent, completed by and remarks. A request can be for a unit or for anything else in the plant.
 
 **For supervisors, safety and payroll**
 
-- A live board: who is on site, who is close to their lunch deadline, which shifts have no clock-out, which units are tagged out.
+- A live board: who is on site, who is close to their lunch deadline, which shifts have no clock-out, which units are red tagged, and which work-area conditions are still open.
 - Time corrections with a required reason and a permanent audit trail.
 - Payroll by employee for the pay period or any workweek: straight time, overtime and double time, with lunch flags for review.
 - Paid leave: holiday, PTO and sick hours are entered by a supervisor, show as their own lines, and never count toward overtime.
-- Maintenance request queue: open, in progress, completed and returned to service.
+- Everyone's equipment cards and pre shift exams by day, each one opening as the paper it replaces.
+- Maintenance request queue: assign a request, start it, and complete it with the remarks and the time spent. Completing a request that came from an exam puts the date fixed on that exam.
+- Area sheets: type in the sheet for a new work area, one line of the paper to a line.
 - Roster control: only names on the roster can create an account. Paste a whole list at once.
-- **Excel exports** for payroll (summary, daily detail, paid leave, punch log, flags) and safety (pre-ops, Bad Order items, equipment use, MRFs, time on site).
+- **Excel exports** for payroll (summary, daily detail, paid leave, punch log, flags) and safety (equipment checklists with the 21 lines as columns, Bad Order items, equipment use, pre shift exams, the conditions found, every line of every exam, maintenance requests, time on site).
 
 ## Where this build stands
 
@@ -46,10 +54,13 @@ This is a working preview. Every flow above runs, on sample data.
 
 | | |
 |---|---|
-| **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, pre-ops, Bad Order steps, MRFs, operating sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export |
-| **Sample data** | 14 made-up employees, 14 made-up units, about five weeks of punches and two weeks of pre-ops. Nothing in it is a real US Mine record |
+| **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export |
+| **Sample data** | 14 made-up employees, 14 made-up units, 3 made-up work areas, about five weeks of punches and two weeks of checklists and exams. Nothing in it is a real US Mine record |
+| **The mine's own sheets** | The equipment checklist and the conditions page are the mine's, line for line. The area sheets in this repository are made-up samples: a build names the real ones in `.env.local`, or a supervisor types them in (see The paper forms) |
+| **To confirm with the mine** | Which lines of the equipment checklist are safety items that always red tag the unit (the app uses fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls). What "DROPS" on the card stands for (it is shown as printed). Which shifts there are (the app offers day and night) |
 | **To confirm with payroll** | Which way a pay date moves when the 5th or 20th is a weekend or bank holiday (the app moves it to the banking day before), and which holidays are paid |
 | **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet |
+| **Keep the paper for now** | The standard asks for exam records to be kept for a year and shown to MSHA on request. Until the shared backend holds them, a record made in this preview lives on one device, so it does not replace the paper yet |
 | **Not connected yet** | The shared cloud database and real Apple, Google and Microsoft sign-in. The buttons and the account screens are built; they need the backend behind them |
 | **Not yet tried on a phone** | The iPhone and Android bundles build cleanly, and the app has been driven end to end in a browser. It has not been installed on a physical phone yet |
 | **Notifications** | On a phone, the lunch reminders and the lunch-is-over notice are handed to the operating system, so they arrive with the app closed or the phone locked. In a browser they only arrive while the page is open. Delivery on a real phone has not been tried yet |
@@ -62,7 +73,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 202 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, checklists, Excel
+npm test           # 281 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -80,6 +91,35 @@ EXPO_PUBLIC_ROSTER_OWNER=First Last
 That person is always on the roster as a supervisor. They create an account with their own name, email and password like anyone else, start with no hours, and can add the rest of the crew from Crew → Roster. In a live build this is also how the first supervisor gets in.
 
 `.env.local` is not committed, and that is the point: **this repository is public.** Keep real names, pay figures and other personal details out of the code, out of `src/store/seed.ts`, and out of the screenshots and sample workbooks in `docs/`.
+
+## The paper forms
+
+Three of the mine's paper forms are built in. The app keeps their wording and their order, so a record reads like the sheet it replaces.
+
+**Operator Equipment Checklist.** One card for every piece of equipment at the mine. Its 21 lines are in `src/domain/templates.ts` exactly as printed, from Fire extinguisher to Bed condition, each marked OK, BO or N/A:
+
+- OK is an inspection free of defects or concerns.
+- BO is Bad Order, needs repair. A Bad Order on a safety item red tags the unit and is reported right away.
+- N/A is a line that does not apply to that equipment, such as tires on a dozer.
+
+The unit goes on the person's card for the day with its equipment hours at the start. Ending use adds the hours at the end and any gallons added. The card screen lays the day out as the paper does: up to four numbered columns against the lines, the comments, and the legend. A fifth unit starts a second card.
+
+**Pre Shift Exam.** The examination of a work area before work starts in it on the shift. Page one is the area's own sheet: each line is checked for guarding, electrical and safe access. Page two is the same for every area: 20 conditions, each OK or Bad Order. On the phone a line is one tap for OK or N/A; a Bad Order asks which column it is in and what was found. A Bad Order stays open on the area, and on the supervisor's board, until its date fixed is recorded. That happens one of two ways: the examiner or a supervisor marks it fixed, or the maintenance request it was sent on is completed.
+
+**Maintenance Request.** By, date, location and problem when it is sent; assigned to, date completed, time spent, completed by and remarks as the work is done. A supervisor assigns it. A supervisor, or the person it is assigned to, starts and completes it.
+
+### Area sheets
+
+Every work area has its own sheet. The three in this repository are made-up samples, because the real sheets list the plant's own equipment and the repository is public. There are two ways to put the real ones in:
+
+- **In the app:** Crew → Area sheets → Add an area sheet. Type the name of the area, then one line of the paper sheet on each line. An area can start with no lines of its own and still get the conditions page.
+- **For a build:** name them in `.env.local`. The name of an area, then each line of its sheet, with a blank line before the next area. `\n` ends a line:
+
+```
+EXPO_PUBLIC_AREA_SHEETS="North plant\nFeed hopper\nBelt 4\nScreen deck\n\nLab\nScale\nDrying oven"
+```
+
+A signed exam keeps the lines it was made on, so changing a sheet later never changes a record.
 
 ## How the hours are figured
 
@@ -125,14 +165,21 @@ Supervisors can change the radius in the app (Crew → Mine boundary). To use th
 
 Ione is a surface non-metal mine, so the governing federal standards are MSHA's 30 CFR Part 56. Each safety check also shows the matching federal OSHA rule (29 CFR 1910 / 1926) as a cross-reference. In California, Cal/OSHA's Mining and Tunneling Unit also inspects surface mines under the Title 8 Mine Safety Orders.
 
-The summaries in the app are a field aid in plain language. They are not legal advice.
+- The equipment checklist is the operator's inspection before equipment is placed in operation on the shift, 30 CFR 56.14100.
+- The pre shift exam is the examination of working places, 30 CFR 56.18002. Its record names who made the examination, the date, the areas examined and each condition found, and the date a condition is corrected is added to it. The app's exam record carries each of those.
+- Two lines of the conditions page fall under other parts of 30 CFR: container labels (Part 47) and hearing protectors (Part 62).
+- No standard is cited beside dust control or respiratory protection. 30 CFR 56.5005 was being revised when the list was written, so those two lines carry no reference until the current text is checked.
+
+Only standards whose text has been checked are cited. The summaries in the app are a field aid in plain language. They are not legal advice.
 
 ## Making it yours
 
 | To change | Edit |
 |---|---|
-| Pre-op checklists | `src/domain/templates.ts` — plain data, one list per type of machine |
-| Standards and Bad Order steps | `src/domain/standards.ts` |
+| Equipment checklist lines, and which are safety items | `src/domain/templates.ts` |
+| Pre shift exam columns and the 20 conditions | `src/domain/areaExam.ts` |
+| Area sheets | In the app (Crew → Area sheets), or `EXPO_PUBLIC_AREA_SHEETS` in `.env.local` |
+| Standards and the steps after a Bad Order | `src/domain/standards.ts` |
 | Lunch and overtime rules | `CA_RULES` in `src/domain/time.ts` |
 | Pay periods, paydays and bank holidays | `src/domain/payPeriod.ts` |
 | Boundary | `src/domain/site.ts`, or in the app |
@@ -152,18 +199,19 @@ The logo in this build was traced from a screenshot the company's artwork was su
 
 ```
 App.tsx                 fonts, storage, navigation
-src/domain/             the rules, with tests: hours, lunch, overtime, pay periods, GPS, checklists, standards
+src/domain/             the rules, with tests: hours, lunch, overtime, pay periods, GPS, the checklist, exams, standards
 src/store/              app state (saved on the device), its migrations and the sample data
 src/services/           GPS, notifications, Excel writer, reports, file sharing
-src/components/         buttons, time card, day table, pay estimate, danger tag, site map
-src/screens/            auth, clock, equipment, hours, more, supervisor
+src/components/         buttons, time card, the paper forms, day table, pay estimate, danger tag, site map
+src/screens/            auth, clock, equipment, exam, hours, more, supervisor
 ```
 
 Built with Expo (React Native) and TypeScript.
 
 ## Before the first store release
 
-- Make this repository private, or keep the real roster in the backend only. The real employee names must never be committed while it is public.
+- Make this repository private, or keep the real roster and the real area sheets in the backend only. Real employee names and the plant's own sheets must never be committed while it is public.
+- The mine's sign-off on which checklist lines are safety items, and on each area sheet as typed in.
 - Connect the backend and turn off preview mode (`EXPO_PUBLIC_DEMO=0`).
 - Set the real app identifiers in `app.json` (`ios.bundleIdentifier`, `android.package`). They are placeholders now and cannot be changed after the first release.
 - Apple Developer Program and Google Play Console accounts in the company's name.

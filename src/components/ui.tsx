@@ -457,7 +457,7 @@ const TRI: { value: Answer; label: string; icon: LucideIcon; tone: Tone; say: st
   { value: 'na', label: 'N/A', icon: Minus, tone: 'neutral', say: 'Not applicable' },
 ];
 
-/** The three answers on a pre-op line: OK, Bad Order, Not applicable. */
+/** The three answers on a line of a checklist or an exam: OK, Bad Order, Not applicable. */
 export function TriChoice({ value, onChange, testID }: {
   value?: Answer; onChange: (value: Answer) => void; testID?: string;
 }) {
@@ -487,6 +487,44 @@ export function TriChoice({ value, onChange, testID }: {
           >
             <Icon color={on ? t.onSolid : t.solid} size={22} strokeWidth={3} />
             <Text style={{ fontFamily: font.condBold, fontSize: 24, lineHeight: 28, color: on ? t.onSolid : color.ink }}>
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/** A row of choices where more than one can be on at once. */
+export function MultiChoice<T extends string>({ options, value, onChange, tone = 'bo', testID }: {
+  options: { value: T; label: string }[]; value: T[]; onChange: (value: T[]) => void; tone?: Tone; testID?: string;
+}) {
+  const t = toneColor[tone];
+  return (
+    <View style={styles.tri}>
+      {options.map((option) => {
+        const on = value.includes(option.value);
+        return (
+          <Pressable
+            key={option.value}
+            testID={testID ? `${testID}-${option.value}` : undefined}
+            accessibilityRole="checkbox"
+            accessibilityLabel={option.label}
+            accessibilityState={{ checked: on }}
+            onPress={() => {
+              haptic.tap();
+              onChange(on ? value.filter((v) => v !== option.value) : [...value, option.value]);
+            }}
+            style={({ pressed }) => [
+              styles.triButton,
+              styles.multiButton,
+              on ? { backgroundColor: t.solid, borderColor: t.solid } : null,
+              pressed && styles.pressed,
+            ]}
+          >
+            {on ? <Check color={t.onSolid} size={18} strokeWidth={3} /> : null}
+            <Text style={[VARIANT.smallStrong, { color: on ? t.onSolid : color.ink, textAlign: 'center' }]} numberOfLines={2}>
               {option.label}
             </Text>
           </Pressable>
@@ -744,6 +782,7 @@ const styles = StyleSheet.create({
     borderColor: color.silicaLight,
     backgroundColor: color.paper,
   },
+  multiButton: { minHeight: TAP, gap: 4, paddingHorizontal: 4 },
 
   page: { flex: 1, backgroundColor: color.kaolin },
   pagePad: { paddingHorizontal: space.xl, paddingTop: space.sm, gap: space.xl },

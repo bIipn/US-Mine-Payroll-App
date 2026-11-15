@@ -1,6 +1,7 @@
+import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, type ExamDraft } from '../../domain/areaExam';
 import { toGeoStamp } from '../../domain/geofence';
 import { DEFAULT_SITE } from '../../domain/site';
-import { templateFor, templateItems } from '../../domain/templates';
+import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
 import type { InspectionAnswer } from '../../domain/types';
 import { openShiftOf, useStore } from '../useStore';
@@ -10,7 +11,7 @@ const onSite = toGeoStamp(DEFAULT_SITE, { ...DEFAULT_SITE.center, accuracyM: 5 }
 const s = () => useStore.getState();
 const unit = (name: string) => s().equipment.find((e) => e.unit === name)!;
 const answers = (name: string, bad: Record<string, Partial<InspectionAnswer>> = {}): InspectionAnswer[] =>
-  templateItems(templateFor(unit(name).category)).map((i) => ({ itemId: i.id, answer: 'ok', ...bad[i.id] }));
+  checklistFor(unit(name).category).items.map((i) => ({ itemId: i.id, answer: 'ok', ...bad[i.id] }));
 
 beforeEach(() => {
   jest.useFakeTimers();
@@ -166,10 +167,16 @@ describe('equipment', () => {
     s().signInDemo('employee');
   });
 
-  it('checks a unit out on a clean pre-op and back in at end of use', () => {
+  it('checks a unit out on a clean checklist and back in at end of use', () => {
     const l12 = unit('L-12');
-    const result = s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter + 1, answers: answers('L-12') });
-    expect(result).toMatchObject({ ok: true, inspection: { result: 'pass' } });
+    const result = s().submitInspection({
+      equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter + 1, answers: answers('L-12'),
+      fuelGal: 18, comments: '  Greased the pins ',
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      inspection: { result: 'pass', templateId: 'operator_equipment_checklist', fuelGal: 18, comments: 'Greased the pins' },
+    });
     const log = s().opLogs.find((l) => l.equipmentId === l12.id && !l.endAt)!;
     expect(log.employeeId).toBe('emp_demo');
     expect(s().endUse(log.id, { endMeter: l12.meter - 5, parkedSafely: true })).toMatchObject({ ok: false });
@@ -177,11 +184,25 @@ describe('equipment', () => {
     expect(unit('L-12').meter).toBe(l12.meter + 6.5);
   });
 
-  it('takes a unit out of service on a safety Bad Order until the MRF is completed', () => {
+  it('will not sign a checklist with a line left blank', () => {
+    const l12 = unit('L-12');
+    const before = s().inspections.length;
+    const short = answers('L-12').filter((a) => a.itemId !== 'bed_condition');
+    expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: short })).toEqual({
+      ok: false, error: 'Mark every line OK, BO or N/A. 1 is still blank.',
+    });
+    const silent = answers('L-12', { lights: { answer: 'bo', note: '  ' } });
+    expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: silent })).toEqual({
+      ok: false, error: 'Say what is wrong on each Bad Order.',
+    });
+    expect(s().inspections).toHaveLength(before);
+  });
+
+  it('takes a unit out of service on a safety Bad Order until the request is completed', () => {
     const l12 = unit('L-12');
     const result = s().submitInspection({
       equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter,
-      answers: answers('L-12', { fn_brakes: { answer: 'bo', note: 'Pedal fades' } }),
+      answers: answers('L-12', { brakes: { answer: 'bo', note: 'Pedal fades' } }),
     });
     expect(result).toMatchObject({ ok: true, inspection: { result: 'bad_order' } });
     expect(unit('L-12').status).toBe('out_of_service');
@@ -190,14 +211,14 @@ describe('equipment', () => {
 
     expect(s().createMrf({ equipmentId: l12.id, priority: 'safety', description: ' ', taggedOut: true })).toMatchObject({ ok: false });
     const mrf = s().createMrf({ equipmentId: l12.id, priority: 'safety', description: 'Service brakes fade', taggedOut: true, inspectionId: result.inspection.id });
-    expect(mrf).toMatchObject({ ok: true, mrf: { number: 1044, status: 'open' } });
+    expect(mrf).toMatchObject({ ok: true, mrf: { number: 1045, status: 'open' } });
     expect(s().inspections.find((i) => i.id === result.inspection.id)?.mrfId).toBeDefined();
 
     s().signInDemo('supervisor');
     if (!mrf.ok) return;
-    s().setMrfStatus(mrf.mrf.id, 'in_progress');
+    expect(s().startMrf(mrf.mrf.id)).toEqual({ ok: true });
     expect(unit('L-12').status).toBe('out_of_service');
-    s().setMrfStatus(mrf.mrf.id, 'completed', 'Replaced master cylinder');
+    expect(s().completeMrf(mrf.mrf.id, { remarks: 'Replaced master cylinder' })).toEqual({ ok: true });
     expect(unit('L-12').status).toBe('ready');
     expect(s().mrfs.find((m) => m.id === mrf.mrf.id)?.history).toHaveLength(3);
   });
@@ -206,7 +227,7 @@ describe('equipment', () => {
     const wt = unit('WT-01');
     const defect = s().submitInspection({
       equipmentId: wt.id, startedAt: Date.now(), meter: wt.meter,
-      answers: answers('WT-01', { cab_wipers: { answer: 'bo', note: 'Blade torn' } }),
+      answers: answers('WT-01', { lights: { answer: 'bo', note: 'Left tail light out' } }),
     });
     expect(defect).toMatchObject({ ok: true, inspection: { result: 'defect' } });
     expect(unit('WT-01').status).toBe('defect');
@@ -217,10 +238,215 @@ describe('equipment', () => {
     const g = unit('G-02');
     const escalated = s().submitInspection({
       equipmentId: g.id, startedAt: Date.now(), meter: g.meter,
-      answers: answers('G-02', { wa_tires: { answer: 'bo', note: 'Sidewall cut to the cords', hazard: true } }),
+      answers: answers('G-02', { tires: { answer: 'bo', note: 'Sidewall cut to the cords', hazard: true } }),
     });
     expect(escalated).toMatchObject({ ok: true, inspection: { result: 'bad_order' } });
     expect(unit('G-02').status).toBe('out_of_service');
+  });
+});
+
+describe('maintenance requests', () => {
+  const request = () => {
+    s().signInDemo('employee');
+    const result = s().createMrf({ location: ' Wash plant, slurry pump 3 ', priority: 'high', description: 'Packing gland is spraying', taggedOut: false });
+    if (!result.ok) throw new Error(result.error);
+    return result.mrf;
+  };
+  const saved = (id: string) => s().mrfs.find((m) => m.id === id)!;
+
+  it('can be for a place in the plant instead of a fleet unit', () => {
+    const mrf = request();
+    expect(mrf).toMatchObject({ requestedBy: 'emp_demo', location: 'Wash plant, slurry pump 3', status: 'open', createdAt: at(6, 15) });
+    expect(mrf.equipmentId).toBeUndefined();
+    expect(s().createMrf({ priority: 'high', description: 'Something is loose', taggedOut: false })).toEqual({
+      ok: false, error: 'Say where the problem is, or pick the unit it is on.',
+    });
+  });
+
+  it('fills in the rest of the paper form as the work is done', () => {
+    const { id } = request();
+    s().signInDemo('supervisor');
+    expect(s().assignMrf(id, 'emp_demo')).toEqual({ ok: true });
+    expect(saved(id)).toMatchObject({ assignedTo: 'emp_demo', status: 'open' });
+
+    // The person it is assigned to does the work and signs it off.
+    s().signInDemo('employee');
+    jest.setSystemTime(at(8, 0));
+    expect(s().startMrf(id, 'Pump locked out')).toEqual({ ok: true });
+    jest.setSystemTime(at(9, 30));
+    expect(s().completeMrf(id, { remarks: ' Repacked the gland and ran it for ten minutes ', timeSpent: 150 })).toEqual({ ok: true });
+    expect(saved(id)).toMatchObject({
+      status: 'completed',
+      assignedTo: 'emp_demo',
+      completedAt: at(9, 30),
+      completedBy: 'emp_demo',
+      timeSpent: 150,
+      remarks: 'Repacked the gland and ran it for ten minutes',
+    });
+    expect(saved(id).history.map((h) => [h.status, h.by, h.assignedTo])).toEqual([
+      ['open', 'emp_demo', undefined],
+      ['open', 'sup_demo', 'emp_demo'],
+      ['in_progress', 'emp_demo', undefined],
+      ['completed', 'emp_demo', undefined],
+    ]);
+  });
+
+  it('is worked only by a supervisor or the person it is assigned to', () => {
+    const { id } = request();
+    expect(s().assignMrf(id, 'emp_demo')).toMatchObject({ ok: false });
+    expect(s().startMrf(id)).toMatchObject({ ok: false });
+    expect(s().completeMrf(id, { remarks: 'Done' })).toMatchObject({ ok: false });
+    expect([saved(id).status, saved(id).assignedTo]).toEqual(['open', undefined]);
+    s().signInDemo('supervisor');
+    expect(s().assignMrf(id, 'nobody')).toMatchObject({ ok: false });
+  });
+
+  it('is not closed without saying what was done, or with a time spent that makes no sense', () => {
+    const { id } = request();
+    s().signInDemo('supervisor');
+    expect(s().completeMrf(id, { remarks: '  ' })).toEqual({ ok: false, error: 'Say what was done. The remarks are the repair record.' });
+    for (const timeSpent of [0, -50, Number.NaN]) {
+      expect(s().completeMrf(id, { remarks: 'Repacked', timeSpent })).toMatchObject({ ok: false });
+    }
+    expect(saved(id).status).toBe('open');
+    // With nobody assigned, the person who closes it is the one who completed it.
+    expect(s().completeMrf(id, { remarks: 'Repacked' })).toEqual({ ok: true });
+    expect([saved(id).completedBy, saved(id).timeSpent]).toEqual(['sup_demo', undefined]);
+    expect(s().completeMrf(id, { remarks: 'Again' })).toMatchObject({ ok: false });
+  });
+});
+
+describe('pre shift exams', () => {
+  const sheet = () => s().areaSheets[0];
+  const draft = (change: (d: ExamDraft) => void = () => {}): ExamDraft => {
+    const d: ExamDraft = {
+      sheetId: sheet().id, shift: 'day', startedAt: Date.now() - 600_000, others: [],
+      rows: Object.fromEntries(sheet().rows.map((r) => [r.id, { answer: 'ok' as const }])),
+      conditions: Object.fromEntries(AREA_CONDITIONS.map((c) => [c.id, { answer: 'ok' as const }])),
+    };
+    change(d);
+    return d;
+  };
+  const lampOut = (d: ExamDraft) => { d.conditions.lighting = { answer: 'bo', note: 'Lamp out over the sump' }; };
+  const saved = (id: string) => s().exams.find((e) => e.id === id)!;
+
+  it('records who examined the area, when, and every line', () => {
+    s().signInDemo('employee');
+    const result = s().submitExam(draft());
+    expect(result).toMatchObject({ ok: true, exam: { area: sheet().title, employeeId: 'emp_demo', shift: 'day', submittedAt: at(6, 15) } });
+    if (!result.ok) return;
+    expect(saved(result.exam.id).rows).toHaveLength(sheet().rows.length);
+    expect(saved(result.exam.id).conditions).toHaveLength(20);
+  });
+
+  it('is not signed with a line blank, for a sheet that is gone, or by nobody', () => {
+    s().signInDemo('employee');
+    const before = s().exams.length;
+    expect(s().submitExam(draft((d) => { delete d.conditions.berms; }))).toEqual({ ok: false, error: '1 line still needs an answer.' });
+    expect(s().submitExam({ ...draft(), sheetId: 'nowhere' })).toMatchObject({ ok: false });
+    s().signOut();
+    expect(s().submitExam(draft())).toMatchObject({ ok: false });
+    expect(s().exams).toHaveLength(before);
+  });
+
+  it('keeps a condition open until the date it was fixed is added to the record', () => {
+    s().signInDemo('employee');
+    const result = s().submitExam(draft(lampOut));
+    if (!result.ok) throw new Error(result.error);
+    const mine = () => openFindings(s().exams).filter((f) => f.examId === result.exam.id);
+    expect(mine().map((f) => f.key)).toEqual(['cond:lighting']);
+
+    jest.setSystemTime(at(9, 5));
+    expect(s().markFixed(result.exam.id, 'cond:lighting', ' Changed the lamp ')).toEqual({ ok: true });
+    expect(saved(result.exam.id).conditions.find((c) => c.id === 'lighting')?.fixed).toEqual({ at: at(9, 5), by: 'emp_demo', note: 'Changed the lamp' });
+    expect(mine()).toEqual([]);
+    expect(s().markFixed(result.exam.id, 'cond:lighting')).toMatchObject({ ok: false });
+    expect(s().markFixed(result.exam.id, 'cond:berms')).toMatchObject({ ok: false });
+  });
+
+  it('lets only the examiner or a supervisor record the fix', () => {
+    s().signInDemo('supervisor');
+    const result = s().submitExam(draft(lampOut));
+    if (!result.ok) throw new Error(result.error);
+    s().signInDemo('employee');
+    expect(s().markFixed(result.exam.id, 'cond:lighting')).toEqual({ ok: false, error: 'Only the person who made the exam, or a supervisor, can record the fix.' });
+    s().signInDemo('supervisor');
+    expect(s().markFixed(result.exam.id, 'cond:lighting')).toEqual({ ok: true });
+  });
+
+  it('sends a condition on a maintenance request, and dates the fix when the request is completed', () => {
+    s().signInDemo('employee');
+    const result = s().submitExam(draft(lampOut));
+    if (!result.ok) throw new Error(result.error);
+    const mrf = s().createMrf({
+      location: `${sheet().title}: Lighting`, priority: 'high', description: 'Lamp out over the sump', taggedOut: false,
+      examId: result.exam.id, findingKey: 'cond:lighting',
+    });
+    if (!mrf.ok) throw new Error(mrf.error);
+    expect(examFindings(saved(result.exam.id))[0].mrfId).toBe(mrf.mrf.id);
+
+    s().signInDemo('supervisor');
+    jest.setSystemTime(at(13, 40));
+    s().completeMrf(mrf.mrf.id, { remarks: 'Replaced the lamp and the ballast', timeSpent: 75 });
+    expect(saved(result.exam.id).conditions.find((c) => c.id === 'lighting')?.fixed).toEqual({
+      at: at(13, 40), by: 'sup_demo', note: 'Replaced the lamp and the ballast',
+    });
+  });
+});
+
+describe('area sheets', () => {
+  it('let a supervisor add a sheet, change its lines and take it off the list', () => {
+    s().signInDemo('supervisor');
+    const before = s().areaSheets.length;
+    const added = s().addAreaSheet(' Clay side ', 'Feeder\nBelt');
+    expect(added).toMatchObject({ ok: true, sheet: { id: 'clay_side', title: 'Clay side', active: true } });
+    expect(s().areaSheets).toHaveLength(before + 1);
+    expect(s().addAreaSheet('  ', 'Feeder')).toEqual({ ok: false, error: 'Give the sheet the name of its work area.' });
+    expect(s().addAreaSheet('clay SIDE', 'Feeder')).toEqual({ ok: false, error: 'There is already a sheet called Clay side.' });
+
+    expect(s().updateAreaSheet('clay_side', 'Clay plant', 'Feeder\nBelt\nPug mill')).toEqual({ ok: true });
+    const sheet = s().areaSheets.find((x) => x.id === 'clay_side')!;
+    expect([sheet.title, sheet.rows.map((r) => r.label)]).toEqual(['Clay plant', ['Feeder', 'Belt', 'Pug mill']]);
+
+    s().setAreaSheetActive('clay_side', false);
+    expect(s().areaSheets.find((x) => x.id === 'clay_side')?.active).toBe(false);
+  });
+
+  it('are not something an employee can change', () => {
+    s().signInDemo('employee');
+    const before = s().areaSheets;
+    expect(s().addAreaSheet('Clay side', 'Feeder')).toMatchObject({ ok: false });
+    expect(s().updateAreaSheet(before[0].id, 'Renamed', 'One line')).toMatchObject({ ok: false });
+    s().setAreaSheetActive(before[0].id, false);
+    expect(s().areaSheets).toEqual(before);
+  });
+
+  it('leave an exam as it was signed when the sheet changes afterwards', () => {
+    s().signInDemo('supervisor');
+    const sheet = s().areaSheets[0];
+    const result = s().submitExam({
+      sheetId: sheet.id, shift: 'day', startedAt: Date.now(), others: [],
+      rows: Object.fromEntries(sheet.rows.map((r) => [r.id, { answer: 'ok' as const }])),
+      conditions: Object.fromEntries(AREA_CONDITIONS.map((c) => [c.id, { answer: 'ok' as const }])),
+    });
+    if (!result.ok) throw new Error(result.error);
+    s().updateAreaSheet(sheet.id, 'Renamed', 'Only line');
+    const exam = s().exams.find((e) => e.id === result.exam.id)!;
+    expect(exam.area).toBe(sheet.title);
+    expect(exam.rows.map((r) => r.label)).toEqual(sheet.rows.map((r) => r.label));
+  });
+
+  it("are the build's own sheets when it names some, with the sample exams made on them", () => {
+    const named = parseAreaSheets('North plant\nFeeder\nBelt 4\n\nBag house\nFan');
+    s().resetDemo(null, named);
+    expect(s().areaSheets.map((x) => x.title)).toEqual(['North plant', 'Bag house']);
+    expect(s().exams.length).toBeGreaterThan(5);
+    expect(new Set(s().exams.map((e) => e.area))).toEqual(new Set(['North plant', 'Bag house']));
+    // A sheet named later reaches a phone whose data was already saved, once.
+    const more = [...named, ...parseAreaSheets('Clay side')];
+    s().ensureSeeded(null, more);
+    s().ensureSeeded(null, more);
+    expect(s().areaSheets.map((x) => x.title)).toEqual(['North plant', 'Bag house', 'Clay side']);
   });
 });
 

@@ -54,9 +54,9 @@ export function MoreScreen() {
         <Panel flush>
           <Row testID="more-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary and GPS" sub="Where you can clock in from" chevron onPress={() => navigation.navigate('Site')} />
           <Divider inset={space.lg} />
-          <Row testID="more-records" left={<ClipboardList color={color.ink} size={24} />} title="My pre-ops and requests" sub="Everything you have signed or sent" chevron onPress={() => navigation.navigate('MyRecords')} />
+          <Row testID="more-records" left={<ClipboardList color={color.ink} size={24} />} title="My checklists, exams and requests" sub="Everything you have signed or sent" chevron onPress={() => navigation.navigate('MyRecords')} />
           <Divider inset={space.lg} />
-          <Row testID="more-standards" left={<BookOpen color={color.ink} size={24} />} title="Safety standards" sub="The MSHA and OSHA rules behind each check" chevron onPress={() => navigation.navigate('Standards')} />
+          <Row testID="more-standards" left={<BookOpen color={color.ink} size={24} />} title="Safety standards" sub="The MSHA and OSHA rules behind each line" chevron onPress={() => navigation.navigate('Standards')} />
           <Divider inset={space.lg} />
           <Row testID="more-chart" left={<Scale color={color.ink} size={24} />} title="Minutes as decimals" sub="The timesheet conversion chart" chevron onPress={() => setChart(true)} />
           <Divider inset={space.lg} />
@@ -81,11 +81,11 @@ export function MoreScreen() {
         </Panel>
 
         {me.role === 'supervisor' ? (
-          <Panel title="Pre-op settings" flush>
+          <Panel title="Checklist settings" flush>
             <Toggle
               testID="toggle-all-ok"
               label={'Allow "Rest are OK"'}
-              sub="Lets an operator mark the unanswered checks in a section OK with one tap. Turn off to make them answer every line."
+              sub="Lets a person mark the unanswered lines of a checklist or an exam OK with one tap. Turn off to make them answer every line."
               value={settings.allowSectionAllOk}
               onChange={setAllowSectionAllOk}
             />
@@ -114,7 +114,7 @@ export function MoreScreen() {
       <RateSheet visible={rateOpen} onClose={() => setRateOpen(false)} />
       <Sheet visible={confirmReset} onClose={() => setConfirmReset(false)} title="Reset the sample data?">
         <Txt v="body" c={color.inkSoft}>
-          Every punch, pre-op and request made on this device is erased and the sample crew is loaded again. You will be signed out.
+          Every punch, checklist, exam and request made on this device is erased and the sample crew is loaded again. You will be signed out.
         </Txt>
         <Button testID="confirm-reset" label="Reset sample data" kind="red" onPress={() => { setConfirmReset(false); resetDemo(); }} />
       </Sheet>

@@ -1,5 +1,7 @@
+import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, SAMPLE_AREA_SHEETS, shiftAt } from '../../domain/areaExam';
 import { payPeriodOf, previousPayPeriod } from '../../domain/payPeriod';
 import { computePayroll, computeRange } from '../../domain/payroll';
+import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
 import { payrollReport, safetyReport } from '../../services/reports';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
@@ -23,8 +25,9 @@ describe('sample data', () => {
       [1041, 'completed'],
       [1042, 'in_progress'],
       [1043, 'open'],
+      [1044, 'open'],
     ]);
-    expect(data.mrfSeq).toBe(1044);
+    expect(data.mrfSeq).toBe(1045);
 
     const flagsOf = (id: string) => data.shifts.filter((s) => s.employeeId === id).flatMap((s) => shiftFlags(s, now));
     expect(flagsOf('e12')).toContain('missing_out');
@@ -40,7 +43,12 @@ describe('sample data', () => {
       expect(units.has(i.equipmentId)).toBe(true);
       expect(people.has(i.employeeId)).toBe(true);
     }
-    for (const m of data.mrfs) expect(data.inspections.some((i) => i.id === m.inspectionId && i.mrfId === m.id)).toBe(true);
+    // Every request came from a checklist or from a line on an exam, and they point at each other.
+    for (const m of data.mrfs) {
+      const fromChecklist = data.inspections.some((i) => i.id === m.inspectionId && i.mrfId === m.id);
+      const fromExam = data.exams.some((x) => x.id === m.examId && examFindings(x).some((f) => f.key === m.findingKey && f.mrfId === m.id));
+      expect(fromChecklist || fromExam).toBe(true);
+    }
     // The demo employee starts the day off the clock.
     expect(data.shifts.some((s) => s.employeeId === 'emp_demo' && !s.clockOut)).toBe(false);
     // Nobody is on two shifts at once.
@@ -89,6 +97,67 @@ describe('sample data', () => {
     expect(buildDemoData(DAYS[4]).payRates.emp_demo).toBeGreaterThan(0);
   });
 
+  it.each(DAYS)('fills every equipment checklist in on the 21 lines of the card, opened at %d', (now) => {
+    const data = buildDemoData(now);
+    const lines = checklistFor('loader').items.map((i) => i.id);
+    expect(data.inspections.length).toBeGreaterThan(60);
+    for (const inspection of data.inspections) {
+      expect(inspection.templateId).toBe('operator_equipment_checklist');
+      expect(inspection.answers.map((a) => a.itemId)).toEqual(lines);
+      // Whatever is wrong is written down.
+      for (const a of inspection.answers) if (a.answer === 'bo') expect(a.note).toBeTruthy();
+    }
+    // A machine on tracks has no tires to check, so that line is N/A on its card.
+    const dozer = data.equipment.find((e) => e.category === 'dozer')!;
+    const onDozer = data.inspections.find((i) => i.equipmentId === dozer.id)!;
+    expect(onDozer.answers.find((a) => a.itemId === 'tires')?.answer).toBe('na');
+    // Some cards have gallons and a comment written on them.
+    expect(data.inspections.some((i) => i.fuelGal)).toBe(true);
+    expect(data.inspections.some((i) => i.comments)).toBe(true);
+  });
+
+  it.each(DAYS)('has pre shift exams for each work area, with conditions found and fixed, opened at %d', (now) => {
+    const data = buildDemoData(now);
+    expect(data.areaSheets).toEqual(SAMPLE_AREA_SHEETS);
+    const today = startOfDay(now);
+    const people = new Set(data.employees.map((e) => e.id));
+    for (const exam of data.exams) {
+      const sheet = data.areaSheets.find((s) => s.id === exam.sheetId)!;
+      expect(exam.area).toBe(sheet.title);
+      expect(people.has(exam.employeeId)).toBe(true);
+      expect(exam.rows.map((r) => r.label)).toEqual(sheet.rows.map((r) => r.label));
+      expect(exam.conditions.map((c) => c.id)).toEqual(AREA_CONDITIONS.map((c) => c.id));
+      // An exam is made by someone who was on the clock that day.
+      expect(data.shifts.some((s) => s.employeeId === exam.employeeId && s.clockIn.at <= exam.submittedAt && startOfDay(s.clockIn.at) === startOfDay(exam.submittedAt))).toBe(true);
+    }
+    const examinedToday = new Set(data.exams.filter((x) => x.submittedAt >= today).map((x) => x.sheetId));
+    // One area is left for whoever opens the preview to examine.
+    expect([...examinedToday].sort()).toEqual([data.areaSheets[1].id, data.areaSheets[2].id].sort());
+
+    const found = data.exams.flatMap(examFindings);
+    const open = openFindings(data.exams);
+    // One was fixed on the spot, one is waiting on a maintenance request, one is still open from yesterday.
+    expect(found.filter((f) => f.fixed).length).toBe(1);
+    expect(open.map((f) => !!f.mrfId).sort()).toEqual([false, true]);
+    expect(open.find((f) => f.mrfId)?.foundAt).toBeGreaterThanOrEqual(today);
+    expect(open.find((f) => !f.mrfId)?.foundAt).toBeLessThan(today);
+  });
+
+  it('puts an exam made in the small hours on the night shift', () => {
+    // Opened at 6:15 AM, the crew that is already hours into its shift came in around midnight.
+    const data = buildDemoData(new Date(2026, 10, 13, 6, 15).getTime());
+    expect(data.exams.some((exam) => new Date(exam.submittedAt).getHours() < 4)).toBe(true);
+    for (const exam of data.exams) expect(exam.shift).toBe(shiftAt(exam.submittedAt));
+  });
+
+  it('makes the sample exams on whatever sheets a build names', () => {
+    const named = parseAreaSheets('North plant\nFeeder\nBelt 4\nScreen\n\nBag house\nFan\nHopper');
+    const data = buildDemoData(DAYS[4], named);
+    expect(data.areaSheets).toEqual(named);
+    expect(new Set(data.exams.map((x) => x.area))).toEqual(new Set(['North plant', 'Bag house']));
+    expect(openFindings(data.exams).length).toBeGreaterThan(0);
+  });
+
   it('feeds reports whose totals agree with the payroll screen', () => {
     const now = DAYS[4];
     const data = buildDemoData(now);
@@ -110,7 +179,7 @@ describe('sample data', () => {
     const to = addDays(startOfDay(now), 1);
     const safety = safetyReport(data, addDays(to, -30), to, now);
     expect(safety.name).toBe('US-Mine-Safety-Log_2026-10-15_to_2026-11-13.xlsx');
-    expect(safety.sheets).toBe(5);
-    expect(safety.rows).toBeGreaterThan(200);
+    expect(safety.sheets).toBe(8);
+    expect(safety.rows).toBeGreaterThan(900);
   });
 });

@@ -1,17 +1,21 @@
-import { useNavigation } from '@react-navigation/native';
-import { Search, Tag as TagIcon, Wrench } from '../../components/icons';
-import React, { useMemo, useState } from 'react';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { FileText, Search, Tag as TagIcon, Wrench } from '../../components/icons';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, Chips, Divider, EmptyState, Field, Notice, Panel, Row, Sheet, Tag, TopBar, Txt, UnitPlate } from '../../components/ui';
+import { Button, Chips, Divider, EmptyState, Field, Notice, Panel, Row, Segmented, Sheet, Tag, TopBar, Txt, UnitPlate } from '../../components/ui';
+import { dailyCards } from '../../domain/checklistCard';
 import { CATEGORY_LABEL, CATEGORY_ORDER } from '../../domain/templates';
 import type { Equipment, EquipmentCategory, OperatingLog } from '../../domain/types';
+import type { TabParamList } from '../../navigation/types';
 import { openLogs, useMe, useStore } from '../../store/useStore';
 import { color, space, type Tone } from '../../theme/theme';
 import { fmtMeter, fmtRelativeDay, fmtTime, shortName } from '../../util/format';
 import { useNow } from '../../util/hooks';
+import { AreaList } from '../exam/AreaList';
 
 type Filter = 'all' | EquipmentCategory;
+type Tab = 'equipment' | 'area';
 
 interface UnitState {
   label: string;
@@ -20,8 +24,14 @@ interface UnitState {
   rank: number;
 }
 
+/**
+ * The Checklists tab: the two things done before work starts. Equipment is
+ * the Operator Equipment Checklist, one unit at a time. Work area is the
+ * Pre Shift Exam of the place you work in.
+ */
 export function EquipmentScreen() {
   const navigation = useNavigation();
+  const route = useRoute<RouteProp<TabParamList, 'Equipment'>>();
   const now = useNow(30_000);
   const me = useMe();
   const equipment = useStore((s) => s.equipment);
@@ -30,11 +40,23 @@ export function EquipmentScreen() {
   const inspections = useStore((s) => s.inspections);
   const mrfs = useStore((s) => s.mrfs);
 
+  const [tab, setTab] = useState<Tab>(route.params?.tab ?? 'equipment');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [openId, setOpenId] = useState<string | null>(null);
 
+  // Another screen can send you straight to one side of the tab.
+  const asked = route.params?.tab;
+  const askedAt = route.params?.at;
+  useEffect(() => {
+    if (asked) setTab(asked);
+  }, [asked, askedAt]);
+
   const inUse = useMemo(() => openLogs(opLogs), [opLogs]);
+  const onMyCard = useMemo(
+    () => (me ? dailyCards({ inspections, opLogs, equipment }, me.id, now).reduce((n, card) => n + card.columns.length, 0) : 0),
+    [inspections, opLogs, equipment, me, now],
+  );
 
   const stateOf = (unit: Equipment): UnitState => {
     const log = inUse.get(unit.id);
@@ -71,43 +93,70 @@ export function EquipmentScreen() {
 
   return (
     <View style={styles.root}>
-      <TopBar title="Equipment" sub="Pre-op every unit before you run it this shift" />
+      <TopBar title="Checklists" sub="Your work area and your equipment, before you start" />
       <ScrollView testID="equipment-screen" contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Field
-          testID="equipment-search"
-          label="Find a unit"
-          placeholder="Unit number, make or type"
-          value={query}
-          onChangeText={setQuery}
-          autoCapitalize="characters"
-          autoCorrect={false}
-          right={<Search color={color.silica} size={22} />}
-        />
-        <Chips<Filter>
-          value={filter}
-          onChange={setFilter}
-          options={[{ value: 'all', label: 'All' }, ...categories.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))]}
+        <Segmented<Tab>
+          testID="checklists-tab"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'equipment', label: 'Equipment' },
+            { value: 'area', label: 'Work area' },
+          ]}
         />
 
-        {list.length === 0 ? (
-          <EmptyState icon={Search} title="No unit matches" body="Check the unit number, or clear the search to see the whole fleet." />
+        {tab === 'area' ? (
+          <AreaList now={now} />
         ) : (
-          <Panel flush>
-            {list.map(({ unit, state }, i) => (
-              <View key={unit.id}>
-                {i > 0 ? <Divider inset={space.lg} /> : null}
-                <Row
-                  testID={`unit-${unit.unit}`}
-                  left={<UnitPlate unit={unit.unit} />}
-                  title={`${unit.make} ${unit.model}`}
-                  sub={`${CATEGORY_LABEL[unit.category]}, ${fmtMeter(unit.meter)} ${unit.meterUnit}`}
-                  below={<Tag label={state.label} tone={state.tone} solid={state.solid} />}
-                  chevron
-                  onPress={() => setOpenId(unit.id)}
-                />
-              </View>
-            ))}
-          </Panel>
+          <>
+            <Panel flush>
+              <Row
+                testID="my-card"
+                left={<FileText color={color.ink} size={26} />}
+                title="My equipment card"
+                sub={onMyCard > 0 ? `${onMyCard} ${onMyCard === 1 ? 'unit' : 'units'} checked today` : 'No equipment checked yet today'}
+                chevron
+                onPress={() => navigation.navigate('ChecklistCard')}
+              />
+            </Panel>
+
+            <Field
+              testID="equipment-search"
+              label="Find a unit"
+              placeholder="Unit number, make or type"
+              value={query}
+              onChangeText={setQuery}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              right={<Search color={color.silica} size={22} />}
+            />
+            <Chips<Filter>
+              value={filter}
+              onChange={setFilter}
+              options={[{ value: 'all', label: 'All' }, ...categories.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))]}
+            />
+
+            {list.length === 0 ? (
+              <EmptyState icon={Search} title="No unit matches" body="Check the unit number, or clear the search to see the whole fleet." />
+            ) : (
+              <Panel flush>
+                {list.map(({ unit, state }, i) => (
+                  <View key={unit.id}>
+                    {i > 0 ? <Divider inset={space.lg} /> : null}
+                    <Row
+                      testID={`unit-${unit.unit}`}
+                      left={<UnitPlate unit={unit.unit} />}
+                      title={`${unit.make} ${unit.model}`}
+                      sub={`${CATEGORY_LABEL[unit.category]}, ${fmtMeter(unit.meter)} ${unit.meterUnit}`}
+                      below={<Tag label={state.label} tone={state.tone} solid={state.solid} />}
+                      chevron
+                      onPress={() => setOpenId(unit.id)}
+                    />
+                  </View>
+                ))}
+              </Panel>
+            )}
+          </>
         )}
       </ScrollView>
 
@@ -118,29 +167,31 @@ export function EquipmentScreen() {
               <UnitPlate unit={open.unit} size="lg" />
               <View style={{ flex: 1 }}>
                 <Txt v="strong">{CATEGORY_LABEL[open.category]}</Txt>
-                <Txt v="small" c={color.silica}>Meter {fmtMeter(open.meter)} {open.meterUnit}</Txt>
+                <Txt v="small" c={color.silica}>
+                  {open.meterUnit === 'mi' ? 'Odometer' : 'Equipment hours'} {fmtMeter(open.meter)}
+                </Txt>
                 {lastInspection ? (
                   <Txt v="small" c={color.silica}>
-                    Last pre-op {fmtRelativeDay(lastInspection.submittedAt, now).toLowerCase()} {fmtTime(lastInspection.submittedAt)}
+                    Last checked {fmtRelativeDay(lastInspection.submittedAt, now).toLowerCase()} {fmtTime(lastInspection.submittedAt)}
                     {lastBy ? ` by ${shortName(lastBy)}` : ''}
                   </Txt>
                 ) : (
-                  <Txt v="small" c={color.silica}>No pre-op on record yet</Txt>
+                  <Txt v="small" c={color.silica}>No checklist on record yet</Txt>
                 )}
               </View>
             </View>
 
             {open.status === 'out_of_service' ? (
-              <Notice tone="bo" icon={TagIcon} title="Tagged out. Do not operate." body={openMrf ? `MRF #${openMrf.number}: ${openMrf.description}` : 'A safety defect is open on this unit.'} />
+              <Notice tone="bo" icon={TagIcon} title="Red tagged. Do not operate." body={openMrf ? `Request #${openMrf.number}: ${openMrf.description}` : 'A safety defect is open on this unit.'} />
             ) : null}
             {open.status === 'defect' ? (
-              <Notice tone="warn" icon={Wrench} title="A defect is reported on this unit" body={openMrf ? `MRF #${openMrf.number}: ${openMrf.description}` : undefined} />
+              <Notice tone="warn" icon={Wrench} title="A defect is reported on this unit" body={openMrf ? `Request #${openMrf.number}: ${openMrf.description}` : undefined} />
             ) : null}
             {openLog && !mine && logOwner ? (
               <Notice
                 tone="info"
                 title={`${logOwner.firstName} ${logOwner.lastName} has this unit`}
-                body={`Checked out at ${fmtTime(openLog.startAt)}. If you take it over, your pre-op closes their operating sheet.`}
+                body={`Checked out at ${fmtTime(openLog.startAt)}. If you take it over, your checklist ends their use of it.`}
               />
             ) : null}
 
@@ -149,7 +200,7 @@ export function EquipmentScreen() {
             ) : (
               <Button
                 testID="start-preop"
-                label="Start pre-op"
+                label="Start checklist"
                 kind="yellow"
                 disabled={open.status === 'out_of_service'}
                 onPress={() => go(() => navigation.navigate('Inspection', { equipmentId: open.id }))}
@@ -158,7 +209,7 @@ export function EquipmentScreen() {
             {openMrf ? (
               <Button
                 testID="see-mrf"
-                label={`See MRF #${openMrf.number}`}
+                label={`See request #${openMrf.number}`}
                 kind="outline"
                 onPress={() => go(() => navigation.navigate('MrfDetail', { mrfId: openMrf.id }))}
               />

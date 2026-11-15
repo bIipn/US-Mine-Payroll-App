@@ -82,7 +82,7 @@ export function AuthScreen() {
             Clock in. Check your machine. Get paid right.
           </Txt>
           <Txt v="body" c={color.onDarkMuted} style={{ marginTop: space.sm }}>
-            Time, pre-ops and maintenance requests for the crew at {SITE_LABEL}.
+            Time, checklists and maintenance requests for the crew at {SITE_LABEL}.
           </Txt>
         </View>
 

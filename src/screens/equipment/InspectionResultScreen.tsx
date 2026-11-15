@@ -1,17 +1,17 @@
-import { CircleCheck, OctagonAlert, TriangleAlert, Wrench } from '../../components/icons';
+import { CircleCheck, FileText, OctagonAlert, TriangleAlert, Wrench } from '../../components/icons';
 import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
 import { DangerTag } from '../../components/DangerTag';
-import { StandardRefs } from '../../components/Standards';
+import { StepCard } from '../../components/Standards';
 import { Button, Notice, Txt, UnitPlate } from '../../components/ui';
-import { BAD_ORDER_STEPS, CLEARED_REMINDERS, DEFECT_STEPS, type GuidanceStep } from '../../domain/standards';
+import { BAD_ORDER_STEPS, CLEARED_REMINDERS, DEFECT_STEPS } from '../../domain/standards';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
 import { mrfItemsFromInspection, useMe, useStore } from '../../store/useStore';
-import { color, font, radius, space } from '../../theme/theme';
+import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtMeter, fmtTime, fullName } from '../../util/format';
 
 export function InspectionResultScreen({ navigation, route }: ScreenProps<'InspectionResult'>) {
@@ -29,7 +29,7 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
   const sendMrf = () => navigation.navigate('MrfForm', { equipmentId: unit.id, inspectionId: inspection.id });
 
   const look = {
-    pass: { bg: color.green, icon: CircleCheck, title: 'Cleared to work', sub: `${unit.unit} passed its pre-op at ${fmtTime(inspection.submittedAt)}.` },
+    pass: { bg: color.green, icon: CircleCheck, title: 'Cleared to work', sub: `${unit.unit} passed its checklist at ${fmtTime(inspection.submittedAt)}.` },
     defect: { bg: color.amber, icon: TriangleAlert, title: 'Defect found', sub: 'Report it and check with your supervisor before you run this unit.' },
     bad_order: { bg: color.red, icon: OctagonAlert, title: 'Bad order', sub: `${unit.unit} is out of service. Do not operate it.` },
   }[inspection.result];
@@ -68,9 +68,9 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
               <View style={{ flex: 1 }}>
                 <Txt v="strong">{unit.make} {unit.model}</Txt>
                 <Txt v="small" c={color.silica}>
-                  Meter {fmtMeter(inspection.meter)} {unit.meterUnit}{inspection.area ? `, ${inspection.area.toLowerCase()}` : ''}
+                  {unit.meterUnit === 'mi' ? 'Odometer' : 'Equipment hours'} {fmtMeter(inspection.meter)} at the start
                 </Txt>
-                {inspection.result === 'pass' ? <Txt v="small" c={color.silica}>Operating sheet opened in your name.</Txt> : null}
+                {inspection.result === 'pass' ? <Txt v="small" c={color.silica}>It is on your card for today.</Txt> : null}
               </View>
             </View>
           )}
@@ -91,18 +91,32 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
           <View style={styles.block}>
             <Txt v="h3">{inspection.result === 'pass' ? 'Before you move' : 'What to do now'}</Txt>
             {(inspection.result === 'pass' ? CLEARED_REMINDERS : inspection.result === 'defect' ? DEFECT_STEPS : BAD_ORDER_STEPS).map(
-              (step, i) => <Step key={step.title} step={step} n={inspection.result === 'pass' ? undefined : i + 1} />,
+              (step, i) => <StepCard key={step.title} step={step} n={inspection.result === 'pass' ? undefined : i + 1} />,
             )}
           </View>
 
-          {inspection.result === 'pass' ? <Button testID="result-done" label="Done" kind="ink" size="xl" onPress={done} /> : null}
+          {inspection.result === 'pass' ? (
+            <>
+              <Button testID="result-done" label="Done" kind="ink" size="xl" onPress={done} />
+              <Button
+                testID="result-card"
+                label="See my card for today"
+                icon={FileText}
+                kind="outline"
+                onPress={() => {
+                  navigation.popToTop();
+                  navigation.navigate('ChecklistCard');
+                }}
+              />
+            </>
+          ) : null}
 
           {inspection.result !== 'pass' && !mrf ? (
             <Button testID="send-mrf" label="Fill out the maintenance request" icon={Wrench} kind="ink" size="lg" onPress={sendMrf} />
           ) : null}
 
           {inspection.result !== 'pass' && mrf ? (
-            <Notice tone="ok" icon={CircleCheck} title={`MRF #${mrf.number} sent`} body="Maintenance and your supervisor can see it now. It stays open until the repair is signed off." />
+            <Notice tone="ok" icon={CircleCheck} title={`Maintenance request #${mrf.number} sent`} body="Maintenance and your supervisor can see it now. It stays open until the repair is signed off." />
           ) : null}
 
           {inspection.result === 'bad_order' && mrf ? (
@@ -144,23 +158,6 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
   );
 }
 
-function Step({ step, n }: { step: GuidanceStep; n?: number }) {
-  return (
-    <View style={styles.step}>
-      {n ? (
-        <View style={styles.stepNo}>
-          <Txt v="numSm" c={color.white}>{n}</Txt>
-        </View>
-      ) : null}
-      <View style={{ flex: 1, gap: 2 }}>
-        <Txt v="strong">{step.title}</Txt>
-        <Txt v="body" c={color.inkSoft}>{step.detail}</Txt>
-        <StandardRefs cfr={step.cfr} osha={step.osha} />
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.kaolin },
   field: { paddingHorizontal: space.xl, paddingBottom: 60, gap: space.sm },
@@ -177,16 +174,4 @@ const styles = StyleSheet.create({
   },
   block: { gap: space.md },
   defect: { padding: space.lg, backgroundColor: color.paper, borderRadius: radius.md, borderLeftWidth: 6, borderLeftColor: color.red },
-  step: {
-    flexDirection: 'row',
-    gap: space.md,
-    padding: space.lg,
-    backgroundColor: color.paper,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.rule,
-  },
-  stepNo: { width: 36, height: 36, borderRadius: radius.sm, backgroundColor: color.ink, alignItems: 'center', justifyContent: 'center' },
-  // keeps the condensed numerals from being clipped on Android
-  stepNoText: { fontFamily: font.condBold },
 });

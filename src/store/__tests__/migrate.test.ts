@@ -60,12 +60,38 @@ describe('migratePersisted', () => {
     });
   });
 
+  describe('from before the paper forms were built in', () => {
+    const v3 = {
+      ...v1,
+      leave: [{ id: 'lv1' }],
+      payRates: { e1: 2500 },
+      // A checklist signed on the old lines, and a request for a unit.
+      inspections: [{ id: 'i1', templateId: 'preop_loader', answers: [{ itemId: 'fn_brakes', answer: 'bo', note: 'Pedal fades' }] }],
+      mrfs: [{ id: 'm1', number: 1001, equipmentId: 'eq1', status: 'open' }],
+    };
+
+    it('keeps every record in a live build exactly as it was signed, and starts the exams', () => {
+      const next = migratePersisted(v3, 3, false);
+      expect(next.inspections).toEqual(v3.inspections);
+      expect(next.mrfs).toEqual(v3.mrfs);
+      expect(next.exams).toEqual([]);
+      expect(next.areaSheets).toEqual([]);
+      expect(next.session).toEqual(v1.session);
+    });
+
+    it('reloads the sample data in a preview build, so its cards are on the real 21 lines', () => {
+      const next = migratePersisted(v3, 3, true);
+      expect(next.seededAt).toBeNull();
+      expect(next.session).toBeNull();
+    });
+  });
+
   it('leaves data from the current version alone', () => {
-    const v3 = { ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 } };
-    expect(migratePersisted(v3, 3, true)).toEqual(v3);
+    const v4 = { ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'lab' }] };
+    expect(migratePersisted(v4, 4, true)).toEqual(v4);
   });
 
   it('copes with nothing saved', () => {
-    expect(migratePersisted(undefined, 1, false)).toEqual({ leave: [], payRates: {} });
+    expect(migratePersisted(undefined, 1, false)).toEqual({ leave: [], payRates: {}, exams: [], areaSheets: [] });
   });
 });

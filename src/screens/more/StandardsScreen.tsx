@@ -11,13 +11,13 @@ export function StandardsScreen({ navigation }: ScreenProps<'Standards'>) {
   const [agency, setAgency] = useState<Agency>('MSHA');
   const list = Object.entries(STANDARDS).filter(([, std]) => std.agency === agency);
   return (
-    <Page testID="standards-screen" title="Safety standards" sub="What each pre-op check is based on" onBack={navigation.goBack}>
+    <Page testID="standards-screen" title="Safety standards" sub="What the lines on the checklists are based on" onBack={navigation.goBack}>
       <Segmented<Agency>
         testID="agency"
         value={agency}
         onChange={setAgency}
         options={[
-          { value: 'MSHA', label: 'MSHA, 30 CFR 56' },
+          { value: 'MSHA', label: 'MSHA, 30 CFR' },
           { value: 'OSHA', label: 'OSHA, 29 CFR' },
         ]}
       />

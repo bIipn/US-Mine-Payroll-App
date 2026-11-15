@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { BellRing, ChevronRight, Coffee, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
+import { BellRing, ChevronRight, ClipboardCheck, Coffee, Factory, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,7 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { LogoPlate } from '../../components/Brand';
 import { SiteMap } from '../../components/SiteMap';
 import { TimeCard } from '../../components/TimeCard';
-import { Button, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Txt, UnitPlate } from '../../components/ui';
+import { Button, Divider, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
 import { DEMO_MODE } from '../../config';
 import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
 import { nextPayday, payPeriodOf } from '../../domain/payPeriod';
@@ -269,6 +269,8 @@ export function ClockScreen() {
             />
           ) : null}
 
+          {shift ? <PreShiftChecks employeeId={me.id} now={now} /> : null}
+
           {myUnits.length > 0 ? (
             <Panel title="You have checked out" flush>
               {myUnits.map((log) => {
@@ -359,6 +361,41 @@ export function ClockScreen() {
 }
 
 /** Hours so far this pay period and when the next check lands. Opens My hours. */
+/** The two things done before work starts: examine the work area, and check any equipment. */
+function PreShiftChecks({ employeeId, now }: { employeeId: string; now: number }) {
+  const navigation = useNavigation();
+  const exams = useStore((s) => s.exams);
+  const inspections = useStore((s) => s.inspections);
+  const today = startOfDay(now);
+  const exam = [...exams].reverse().find((x) => x.employeeId === employeeId && x.submittedAt >= today);
+  const units = inspections.filter((i) => i.employeeId === employeeId && i.submittedAt >= today).length;
+  // `at` makes each tap a new request, so the tab switches sides even if it was asked for that side before.
+  const open = (tab: 'area' | 'equipment') => navigation.navigate('Equipment', { tab, at: Date.now() });
+  return (
+    <Panel title="Before you start" flush>
+      <Row
+        testID="go-area-exam"
+        left={<Factory color={color.ink} size={26} />}
+        title={exam ? `${exam.area} examined` : 'Examine your work area'}
+        sub={exam ? `Pre shift exam signed at ${fmtTime(exam.submittedAt)}` : 'Pre shift exam, before work starts in it'}
+        right={<Tag label={exam ? 'Done' : 'Due'} tone={exam ? 'ok' : 'warn'} />}
+        chevron
+        onPress={() => open('area')}
+      />
+      <Divider inset={space.lg} />
+      <Row
+        testID="go-equipment-check"
+        left={<ClipboardCheck color={color.ink} size={26} />}
+        title={units > 0 ? `${units} ${units === 1 ? 'unit' : 'units'} on your card` : 'Check your equipment'}
+        sub={units > 0 ? 'Add a unit before you run another one' : 'Fill in its checklist before you run it'}
+        right={units > 0 ? <Tag label="Done" tone="ok" /> : undefined}
+        chevron
+        onPress={() => open('equipment')}
+      />
+    </Panel>
+  );
+}
+
 function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number }) {
   const navigation = useNavigation();
   const shifts = useStore((s) => s.shifts);

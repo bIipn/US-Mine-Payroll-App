@@ -150,7 +150,7 @@ export interface Equipment {
   make: string;
   model: string;
   status: EquipmentStatus;
-  /** Last recorded hour meter or odometer. */
+  /** Last recorded equipment hours, or odometer. */
   meter: number;
   meterUnit: 'hrs' | 'mi';
 }
@@ -163,23 +163,19 @@ export interface ChecklistItem {
   cfr?: string;
   /** Matching OSHA rule, e.g. "1926.602(a)(4)". */
   osha?: string;
-  /** A Bad Order here always takes the unit out of service. */
+  /** A safety item: a Bad Order here always takes the unit out of service. */
   critical?: boolean;
 }
 
-export interface ChecklistSection {
-  id: string;
-  title: string;
-  items: ChecklistItem[];
-}
-
+/** A checklist: its lines in the order they are printed on the paper. */
 export interface ChecklistTemplate {
   id: string;
   title: string;
   version: number;
-  sections: ChecklistSection[];
+  items: ChecklistItem[];
 }
 
+/** OK, Bad Order, or not applicable: the three marks on every sheet. */
 export type Answer = 'ok' | 'bo' | 'na';
 
 export interface InspectionAnswer {
@@ -192,6 +188,10 @@ export interface InspectionAnswer {
 
 export type InspectionResult = 'pass' | 'defect' | 'bad_order';
 
+/**
+ * One piece of equipment on a person's Operator Equipment Checklist: a column
+ * of the paper card.
+ */
 export interface Inspection {
   id: string;
   equipmentId: string;
@@ -200,16 +200,20 @@ export interface Inspection {
   templateVersion: number;
   startedAt: number;
   submittedAt: number;
+  /** Equipment hours (or odometer) when the check was made: "Equp. hrs st" on the card. */
   meter: number;
-  area?: string;
   answers: InspectionAnswer[];
   result: InspectionResult;
+  /** Gallons added, written on the Fuel line. */
+  fuelGal?: number;
+  /** The Comments box. */
+  comments?: string;
   mrfId?: string;
   /** What the operator did after a non-hazardous defect. */
   decision?: 'operate' | 'parked';
 }
 
-/** Equipment operating sheet: who ran which unit, when, and the meter readings. */
+/** Who ran which unit, when, and the equipment hours at the start and the end. */
 export interface OperatingLog {
   id: string;
   equipmentId: string;
@@ -217,8 +221,8 @@ export interface OperatingLog {
   inspectionId: string;
   startAt: number;
   startMeter: number;
-  area?: string;
   endAt?: number;
+  /** "Equp. hrs. end" on the card. */
   endMeter?: number;
   fuelGal?: number;
   notes?: string;
@@ -234,22 +238,110 @@ export interface MrfItem {
   cfr?: string;
 }
 
-/** Maintenance Request Form. */
+export interface MrfEvent {
+  at: number;
+  by: string;
+  status: MrfStatus;
+  note?: string;
+  /** Set when this entry records who the request was assigned to. */
+  assignedTo?: string;
+}
+
+/** Maintenance Request. The fields follow the paper form, in its order. */
 export interface Mrf {
   id: string;
   number: number;
-  equipmentId: string;
+  /** By, and Date. */
   requestedBy: string;
   createdAt: number;
-  priority: MrfPriority;
+  /** Location: where the problem is. For a fleet unit, where the unit was left. */
+  location?: string;
+  /** The fleet unit the request is about, when it is about one. */
+  equipmentId?: string;
+  /** Problem. */
   description: string;
+  priority: MrfPriority;
   items: MrfItem[];
   meter?: number;
-  location?: string;
   taggedOut: boolean;
   inspectionId?: string;
+  /** The pre shift exam, and the line on it, that this request came from. */
+  examId?: string;
+  findingKey?: string;
+  /** Assigned to. */
+  assignedTo?: string;
+  /** Date completed. */
+  completedAt?: number;
+  /** Time spent, in hundredths of an hour. */
+  timeSpent?: number;
+  /** Completed by. */
+  completedBy?: string;
+  /** Remarks. */
+  remarks?: string;
   status: MrfStatus;
-  history: { at: number; by: string; status: MrfStatus; note?: string }[];
+  history: MrfEvent[];
+}
+
+/** The three columns of a Pre Shift Exam sheet. */
+export type ExamColumn = 'guarding' | 'electrical' | 'access';
+
+export type ShiftName = 'day' | 'night';
+
+/** A work-area sheet: the paper Pre Shift Exam for one part of the plant. */
+export interface AreaSheet {
+  id: string;
+  title: string;
+  rows: { id: string; label: string }[];
+  active: boolean;
+}
+
+/** What was done about a condition, and when: "Notes / Date fixed" on the sheet. */
+export interface ExamFix {
+  at: number;
+  by: string;
+  note?: string;
+}
+
+interface ExamLine {
+  /** What is wrong. Required for a Bad Order. */
+  note?: string;
+  /** Someone could be hurt right now, so people stay out until it is fixed. */
+  danger?: boolean;
+  fixed?: ExamFix;
+  mrfId?: string;
+}
+
+/** One line of the area sheet, with its three columns. */
+export interface ExamRow extends ExamLine {
+  id: string;
+  /** The line as it read on the sheet when the exam was made. */
+  label: string;
+  guarding: Answer;
+  electrical: Answer;
+  access: Answer;
+  /** Written in on an "Other (specify)" line. */
+  other?: boolean;
+}
+
+/** One line of the conditions page: OK or Bad Order. */
+export interface ExamCondition extends ExamLine {
+  /** A key into the conditions list. */
+  id: string;
+  answer: Answer;
+}
+
+/** A Pre Shift Exam: one person's examination of one work area before a shift's work. */
+export interface AreaExam {
+  id: string;
+  sheetId: string;
+  /** The area's name when the exam was made. */
+  area: string;
+  employeeId: string;
+  shift: ShiftName;
+  startedAt: number;
+  submittedAt: number;
+  rows: ExamRow[];
+  conditions: ExamCondition[];
 }
 
 export interface SiteConfig {

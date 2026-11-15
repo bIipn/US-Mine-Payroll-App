@@ -1,12 +1,13 @@
 import { useNavigation } from '@react-navigation/native';
-import { CalendarClock, ClipboardCheck, FileSpreadsheet, MapPin, Truck, Users, UserCheck, Wrench } from '../../components/icons';
+import { CalendarClock, ClipboardCheck, Factory, FileSpreadsheet, ListChecks, MapPin, Siren, Truck, Users, UserCheck, Wrench } from '../../components/icons';
 import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Avatar, Divider, Panel, Row, Stat, Tag, TopBar, Txt, UnitPlate } from '../../components/ui';
+import { openFindings } from '../../domain/areaExam';
 import { employeeName, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { fmtDate, fmtDateLong, fmtTime, fullName, initials } from '../../util/format';
+import { fmtDate, fmtDateLong, fmtRelativeDay, fmtTime, fullName, initials, startOfDay } from '../../util/format';
 import { useNow } from '../../util/hooks';
 import { crewNow, missingClockOuts } from './crewStatus';
 
@@ -18,6 +19,8 @@ export function CrewScreen() {
   const shifts = useStore((s) => s.shifts);
   const equipment = useStore((s) => s.equipment);
   const mrfs = useStore((s) => s.mrfs);
+  const exams = useStore((s) => s.exams);
+  const sheets = useStore((s) => s.areaSheets);
 
   const crew = useMemo(() => crewNow(employees, shifts, now), [employees, shifts, now]);
   const working = crew.filter((c) => c.presence === 'working').length;
@@ -27,7 +30,12 @@ export function CrewScreen() {
   const openMrfs = mrfs.filter((m) => m.status !== 'completed');
   const safetyMrfs = openMrfs.filter((m) => m.taggedOut);
   const outOfService = equipment.filter((e) => e.status === 'out_of_service').length;
-  const nothing = alerts.length === 0 && missing.length === 0 && safetyMrfs.length === 0;
+  const conditions = useMemo(() => openFindings(exams), [exams]);
+  const madeToday = new Set(exams.filter((x) => x.submittedAt >= startOfDay(now)).map((x) => x.sheetId));
+  const areas = sheets.filter((s) => s.active);
+  // Only the areas still on the list count, so a sheet taken off it cannot push the tally past the total.
+  const examinedToday = areas.filter((s) => madeToday.has(s.id)).length;
+  const nothing = alerts.length === 0 && missing.length === 0 && safetyMrfs.length === 0 && conditions.length === 0;
 
   return (
     <View style={styles.root}>
@@ -43,7 +51,7 @@ export function CrewScreen() {
         <Panel title="Needs you now" flush>
           {nothing ? (
             <View style={{ padding: space.lg }}>
-              <Txt v="body" c={color.silica}>Nothing is waiting on you. Lunch deadlines, missing clock-outs and tagged-out units show up here.</Txt>
+              <Txt v="body" c={color.silica}>Nothing is waiting on you. Lunch deadlines, missing clock-outs, red-tagged units and open work-area conditions show up here.</Txt>
             </View>
           ) : null}
           {alerts.map((line, i) => (
@@ -80,14 +88,32 @@ export function CrewScreen() {
                 <Row
                   testID={`safety-mrf-${mrf.number}`}
                   left={unit ? <UnitPlate unit={unit.unit} /> : undefined}
-                  title={`MRF #${mrf.number}, tagged out`}
+                  title={`Request #${mrf.number}, red tagged`}
                   sub={mrf.description}
-                  right={<Tag label={mrf.status === 'open' ? 'Open' : 'In progress'} tone={mrf.status === 'open' ? 'bo' : 'warn'} />}
+                  below={<Tag label={mrf.status === 'open' ? 'Open' : 'In progress'} tone={mrf.status === 'open' ? 'bo' : 'warn'} />}
                   onPress={() => navigation.navigate('MrfDetail', { mrfId: mrf.id })}
                 />
               </View>
             );
           })}
+          {conditions.slice(0, 5).map((f) => (
+            <View key={`${f.examId}-${f.key}`}>
+              <Divider inset={space.lg} />
+              <Row
+                testID={`condition-${f.key}`}
+                left={f.danger ? <Siren color={color.red} size={28} /> : <Factory color={color.red} size={28} />}
+                title={`${f.area}: ${f.label}`}
+                sub={`${f.note ?? f.where}. Found ${fmtRelativeDay(f.foundAt, now).toLowerCase()}.`}
+                below={<Tag label={f.danger ? 'Danger' : f.mrfId ? 'With maintenance' : 'Open'} tone="bo" solid={f.danger} />}
+                onPress={() => navigation.navigate('AreaExamDetail', { examId: f.examId })}
+              />
+            </View>
+          ))}
+          {conditions.length > 5 ? (
+            <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md }}>
+              <Txt v="small" c={color.silica}>And {conditions.length - 5} more open in the work areas.</Txt>
+            </View>
+          ) : null}
         </Panel>
 
         <Panel title="Time and payroll" flush>
@@ -99,7 +125,14 @@ export function CrewScreen() {
         </Panel>
 
         <Panel title="Safety and equipment" flush>
-          <Row testID="go-safety" left={<ClipboardCheck color={color.ink} size={24} />} title="Pre-ops and equipment use" sub="Who ran what, and what they found" chevron onPress={() => navigation.navigate('SafetyLog')} />
+          <Row
+            testID="go-safety"
+            left={<ClipboardCheck color={color.ink} size={24} />}
+            title="Checklists and exams"
+            sub={`Equipment cards and pre shift exams. ${examinedToday} of ${areas.length} ${areas.length === 1 ? 'area' : 'areas'} examined today`}
+            chevron
+            onPress={() => navigation.navigate('SafetyLog')}
+          />
           <Divider inset={space.lg} />
           <Row
             testID="go-mrfs"
@@ -116,6 +149,8 @@ export function CrewScreen() {
 
         <Panel title="Setup" flush>
           <Row testID="go-roster" left={<Users color={color.ink} size={24} />} title="Roster" sub={`${employees.filter((e) => e.active).length} people can sign in`} chevron onPress={() => navigation.navigate('Roster')} />
+          <Divider inset={space.lg} />
+          <Row testID="go-sheets" left={<ListChecks color={color.ink} size={24} />} title="Area sheets" sub={`${areas.length} work ${areas.length === 1 ? 'area' : 'areas'} with a pre shift exam sheet`} chevron onPress={() => navigation.navigate('AreaSheets')} />
           <Divider inset={space.lg} />
           <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub="The area people can clock in from" chevron onPress={() => navigation.navigate('Site')} />
         </Panel>

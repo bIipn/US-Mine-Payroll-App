@@ -1,12 +1,13 @@
 import { createBottomTabNavigator, type BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { CalendarDays, Clock, Menu, Truck, Users, type LucideIcon } from '../components/icons';
+import { CalendarDays, ClipboardCheck, Clock, Menu, Users, type LucideIcon } from '../components/icons';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthScreen } from '../screens/auth/AuthScreen';
 import { ClockScreen } from '../screens/clock/ClockScreen';
+import { ChecklistCardScreen } from '../screens/equipment/ChecklistCardScreen';
 import { EndUseScreen } from '../screens/equipment/EndUseScreen';
 import { EquipmentScreen } from '../screens/equipment/EquipmentScreen';
 import { InspectionDetailScreen } from '../screens/equipment/InspectionDetailScreen';
@@ -14,12 +15,15 @@ import { InspectionResultScreen } from '../screens/equipment/InspectionResultScr
 import { InspectionScreen } from '../screens/equipment/InspectionScreen';
 import { MrfDetailScreen } from '../screens/equipment/MrfDetailScreen';
 import { MrfFormScreen } from '../screens/equipment/MrfFormScreen';
+import { AreaExamDetailScreen } from '../screens/exam/AreaExamDetailScreen';
+import { AreaExamScreen } from '../screens/exam/AreaExamScreen';
 import { HoursScreen } from '../screens/hours/HoursScreen';
 import { ShiftDetailScreen } from '../screens/hours/ShiftDetailScreen';
 import { MoreScreen } from '../screens/more/MoreScreen';
 import { MyRecordsScreen } from '../screens/more/MyRecordsScreen';
 import { SiteScreen } from '../screens/more/SiteScreen';
 import { StandardsScreen } from '../screens/more/StandardsScreen';
+import { AreaSheetsScreen } from '../screens/supervisor/AreaSheetsScreen';
 import { CrewScreen } from '../screens/supervisor/CrewScreen';
 import { FleetScreen } from '../screens/supervisor/FleetScreen';
 import { MrfQueueScreen } from '../screens/supervisor/MrfQueueScreen';
@@ -39,7 +43,8 @@ const Tabs = createBottomTabNavigator<TabParamList>();
 
 const TAB: Record<keyof TabParamList, { label: string; icon: LucideIcon }> = {
   Clock: { label: 'Clock', icon: Clock },
-  Equipment: { label: 'Equipment', icon: Truck },
+  // The route keeps its first name; the tab now holds both checklists.
+  Equipment: { label: 'Checklists', icon: ClipboardCheck },
   Hours: { label: 'My hours', icon: CalendarDays },
   Crew: { label: 'Crew', icon: Users },
   More: { label: 'More', icon: Menu },
@@ -105,7 +110,11 @@ export function RootNavigator() {
           <Stack.Screen name="Inspection" component={InspectionScreen} />
           <Stack.Screen name="InspectionResult" component={InspectionResultScreen} options={{ gestureEnabled: false }} />
           <Stack.Screen name="InspectionDetail" component={InspectionDetailScreen} />
+          <Stack.Screen name="ChecklistCard" component={ChecklistCardScreen} />
           <Stack.Screen name="EndUse" component={EndUseScreen} />
+          <Stack.Screen name="AreaExam" component={AreaExamScreen} />
+          <Stack.Screen name="AreaExamDetail" component={AreaExamDetailScreen} />
+          <Stack.Screen name="AreaSheets" component={AreaSheetsScreen} />
           <Stack.Screen name="MrfForm" component={MrfFormScreen} />
           <Stack.Screen name="MrfDetail" component={MrfDetailScreen} />
           <Stack.Screen name="ShiftDetail" component={ShiftDetailScreen} />

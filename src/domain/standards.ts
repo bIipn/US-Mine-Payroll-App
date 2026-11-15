@@ -4,6 +4,8 @@
  * MSHA: US Mine's Ione operation is a surface non-metal mine, so the governing
  * federal standards are in 30 CFR Part 56 (Safety and Health Standards —
  * Surface Metal and Nonmetal Mines). These are what a mine inspector cites.
+ * Two of the conditions on the work-area exam fall under other parts of
+ * 30 CFR: hazard communication (Part 47) and noise (Part 62).
  *
  * OSHA: the matching federal OSHA rule (29 CFR 1910 general industry and
  * 29 CFR 1926 construction) is listed beside each MSHA standard as a
@@ -130,7 +132,84 @@ export const STANDARDS: Record<string, Standard> = {
   '56.18002': m(
     '56.18002',
     'Examination of working places',
-    'A competent person examines each working place at least once a shift, before miners begin work there, for conditions that could affect safety or health.',
+    '(a) A competent person designated by the operator examines each working place at least once each shift, before miners begin work there, for conditions that may adversely affect safety or health. ' +
+      'The operator promptly tells the miners in any affected area about such a condition and promptly starts correcting it. ' +
+      'A condition that may be an imminent danger is brought to the operator at once, and the operator withdraws everyone from the affected area, apart from those needed to correct it, until the danger is gone. ' +
+      '(b) A record is made before the end of the shift: who made the examination, the date, the areas examined, and each condition found. ' +
+      '(c) When a condition is corrected, the date is added to the record. ' +
+      "(d) The records are kept for at least one year and shown to MSHA and to the miners' representatives on request.",
+  ),
+  '56.9300': m(
+    '56.9300',
+    'Berms or guardrails',
+    'Berms or guardrails are provided and kept up on the banks of roadways where a drop-off is steep or deep enough to overturn a vehicle or endanger the people in it. ' +
+      'They are at least as high as the mid-axle of the largest equipment that usually uses the road.',
+  ),
+  '56.9313': m(
+    '56.9313',
+    'Roadway maintenance',
+    'Water, debris or spilled material on a roadway that creates a hazard to mobile equipment is removed.',
+  ),
+  '56.11002': m(
+    '56.11002',
+    'Handrails and toeboards',
+    'Crossovers, elevated walkways, elevated ramps and stairways are of substantial construction, have handrails and are kept in good condition. Toeboards are provided where they are needed.',
+  ),
+  '56.11003': m(
+    '56.11003',
+    'Construction and maintenance of ladders',
+    'Ladders are of substantial construction and kept in good condition.',
+  ),
+  '56.14109': m(
+    '56.14109',
+    'Unguarded conveyors with adjacent travelways',
+    'An unguarded conveyor beside a travelway has emergency stop devices placed so that a person falling on or against the conveyor can readily shut off its drive motor, or railings that keep people from falling onto it.',
+  ),
+  '56.12004': m(
+    '56.12004',
+    'Electrical conductors',
+    'Conductors are large enough to carry their load without the heat damaging the insulation. Conductors exposed to mechanical damage are protected.',
+  ),
+  '56.12016': m(
+    '56.12016',
+    'Work on electrically powered equipment',
+    'Electrically powered equipment is de-energized before mechanical work is done on it. The power switch is locked out, or other steps are taken so it cannot be energized without the knowledge of the people working on it, ' +
+      'and a warning notice signed by them is posted at the switch. Only the people who put the locks on, or authorized personnel, take them off.',
+  ),
+  '56.12032': m(
+    '56.12032',
+    'Inspection and cover plates',
+    'Inspection and cover plates on electrical equipment and junction boxes are kept in place at all times, except during testing or repairs.',
+  ),
+  '56.15001': m(
+    '56.15001',
+    'First-aid materials',
+    'Adequate first-aid materials, including stretchers and blankets, are kept at places convenient to all working areas. Water or neutralizing agents are on hand where corrosive chemicals or other harmful substances are stored, handled or used.',
+  ),
+  '56.17001': m(
+    '56.17001',
+    'Illumination of surface working areas',
+    'There is enough light for safe working conditions in and on all surface structures, paths, walkways, stairways, switch panels, loading and dumping sites, and work areas.',
+  ),
+  '56.20003': m(
+    '56.20003',
+    'Housekeeping',
+    'Workplaces, passageways, storerooms and service rooms are kept clean and orderly. Floors are kept clean and, as far as possible, dry, and free of protruding nails, splinters, holes and loose boards as far as practicable.',
+  ),
+  '56.20011': m(
+    '56.20011',
+    'Barricades and warning signs',
+    'Areas where a health or safety hazard is not immediately obvious to employees are barricaded, or warning signs are posted at every approach. The signs are easy to see and read, and say what the hazard is and what protective action is required.',
+  ),
+  '47.41': m(
+    '47.41',
+    'Requirement for container labels',
+    'Every container of a hazardous chemical has a label. A label that is missing, or whose hazard information cannot be read, is replaced immediately.',
+  ),
+  '62.160': m(
+    '62.160',
+    'Hearing protectors',
+    'The mine provides hearing protectors, at no cost, to miners whose noise exposure reaches the action level, and makes sure they are worn where the noise is above the permissible exposure level.',
   ),
   '56.23003': m(
     '56.23003',
@@ -229,8 +308,8 @@ export const BAD_ORDER_STEPS: GuidanceStep[] = [
     osha: '1926.601(b)(14)',
   },
   {
-    title: 'Tag it out',
-    detail: 'Hang a DO NOT OPERATE tag on the controls, or park it in the posted bad-order area, so nobody else starts it.',
+    title: 'Red tag it',
+    detail: 'Hang a red DO NOT OPERATE tag on the controls, or park it in the posted bad-order area, so nobody else starts it.',
     cfr: '56.14100',
   },
   {
@@ -244,8 +323,8 @@ export const BAD_ORDER_STEPS: GuidanceStep[] = [
     cfr: '56.14100',
   },
   {
-    title: 'Send the maintenance request (MRF)',
-    detail: 'The MRF is the written record of the defect. It stays open until the repair is done and the unit is returned to service.',
+    title: 'Send the maintenance request',
+    detail: 'The request is the written record of the defect. It stays open until the repair is done and the unit is returned to service.',
     cfr: '56.14100',
   },
   {
@@ -255,8 +334,8 @@ export const BAD_ORDER_STEPS: GuidanceStep[] = [
     osha: '1910.147',
   },
   {
-    title: 'Pre-op the replacement unit',
-    detail: 'Any other unit you take has to be inspected by you before you put it to work this shift.',
+    title: 'Check the replacement unit',
+    detail: 'Any other unit you take gets its own column on your card. You inspect it before you put it to work this shift.',
     cfr: '56.14100',
     osha: '1926.601(b)(14)',
   },
@@ -265,7 +344,7 @@ export const BAD_ORDER_STEPS: GuidanceStep[] = [
 /** What to do when a defect was found that does not, by itself, make the unit unsafe. */
 export const DEFECT_STEPS: GuidanceStep[] = [
   {
-    title: 'Send the maintenance request (MRF)',
+    title: 'Send the maintenance request',
     detail: 'Every safety defect that is not fixed on the spot gets reported and recorded.',
     cfr: '56.14100',
   },
@@ -279,6 +358,54 @@ export const DEFECT_STEPS: GuidanceStep[] = [
     title: 'Keep watching it',
     detail: 'If it gets worse during the shift, stop, tag the unit out and report it.',
     cfr: '56.14100',
+  },
+];
+
+/** What to do when a pre shift exam finds a condition that could hurt someone right now. */
+export const AREA_DANGER_STEPS: GuidanceStep[] = [
+  {
+    title: 'Get everyone out of the area',
+    detail: 'People stay out until the danger is gone, apart from those needed to fix it.',
+    cfr: '56.18002',
+  },
+  {
+    title: 'Tell your supervisor now',
+    detail: 'A condition that may be an imminent danger has to reach the operator at once.',
+    cfr: '56.18002',
+  },
+  {
+    title: 'Barricade it or post a warning',
+    detail: 'Block every way in, or post a sign that says what the hazard is, so nobody walks into it.',
+    cfr: '56.20011',
+  },
+  {
+    title: 'Get it fixed',
+    detail: 'Send the maintenance request from this exam so the repair is tied to what you found.',
+    cfr: '56.18002',
+  },
+  {
+    title: 'Record the date it was fixed',
+    detail: 'The date goes on this exam. Until then the condition stays on the list for the area.',
+    cfr: '56.18002',
+  },
+];
+
+/** What to do when a pre shift exam finds a condition to correct. */
+export const AREA_CONDITION_STEPS: GuidanceStep[] = [
+  {
+    title: 'Tell the people who work in the area',
+    detail: 'Everyone affected has to know promptly about a condition that could hurt them.',
+    cfr: '56.18002',
+  },
+  {
+    title: 'Get it fixed',
+    detail: 'Put it right yourself if you can do it safely. Otherwise send the maintenance request from this exam.',
+    cfr: '56.18002',
+  },
+  {
+    title: 'Record the date it was fixed',
+    detail: 'The date goes on this exam. Until then the condition stays on the list for the area.',
+    cfr: '56.18002',
   },
 ];
 

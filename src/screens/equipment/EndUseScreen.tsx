@@ -11,7 +11,7 @@ import { color, space } from '../../theme/theme';
 import { fmtDur, fmtMeter, fmtTime } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
-/** Close the operating sheet: ending meter, fuel, and how the unit was left. */
+/** End use of a unit: its hours at the end, the gallons added, and how it was left. */
 export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   const now = useNow(30_000);
   const log = useStore((s) => s.opLogs.find((l) => l.id === route.params.logId));
@@ -64,15 +64,16 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
           <UnitPlate unit={unit.unit} size="lg" />
           <View style={{ flex: 1 }}>
             <Txt v="strong">Checked out at {fmtTime(log.startAt)}</Txt>
-            <Txt v="small" c={color.silica}>{fmtDur(now - log.startAt)} ago, meter {fmtMeter(log.startMeter)} {unit.meterUnit}</Txt>
-            {log.area ? <Txt v="small" c={color.silica}>Working in: {log.area.toLowerCase()}</Txt> : null}
+            <Txt v="small" c={color.silica}>
+              {fmtDur(now - log.startAt)} ago, {unit.meterUnit === 'mi' ? 'odometer' : 'equipment hours'} {fmtMeter(log.startMeter)} at the start
+            </Txt>
           </View>
         </View>
       </Panel>
 
       <Field
         testID="end-meter"
-        label={unit.meterUnit === 'mi' ? 'Odometer now (miles)' : 'Hour meter now'}
+        label={unit.meterUnit === 'mi' ? 'Odometer at the end (miles)' : 'Equipment hours at the end'}
         value={meter}
         onChangeText={(text) => { setMeter(text); setError(null); }}
         keyboardType="decimal-pad"
@@ -80,7 +81,7 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
         error={error}
         hint={used != null && used >= 0 ? `${fmtMeter(used)} ${unit.meterUnit} this use` : `Started at ${fmtMeter(log.startMeter)}`}
       />
-      <Field testID="end-fuel" label="Fuel added (gallons)" value={fuel} onChangeText={setFuel} keyboardType="decimal-pad" placeholder="0" hint="Leave blank if you did not fuel." />
+      <Field testID="end-fuel" label="Gallons of fuel added" value={fuel} onChangeText={setFuel} keyboardType="decimal-pad" placeholder="0" hint="Leave blank if you did not fuel. It goes on the Fuel line of your card." />
       <Field testID="end-notes" label="Anything the next operator should know?" value={notes} onChangeText={setNotes} multiline placeholder="Optional" />
 
       <Panel>

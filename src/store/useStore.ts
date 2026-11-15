@@ -1,13 +1,16 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { DEMO_MODE, ROSTER_OWNER } from '../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER_OWNER } from '../config';
+import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { cleanText, parsePersonName, sameName, titleCase, withOwner, type PersonName } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
-import { findItem, inspectionResult, isHazard, templateFor } from '../domain/templates';
+import { checklistFor, findItem, inspectionResult, isHazard } from '../domain/templates';
 import { CA_RULES, lunchEndAt, startedLunch } from '../domain/time';
 import type {
   Account,
+  AreaExam,
+  AreaSheet,
   AuthProvider,
   DemoLocation,
   DeniedPunch,
@@ -23,7 +26,6 @@ import type {
   Mrf,
   MrfItem,
   MrfPriority,
-  MrfStatus,
   OperatingLog,
   Punch,
   Role,
@@ -71,20 +73,34 @@ export interface SignUpInput {
 export interface InspectionDraft {
   equipmentId: string;
   startedAt: number;
+  /** Equipment hours, or the odometer, at the start. */
   meter: number;
-  area?: string;
   answers: InspectionAnswer[];
+  /** Gallons added, from the Fuel line. */
+  fuelGal?: number;
+  comments?: string;
 }
 
 export interface MrfInput {
-  equipmentId: string;
+  /** The fleet unit the request is about. Without one, `location` says where the problem is. */
+  equipmentId?: string;
+  location?: string;
   priority: MrfPriority;
   description: string;
   items?: MrfItem[];
   meter?: number;
-  location?: string;
   taggedOut: boolean;
   inspectionId?: string;
+  /** The exam, and the line on it, that the request is for. */
+  examId?: string;
+  findingKey?: string;
+}
+
+export interface CompleteMrfInput {
+  /** What was done. */
+  remarks: string;
+  /** Hundredths of an hour. */
+  timeSpent?: number;
 }
 
 export interface EndUseInput {
@@ -118,9 +134,12 @@ interface Actions {
   showToast: (message: string, tone?: ToastTone) => void;
   clearToast: () => void;
 
-  /** Load the starting data on first run, and make sure the build's owner is on the roster. */
-  ensureSeeded: (owner?: PersonName | null) => void;
-  resetDemo: (owner?: PersonName | null) => void;
+  /**
+   * Load the starting data on first run, and make sure the build's owner is on
+   * the roster and the build's own area sheets are there.
+   */
+  ensureSeeded: (owner?: PersonName | null, sheets?: AreaSheet[]) => void;
+  resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[]) => void;
 
   signUp: (input: SignUpInput) => Result;
   signIn: (email: string, password: string) => Result;
@@ -140,7 +159,18 @@ interface Actions {
   decideAfterDefect: (inspectionId: string, decision: 'operate' | 'parked') => void;
   endUse: (logId: string, input: EndUseInput) => Result;
   createMrf: (input: MrfInput) => Result<{ mrf: Mrf }>;
-  setMrfStatus: (mrfId: string, status: MrfStatus, note?: string) => void;
+  /** Assigned to: a supervisor names who does the work. */
+  assignMrf: (mrfId: string, employeeId: string) => Result;
+  /** Starting and completing are for a supervisor or the person the request is assigned to. */
+  startMrf: (mrfId: string, note?: string) => Result;
+  completeMrf: (mrfId: string, input: CompleteMrfInput) => Result;
+
+  submitExam: (draft: ExamDraft) => Result<{ exam: AreaExam }>;
+  /** Add the date a condition was corrected to the exam it was found on. */
+  markFixed: (examId: string, findingKey: string, note?: string) => Result;
+  addAreaSheet: (title: string, rowsText: string) => Result<{ sheet: AreaSheet }>;
+  updateAreaSheet: (sheetId: string, title: string, rowsText: string) => Result;
+  setAreaSheetActive: (sheetId: string, active: boolean) => void;
 
   addEmployee: (firstName: string, lastName: string, role?: Role, title?: string) => Result;
   addEmployeesBulk: (text: string) => { added: number; skipped: number };
@@ -181,7 +211,7 @@ export function staleShiftOf(shifts: Shift[], employeeId: string, now: number): 
   );
 }
 
-/** Operating sheets that are still open, keyed by equipment. */
+/** Units that are checked out right now, keyed by equipment. */
 export function openLogs(opLogs: OperatingLog[]): Map<string, OperatingLog> {
   const map = new Map<string, OperatingLog>();
   for (const log of opLogs) if (!log.endAt) map.set(log.equipmentId, log);
@@ -227,6 +257,17 @@ export const useStore = create<Store>()(
       const notOnRoster = (first: string, last: string) =>
         `We couldn't find "${clean(first)} ${clean(last)}" on the US Mine roster. Check the spelling, or see your supervisor to be added.`;
 
+      const signedOut = { ok: false as const, error: 'You are signed out.' };
+      const isSupervisor = () => {
+        const { session, employees } = get();
+        return employees.find((e) => e.id === session?.employeeId)?.role === 'supervisor';
+      };
+      /** A request is worked by a supervisor or by the person it is assigned to. */
+      const canWork = (mrf: Mrf) => isSupervisor() || (!!mrf.assignedTo && mrf.assignedTo === get().session?.employeeId);
+      const notYours = { ok: false as const, error: 'Only a supervisor, or the person it is assigned to, can work this request.' };
+      /** The sheets a first start is made with: the build's own, or the samples. */
+      const startingSheets = (named: AreaSheet[]) => (named.length ? named : SAMPLE_AREA_SHEETS);
+
       return {
         ...initialData(),
         hydrated: false,
@@ -235,20 +276,22 @@ export const useStore = create<Store>()(
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
         clearToast: () => set({ toast: null }),
 
-        ensureSeeded: (owner = ROSTER_OWNER) => {
+        ensureSeeded: (owner = ROSTER_OWNER, sheets = AREA_SHEETS) => {
           if (get().seededAt == null) {
             const now = Date.now();
-            set({ ...(DEMO_MODE ? buildDemoData(now) : emptyData()), seededAt: now });
+            set({ ...(DEMO_MODE ? buildDemoData(now, startingSheets(sheets)) : emptyData()), seededAt: now });
           }
-          // The person this build was made for is always on the roster, including on
-          // a phone whose data was saved before they were named.
-          const { employees } = get();
+          // The person this build was made for is always on the roster, and the build's
+          // own area sheets are always there, including on a phone whose data was saved
+          // before they were named.
+          const { employees, areaSheets } = get();
           const roster = withOwner(employees, owner);
-          if (roster !== employees) set({ employees: roster });
+          const named = withSheets(areaSheets, sheets);
+          if (roster !== employees || named !== areaSheets) set({ employees: roster, areaSheets: named });
         },
-        resetDemo: (owner = ROSTER_OWNER) => {
+        resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS) => {
           const now = Date.now();
-          const data = buildDemoData(now);
+          const data = buildDemoData(now, startingSheets(sheets));
           set({ ...initialData(), ...data, employees: withOwner(data.employees, owner), seededAt: now });
         },
 
@@ -459,7 +502,16 @@ export const useStore = create<Store>()(
           if (!session) return { ok: false, error: 'You are signed out.' };
           const unit = equipment.find((e) => e.id === draft.equipmentId);
           if (!unit) return { ok: false, error: 'That unit is no longer in the fleet list.' };
-          const template = templateFor(unit.category);
+          const template = checklistFor(unit.category);
+          // Nothing is signed with a line of the card left blank, or a Bad Order that does not say what is wrong.
+          const marked = new Set(draft.answers.map((a) => a.itemId));
+          const blank = template.items.filter((i) => !marked.has(i.id)).length;
+          if (blank > 0) {
+            return { ok: false, error: `Mark every line OK, BO or N/A. ${blank} ${blank === 1 ? 'is' : 'are'} still blank.` };
+          }
+          if (draft.answers.some((a) => a.answer === 'bo' && !clean(a.note ?? ''))) {
+            return { ok: false, error: 'Say what is wrong on each Bad Order.' };
+          }
           const result = inspectionResult(template, draft.answers);
           const now = Date.now();
           const inspection: Inspection = {
@@ -471,22 +523,23 @@ export const useStore = create<Store>()(
             startedAt: draft.startedAt,
             submittedAt: now,
             meter: draft.meter,
-            area: draft.area,
             answers: draft.answers,
             result,
+            fuelGal: draft.fuelGal != null && draft.fuelGal > 0 ? draft.fuelGal : undefined,
+            comments: draft.comments && clean(draft.comments) ? clean(draft.comments) : undefined,
           };
           let status = unit.status;
           if (result === 'bad_order') status = 'out_of_service';
           else if (result === 'defect' && status === 'ready') status = 'defect';
 
-          // A new operator taking the unit closes the previous operating sheet.
+          // A new operator taking the unit ends the last operator's use of it.
           let logs = opLogs.map((log) =>
             log.equipmentId === unit.id && !log.endAt ? { ...log, endAt: now, endMeter: draft.meter } : log,
           );
           if (result === 'pass') {
             logs = [...logs, {
               id: uid('op_'), equipmentId: unit.id, employeeId: session.employeeId, inspectionId: inspection.id,
-              startAt: now, startMeter: draft.meter, area: draft.area,
+              startAt: now, startMeter: draft.meter,
             }];
           }
           set({
@@ -508,7 +561,7 @@ export const useStore = create<Store>()(
               decision === 'operate'
                 ? [...opLogs, {
                     id: uid('op_'), equipmentId: inspection.equipmentId, employeeId: session.employeeId,
-                    inspectionId, startAt: now, startMeter: inspection.meter, area: inspection.area,
+                    inspectionId, startAt: now, startMeter: inspection.meter,
                   }]
                 : opLogs,
           });
@@ -517,7 +570,7 @@ export const useStore = create<Store>()(
         endUse: (logId, input) => {
           const { opLogs, equipment } = get();
           const log = opLogs.find((l) => l.id === logId);
-          if (!log || log.endAt) return { ok: false, error: 'That operating sheet is already closed.' };
+          if (!log || log.endAt) return { ok: false, error: 'That unit has already been checked back in.' };
           if (!(input.endMeter >= log.startMeter)) {
             return { ok: false, error: 'The ending meter cannot be lower than the starting meter.' };
           }
@@ -530,28 +583,34 @@ export const useStore = create<Store>()(
           return { ok: true };
         },
 
+        // ---- Maintenance requests ----------------------------------------------------------
         createMrf: (input) => {
-          const { session, mrfs, mrfSeq, equipment, inspections } = get();
-          if (!session) return { ok: false, error: 'You are signed out.' };
+          const { session, mrfs, mrfSeq, equipment, inspections, exams } = get();
+          if (!session) return signedOut;
           if (!clean(input.description)) return { ok: false, error: 'Describe the problem so maintenance knows what to look for.' };
+          const location = input.location ? clean(input.location) : '';
+          if (!input.equipmentId && !location) return { ok: false, error: 'Say where the problem is, or pick the unit it is on.' };
           const now = Date.now();
           const mrf: Mrf = {
             id: uid('mrf_'),
             number: mrfSeq,
-            equipmentId: input.equipmentId,
             requestedBy: session.employeeId,
             createdAt: now,
-            priority: input.priority,
+            location: location || undefined,
+            equipmentId: input.equipmentId,
             description: clean(input.description),
+            priority: input.priority,
             items: input.items ?? [],
             meter: input.meter,
-            location: input.location ? clean(input.location) : undefined,
             taggedOut: input.taggedOut,
             inspectionId: input.inspectionId,
+            examId: input.examId,
+            findingKey: input.findingKey,
             status: 'open',
             history: [{ at: now, by: session.employeeId, status: 'open' }],
           };
           const all = [...mrfs, mrf];
+          const { examId, findingKey } = input;
           set({
             mrfs: all,
             mrfSeq: mrfSeq + 1,
@@ -559,23 +618,131 @@ export const useStore = create<Store>()(
               e.id === input.equipmentId ? { ...e, status: statusFromMrfs(e.id, all) } : e,
             ),
             inspections: inspections.map((i) => (i.id === input.inspectionId ? { ...i, mrfId: mrf.id } : i)),
+            // The line on the exam shows the request it was sent on.
+            exams: examId && findingKey ? exams.map((x) => (x.id === examId ? withMrf(x, findingKey, mrf.id) : x)) : exams,
           });
           return { ok: true, mrf };
         },
 
-        setMrfStatus: (mrfId, status, note) => {
-          const { session, mrfs, equipment } = get();
+        assignMrf: (mrfId, employeeId) => {
+          const { session, mrfs, employees } = get();
+          if (!session) return signedOut;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can assign a request.' };
           const mrf = mrfs.find((m) => m.id === mrfId);
-          if (!session || !mrf) return;
-          const all = mrfs.map((m) =>
+          if (!mrf || mrf.status === 'completed') return { ok: false, error: 'That request is already completed.' };
+          if (!employees.some((e) => e.id === employeeId && e.active)) return { ok: false, error: 'Pick someone on the roster.' };
+          const entry = { at: Date.now(), by: session.employeeId, status: mrf.status, assignedTo: employeeId };
+          set({ mrfs: mrfs.map((m) => (m.id === mrfId ? { ...m, assignedTo: employeeId, history: [...m.history, entry] } : m)) });
+          return { ok: true };
+        },
+
+        startMrf: (mrfId, note) => {
+          const { session, mrfs } = get();
+          if (!session) return signedOut;
+          const mrf = mrfs.find((m) => m.id === mrfId);
+          if (!mrf) return { ok: false, error: 'That request no longer exists.' };
+          if (!canWork(mrf)) return notYours;
+          if (mrf.status !== 'open') return { ok: false, error: 'Work has already started on this request.' };
+          const entry = { at: Date.now(), by: session.employeeId, status: 'in_progress' as const, note: note && clean(note) ? clean(note) : undefined };
+          set({ mrfs: mrfs.map((m) => (m.id === mrfId ? { ...m, status: 'in_progress', history: [...m.history, entry] } : m)) });
+          return { ok: true };
+        },
+
+        completeMrf: (mrfId, { remarks, timeSpent }) => {
+          const { session, mrfs, equipment, exams } = get();
+          if (!session) return signedOut;
+          const mrf = mrfs.find((m) => m.id === mrfId);
+          if (!mrf) return { ok: false, error: 'That request no longer exists.' };
+          if (!canWork(mrf)) return notYours;
+          if (mrf.status === 'completed') return { ok: false, error: 'This request is already completed.' };
+          const done = clean(remarks);
+          if (!done) return { ok: false, error: 'Say what was done. The remarks are the repair record.' };
+          if (timeSpent != null && !(Number.isFinite(timeSpent) && timeSpent > 0 && timeSpent <= 100_000)) {
+            return { ok: false, error: 'Enter the time spent in hours, like 1.5.' };
+          }
+          const now = Date.now();
+          const completedBy = mrf.assignedTo ?? session.employeeId;
+          const all = mrfs.map((m): Mrf =>
             m.id === mrfId
-              ? { ...m, status, history: [...m.history, { at: Date.now(), by: session.employeeId, status, note: note ? clean(note) : undefined }] }
+              ? {
+                  ...m,
+                  status: 'completed',
+                  completedAt: now,
+                  completedBy,
+                  timeSpent: timeSpent != null ? Math.round(timeSpent) : undefined,
+                  remarks: done,
+                  history: [...m.history, { at: now, by: session.employeeId, status: 'completed', note: done }],
+                }
               : m,
           );
+          const { examId, findingKey } = mrf;
           set({
             mrfs: all,
             equipment: equipment.map((e) => (e.id === mrf.equipmentId ? { ...e, status: statusFromMrfs(e.id, all) } : e)),
+            // The repair is the corrective action: its date goes on the exam the condition was found on.
+            exams:
+              examId && findingKey
+                ? exams.map((x) => (x.id === examId ? withFix(x, findingKey, { at: now, by: completedBy, note: done }) : x))
+                : exams,
           });
+          return { ok: true };
+        },
+
+        // ---- Pre shift exams ------------------------------------------------------------------
+        submitExam: (draft) => {
+          const { session, areaSheets, exams } = get();
+          if (!session) return signedOut;
+          const sheet = areaSheets.find((s) => s.id === draft.sheetId && s.active);
+          if (!sheet) return { ok: false, error: 'That area sheet is no longer on the list.' };
+          const built = buildExam(sheet, draft, { id: uid('exam_'), employeeId: session.employeeId, submittedAt: Date.now() });
+          if (!built.ok) return built;
+          set({ exams: [...exams, built.exam] });
+          return built;
+        },
+
+        markFixed: (examId, findingKey, note) => {
+          const { session, exams } = get();
+          if (!session) return signedOut;
+          const exam = exams.find((x) => x.id === examId);
+          const finding = exam ? examFindings(exam).find((f) => f.key === findingKey) : undefined;
+          if (!exam || !finding) return { ok: false, error: 'That line is not a Bad Order on this exam.' };
+          if (exam.employeeId !== session.employeeId && !isSupervisor()) {
+            return { ok: false, error: 'Only the person who made the exam, or a supervisor, can record the fix.' };
+          }
+          if (finding.fixed) return { ok: false, error: 'The date it was fixed is already on the record.' };
+          const fix = { at: Date.now(), by: session.employeeId, ...(note && clean(note) ? { note: clean(note) } : null) };
+          set({ exams: exams.map((x) => (x.id === examId ? withFix(x, findingKey, fix) : x)) });
+          return { ok: true };
+        },
+
+        addAreaSheet: (title, rowsText) => {
+          const { areaSheets } = get();
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
+          const sheet = makeSheet(title, rowsText, areaSheets.map((s) => s.id));
+          if (!sheet) return { ok: false, error: 'Give the sheet the name of its work area.' };
+          const same = areaSheets.find((s) => s.title.toLowerCase() === sheet.title.toLowerCase());
+          if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
+          set({ areaSheets: [...areaSheets, sheet] });
+          return { ok: true, sheet };
+        },
+
+        updateAreaSheet: (sheetId, title, rowsText) => {
+          const { areaSheets } = get();
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
+          const current = areaSheets.find((s) => s.id === sheetId);
+          if (!current) return { ok: false, error: 'That area sheet is no longer on the list.' };
+          const next = makeSheet(title, rowsText);
+          if (!next) return { ok: false, error: 'Give the sheet the name of its work area.' };
+          const same = areaSheets.find((s) => s.id !== sheetId && s.title.toLowerCase() === next.title.toLowerCase());
+          if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
+          // Exams already signed keep the lines they were made on.
+          set({ areaSheets: areaSheets.map((s) => (s.id === sheetId ? { ...s, title: next.title, rows: next.rows } : s)) });
+          return { ok: true };
+        },
+
+        setAreaSheetActive: (sheetId, active) => {
+          if (!isSupervisor()) return;
+          set({ areaSheets: get().areaSheets.map((s) => (s.id === sheetId ? { ...s, active } : s)) });
         },
 
         // ---- Roster and fleet ------------------------------------------------------------
@@ -698,8 +865,8 @@ export const useStore = create<Store>()(
       version: STATE_VERSION,
       migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, DEMO_MODE) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
-      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, mrfs, mrfSeq, payRates, settings, seededAt }) => ({
-        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, mrfs, mrfSeq, payRates, settings, seededAt,
+      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt }) => ({
+        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();
@@ -719,18 +886,18 @@ export function employeeName(employees: Employee[], id: string | undefined): str
   return e ? `${e.firstName} ${e.lastName}` : 'Unknown';
 }
 
-/** Defect lines for an MRF, taken from the Bad Order answers on an inspection. */
+/** Lines for a maintenance request, taken from the Bad Orders on an equipment checklist. */
 export function mrfItemsFromInspection(inspection: Inspection, equipment: Equipment): MrfItem[] {
-  const template = templateFor(equipment.category);
+  const checklist = checklistFor(equipment.category);
   return inspection.answers
     .filter((a) => a.answer === 'bo')
     .map((a) => {
-      const item = findItem(template, a.itemId);
+      const item = findItem(checklist, a.itemId);
       return { label: item?.label ?? a.itemId, note: a.note, cfr: item?.cfr };
     });
 }
 
 export function inspectionHasHazard(inspection: Inspection, equipment: Equipment): boolean {
-  const template = templateFor(equipment.category);
-  return inspection.answers.some((a) => isHazard(template, a));
+  const checklist = checklistFor(equipment.category);
+  return inspection.answers.some((a) => isHazard(checklist, a));
 }

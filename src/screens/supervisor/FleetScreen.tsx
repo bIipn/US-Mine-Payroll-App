@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { View } from 'react-native';
 
 import { Button, Chips, Divider, EmptyState, Field, Page, Panel, Row, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
-import { CATEGORY_LABEL, CATEGORY_ORDER, templateFor, templateItems } from '../../domain/templates';
+import { CATEGORY_LABEL, CATEGORY_ORDER } from '../../domain/templates';
 import type { EquipmentCategory, EquipmentStatus } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -17,7 +17,7 @@ const STATUS: Record<EquipmentStatus, { label: string; tone: Tone; solid?: boole
   out_of_service: { label: 'Out of service', tone: 'bo', solid: true },
 };
 
-/** The units people can pre-op and check out. Each type gets its own checklist. */
+/** The units people can check and take out. Every one gets the same equipment checklist. */
 export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
   const equipment = useStore((s) => s.equipment);
   const { addEquipment, removeEquipment, showToast } = useStore.getState();
@@ -58,7 +58,7 @@ export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
       footer={<Button testID="fleet-add" label="Add a unit" icon={Plus} kind="yellow" onPress={() => { setError(null); setAdding(true); }} />}
     >
       {sorted.length === 0 ? (
-        <EmptyState icon={Truck} title="No units yet" body="Add the equipment the crew runs so they can pre-op it." />
+        <EmptyState icon={Truck} title="No units yet" body="Add the equipment the crew runs so they can fill in its checklist." />
       ) : (
         <Panel flush>
           {sorted.map((e, i) => {
@@ -86,13 +86,13 @@ export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
         <View style={{ gap: 6 }}>
           <Txt v="smallStrong">Type of equipment</Txt>
           <Chips<EquipmentCategory> value={category} onChange={setCategory} options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))} />
-          <Txt v="small" c={color.silica}>Gets the {CATEGORY_LABEL[category].toLowerCase()} pre-op: {templateItems(templateFor(category)).length} checks.</Txt>
+          <Txt v="small" c={color.silica}>The type picks the standards shown beside each line. The checklist is the same 21 lines for every unit.</Txt>
         </View>
         <View style={{ flexDirection: 'row', gap: space.md }}>
           <View style={{ flex: 1 }}><Field testID="fleet-make" label="Make" value={make} onChangeText={setMake} autoCapitalize="words" placeholder="CAT" /></View>
           <View style={{ flex: 1 }}><Field testID="fleet-model" label="Model" value={model} onChangeText={setModel} autoCapitalize="characters" placeholder="980M" /></View>
         </View>
-        <Field testID="fleet-meter" label={category === 'light_vehicle' ? 'Odometer now (miles)' : 'Hour meter now'} value={meter} onChangeText={setMeter} keyboardType="decimal-pad" placeholder="0" />
+        <Field testID="fleet-meter" label={category === 'light_vehicle' ? 'Odometer now (miles)' : 'Equipment hours now'} value={meter} onChangeText={setMeter} keyboardType="decimal-pad" placeholder="0" />
         <Button testID="fleet-save" label="Add to fleet" kind="ink" onPress={save} />
       </Sheet>
 
@@ -100,9 +100,9 @@ export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
         {open ? (
           <>
             <Txt v="body" c={color.inkSoft}>
-              {CATEGORY_LABEL[open.category]}, meter {fmtMeter(open.meter)} {open.meterUnit}. Uses the {CATEGORY_LABEL[open.category].toLowerCase()} pre-op with {templateItems(templateFor(open.category)).length} checks.
+              {CATEGORY_LABEL[open.category]}, {open.meterUnit === 'mi' ? 'odometer' : 'equipment hours'} {fmtMeter(open.meter)}.
             </Txt>
-            <Txt v="small" c={color.silica}>Removing a unit takes it off the list people pick from. Its past pre-ops and requests stay on record.</Txt>
+            <Txt v="small" c={color.silica}>Removing a unit takes it off the list people pick from. Its past checklists and requests stay on record.</Txt>
             <Button
               testID="fleet-remove"
               label="Remove from fleet"

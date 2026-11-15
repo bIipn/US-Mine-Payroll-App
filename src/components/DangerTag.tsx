@@ -5,7 +5,8 @@ import { color, font, space } from '../theme/theme';
 
 /**
  * The red DO NOT OPERATE tag that goes on a bad-ordered machine, filled in
- * from the pre-op. It is the screen version of the paper tag on the controls.
+ * from the equipment checklist. It is the screen version of the red tag on
+ * the controls.
  */
 export function DangerTag({ unit, reason, by, when, bg }: {
   unit: string; reason: string; by: string; when: string;

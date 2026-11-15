@@ -1,7 +1,6 @@
 import type {
   Answer,
   ChecklistItem,
-  ChecklistSection,
   ChecklistTemplate,
   EquipmentCategory,
   InspectionAnswer,
@@ -9,208 +8,124 @@ import type {
 } from './types';
 
 /**
- * Pre-operational inspection checklists.
+ * The Operator Equipment Checklist.
  *
- * These are the starting set, written from 30 CFR Part 56 and common practice
- * for surface mobile equipment. They are plain data: to switch to US Mine's own
- * pre-op sheets, replace the sections below (or load them from the backend) —
- * no screen code changes.
+ * This is the mine's own card, and it is the same for every piece of
+ * equipment: the 21 lines below are in the order they are printed, in the
+ * card's wording. A line that does not apply to a machine is marked N/A.
+ *
+ * The one thing that depends on the type of machine is which standard sits
+ * behind a line. `checklistFor` fills that in.
  */
 
-const TEMPLATE_VERSION = 1;
+const CHECKLIST_VERSION = 1;
 
-const item = (
-  id: string,
-  label: string,
-  hint?: string,
-  extra?: { cfr?: string; osha?: string; critical?: boolean },
-): ChecklistItem => ({ id, label, hint, ...extra });
+/** The line that also takes the gallons of fuel added. */
+export const FUEL_LINE = 'fuel';
 
-const TRACKED: EquipmentCategory[] = ['excavator', 'dozer'];
+type Line = Omit<ChecklistItem, 'cfr' | 'osha'>;
+
+const LINES: Line[] = [
+  { id: 'fire_extinguisher', label: 'Fire extinguisher', hint: 'On board, gauge in the green, pin and seal in place, tag current.', critical: true },
+  { id: 'steering', label: 'Steering', hint: 'Responds right away, with no excess play.', critical: true },
+  { id: 'brakes', label: 'Brake test & function', hint: 'Service brakes stop and hold the machine. Parking brake holds on a grade.', critical: true },
+  { id: 'tires', label: 'Tires/nuts / pressure', hint: 'Cuts, bulges or low pressure. Loose or missing lug nuts.' },
+  { id: 'lights', label: 'Lights', hint: 'Head, tail, brake and work lights.' },
+  { id: 'backup_alarm_horn', label: 'Backup alarm / horn', hint: 'Horn can be heard over the plant. Alarm sounds as soon as reverse is selected.', critical: true },
+  { id: 'warning_lights', label: 'Warning lights', hint: 'Beacon or strobe, and the warning lights on the dash.' },
+  { id: 'gauges', label: 'Gauges', hint: 'Normal readings at start-up.' },
+  { id: 'windows_mirrors', label: 'Windows/mirrors (damage)', hint: 'Clean and in place. No cracks or damage that block your view.' },
+  {
+    id: 'seatbelts',
+    label: 'Seatbelts/DROPS/FOPS',
+    hint: 'Belt latches and retracts, webbing not cut or frayed. Roll-over and falling-object structure not cracked, bent or altered.',
+    critical: true,
+  },
+  { id: 'controls', label: 'Controls', hint: 'Levers, pedals and joysticks work smoothly. Lockout and neutral-start work.', critical: true },
+  { id: 'hyd_cyl_hoses', label: 'Hyd. cyl/hoses', hint: 'No leaks. Hoses not chafed, cracked or bulging.' },
+  { id: 'wheel_chocks', label: 'Wheel chocks (2 each)', hint: 'Two on board, for any time you park on a grade.' },
+  { id: 'appearance_damage', label: 'Appearance/damage', hint: 'New dents, cracks, broken welds or loose parts.' },
+  { id: 'house_keeping', label: 'House keeping', hint: 'Cab floor and controls clear of loose items, mud and trash.' },
+  { id: 'batteries', label: 'Batteries/secure/corrosion', hint: 'Held down, terminals tight and clean, cover on.' },
+  { id: 'engine_oil', label: 'Engine oil', hint: 'Level on the dipstick. No leaks.' },
+  { id: 'transmission_oil', label: 'Transmission oil', hint: 'Level. No leaks.' },
+  { id: 'radiator_fluid', label: 'Radiator fluid', hint: 'Coolant level in the overflow tank. Never open a hot radiator cap.' },
+  { id: FUEL_LINE, label: 'Fuel', hint: 'Enough for the job. Enter the gallons you add.' },
+  { id: 'bed_condition', label: 'Bed condition', hint: 'Dump body or pickup bed, tailgate and pins. Nothing loose in it.' },
+];
+
+/** The MSHA standard behind a line, where it is the same for every machine. */
+const MSHA: Record<string, string> = {
+  fire_extinguisher: '56.4230',
+  brakes: '56.14101',
+  backup_alarm_horn: '56.14132',
+  windows_mirrors: '56.14103',
+  hyd_cyl_hoses: '56.4102',
+  wheel_chocks: '56.14207',
+  house_keeping: '56.14103',
+};
+
 /** Road-type vehicles: OSHA's motor-vehicle rule (1926.601) is the match. */
 const VEHICLES: EquipmentCategory[] = ['water_truck', 'light_vehicle'];
+/** The machines 30 CFR 56.14130 names: they need a roll-over structure and seat belts. */
+const ROPS_MACHINES: EquipmentCategory[] = ['loader', 'dozer', 'grader', 'skid_steer'];
+/** The lines OSHA's start-of-shift vehicle check, 1926.601(b)(14), lists by name. */
+const VEHICLE_CHECK = ['steering', 'brakes', 'tires', 'lights', 'seatbelts', 'controls'];
+/** The lines of a forklift's daily examination, 1910.178(q)(7). */
+const FORKLIFT_CHECK = ['steering', 'brakes', 'tires', 'backup_alarm_horn', 'seatbelts', 'controls'];
 
-type OshaTopic = 'belt' | 'brakes' | 'horn' | 'backup' | 'glass' | 'general';
+function mshaFor(category: EquipmentCategory, id: string): string | undefined {
+  if (id !== 'seatbelts') return MSHA[id];
+  if (category === 'haul_truck') return '56.14131';
+  // A forklift's overhead guard is falling-object protection.
+  if (category === 'forklift') return '56.14106';
+  // No standard is cited for a machine that none of them names.
+  return ROPS_MACHINES.includes(category) ? '56.14130' : undefined;
+}
 
 /**
- * The OSHA rule that matches an MSHA check, by type of machine:
- * forklifts fall under the powered-industrial-truck standard, road vehicles
- * under the motor-vehicle standard, and the rest under earthmoving equipment.
+ * The OSHA rule that matches a line, by type of machine: forklifts fall under
+ * the powered-industrial-truck standard, road vehicles under the motor-vehicle
+ * standard, and the rest under earthmoving equipment.
  */
-function oshaFor(category: EquipmentCategory, topic: OshaTopic): string | undefined {
-  if (category === 'forklift') return topic === 'glass' ? undefined : '1910.178(q)(7)';
+function oshaFor(category: EquipmentCategory, id: string): string | undefined {
+  if (id === 'fire_extinguisher') return '1910.157(e)(2)';
+  if (category === 'forklift') return FORKLIFT_CHECK.includes(id) ? '1910.178(q)(7)' : undefined;
   if (VEHICLES.includes(category)) {
-    if (topic === 'backup') return '1926.601(b)(4)';
-    if (topic === 'glass') return '1926.601(b)(5)';
-    return '1926.601(b)(14)';
+    if (id === 'backup_alarm_horn') return '1926.601(b)(4)';
+    if (id === 'windows_mirrors') return '1926.601(b)(5)';
+    return VEHICLE_CHECK.includes(id) ? '1926.601(b)(14)' : undefined;
   }
-  if (topic === 'belt') return '1926.602(a)(2)';
-  if (topic === 'brakes') return '1926.602(a)(4)';
-  if (topic === 'horn' || topic === 'backup') return '1926.602(a)(9)';
+  if (id === 'seatbelts') return '1926.602(a)(2)';
+  if (id === 'brakes') return '1926.602(a)(4)';
+  if (id === 'backup_alarm_horn') return '1926.602(a)(9)';
   return undefined;
 }
 
-function walkAround(category: EquipmentCategory): ChecklistSection {
-  const tracked = TRACKED.includes(category);
-  const items: ChecklistItem[] = [
-    item('wa_area', 'Area around and under the machine is clear', 'People, tools, rocks, other equipment.'),
-    item('wa_leaks', 'No fluid leaks', 'Oil, fuel, coolant or hydraulic fluid on the machine or the ground.', { cfr: '56.4102' }),
-    tracked
-      ? item('wa_tracks', 'Tracks and undercarriage', 'Pads, rollers, idlers, sprockets and track tension.')
-      : item('wa_tires', 'Tires, wheels and lug nuts', 'Cuts, bulges, low pressure, loose or missing lugs.', { osha: oshaFor(category, 'general') }),
-    item('wa_access', 'Steps, ladders, handrails and grab irons', 'Secure, not bent, clear of mud and grease.', { cfr: '56.11001' }),
-    item('wa_guards', 'Guards, shields and covers in place', 'Fan, belt and driveline guards secure.', { cfr: '56.14107', osha: '1910.212' }),
-    item('wa_frame', 'Frame and body', 'No cracks, broken welds or loose parts.'),
-  ];
-  if (!tracked) {
-    items.push(item('wa_chocks', 'Wheel chocks on board', 'Needed any time you park on a grade.', { cfr: '56.14207' }));
-  }
-  return { id: 'walk', title: 'Walk-around', items };
-}
+const cache = new Map<EquipmentCategory, ChecklistTemplate>();
 
-function fluids(category: EquipmentCategory): ChecklistSection {
-  const items: ChecklistItem[] = [
-    item('fl_oil', 'Engine oil level'),
-    item('fl_coolant', 'Coolant level'),
-  ];
-  if (category !== 'light_vehicle') items.push(item('fl_hyd', 'Hydraulic oil level'));
-  items.push(
-    item('fl_fuel', 'Fuel and DEF level', 'Enough for the job.'),
-    item('en_belts', 'Belts and hoses', 'No cracks, fraying or rubbing.'),
-    item('en_battery', 'Battery', 'Secure, terminals tight, cover on.'),
-  );
-  return { id: 'fluids', title: 'Fluids and engine', items };
-}
-
-function cab(category: EquipmentCategory): ChecklistSection {
-  const beltCfr = category === 'haul_truck' ? '56.14131' : '56.14130';
-  const items: ChecklistItem[] = [
-    item('cab_belt', 'Seat belt', 'Latches and retracts; webbing not cut or frayed; mounts tight.', { cfr: beltCfr, osha: oshaFor(category, 'belt'), critical: true }),
-  ];
-  if (category !== 'light_vehicle') {
-    items.push(
-      item('cab_rops', 'ROPS / FOPS and cab structure', 'No cracks, dents, added holes or welds.', { cfr: '56.14130', critical: true }),
-    );
-  }
-  items.push(
-    item('cab_glass', 'Windows and windshield', 'Clean; no cracks that block your view.', { cfr: '56.14103', osha: oshaFor(category, 'glass') }),
-    item('cab_mirrors', 'Mirrors and cameras', 'In place, clean and adjusted.'),
-    item('cab_wipers', 'Wipers and washer'),
-    item('cab_clean', 'Cab floor and controls clear', 'No loose items, mud or trash around the pedals.', { cfr: '56.14103' }),
-    item('cab_gauges', 'Gauges and warning lights', 'Normal readings at start-up; no active alarms.'),
-    item('cab_ext', 'Fire extinguisher', 'On board, gauge in the green, pin and seal in place, tag current.', { cfr: '56.4230', osha: '1910.157(e)(2)', critical: true }),
-    item('cab_radio', 'Two-way radio', 'Transmits and receives.'),
-  );
-  return { id: 'cab', title: "Cab and operator's station", items };
-}
-
-function functionTests(category: EquipmentCategory): ChecklistSection {
-  const tracked = TRACKED.includes(category);
-  return {
-    id: 'function',
-    title: 'Start-up function tests',
-    items: [
-      item('fn_horn', 'Horn', 'Loud enough to be heard over the plant.', { cfr: '56.14132', osha: oshaFor(category, 'horn'), critical: true }),
-      item('fn_backup', tracked ? 'Travel / backup alarm' : 'Backup alarm', 'Sounds as soon as reverse is selected.', { cfr: '56.14132', osha: oshaFor(category, 'backup'), critical: true }),
-      item('fn_lights', 'Lights and beacon', 'Head, tail, brake, signal and work lights; strobe.', { osha: VEHICLES.includes(category) ? '1926.601(b)(14)' : undefined }),
-      item('fn_brakes', tracked ? 'Brakes' : 'Service brakes', 'Stop and hold the machine.', { cfr: '56.14101', osha: oshaFor(category, 'brakes'), critical: true }),
-      item('fn_park', tracked ? 'Parking / swing brake' : 'Parking brake', 'Holds on a grade.', { cfr: '56.14101', osha: oshaFor(category, 'brakes'), critical: true }),
-      item('fn_steer', 'Steering', 'Responds right away; no excess play.', { osha: oshaFor(category, 'general'), critical: true }),
-      item('fn_controls', 'Controls and safety lockout', 'Levers and joysticks work smoothly; lockout and neutral-start work.', { osha: oshaFor(category, 'general'), critical: true }),
-    ],
+/** The checklist for a machine: the same 21 lines, with the standards that cover its type. */
+export function checklistFor(category: EquipmentCategory): ChecklistTemplate {
+  const cached = cache.get(category);
+  if (cached) return cached;
+  const checklist: ChecklistTemplate = {
+    id: 'operator_equipment_checklist',
+    title: 'Operator equipment checklist',
+    version: CHECKLIST_VERSION,
+    items: LINES.map((line) => ({ ...line, cfr: mshaFor(category, line.id), osha: oshaFor(category, line.id) })),
   };
+  cache.set(category, checklist);
+  return checklist;
 }
 
-const SPECIFIC: Record<EquipmentCategory, ChecklistSection> = {
-  loader: {
-    id: 'specific',
-    title: 'Loader',
-    items: [
-      item('ld_bucket', 'Bucket, cutting edge and teeth', 'No cracks, missing teeth or loose bolts.'),
-      item('ld_arms', 'Lift arms, pins and bushings'),
-      item('ld_cyl', 'Hydraulic cylinders and hoses', 'No leaks or chafing.'),
-      item('ld_artic', 'Articulation joint', 'Clear of debris; steering frame lock stowed.'),
-    ],
-  },
-  haul_truck: {
-    id: 'specific',
-    title: 'Haul truck',
-    items: [
-      item('ht_bed', 'Dump body, tailgate and hinge pins'),
-      item('ht_hoist', 'Hoist cylinders and hoses', 'No leaks; body lowers fully.'),
-      item('ht_bodyup', 'Body-up alarm and body prop', 'Indicator works; prop or safety pin on board.'),
-      item('ht_susp', 'Suspension and hitch', 'Struts, articulation hitch and pins.'),
-      item('ht_retarder', 'Retarder / engine brake'),
-      item('ht_flaps', 'Mud flaps and rock ejectors'),
-    ],
-  },
-  excavator: {
-    id: 'specific',
-    title: 'Excavator',
-    items: [
-      item('ex_boom', 'Boom, stick and bucket', 'Pins, teeth, cracks.'),
-      item('ex_hyd', 'Cylinders, lines and quick coupler', 'No leaks; coupler locked.'),
-      item('ex_swing', 'Swing area clear', 'Counterweight swing radius free of people and obstructions.'),
-    ],
-  },
-  dozer: {
-    id: 'specific',
-    title: 'Dozer',
-    items: [
-      item('dz_blade', 'Blade, cutting edge and push arms'),
-      item('dz_ripper', 'Ripper shank and tip'),
-      item('dz_cyl', 'Lift and tilt cylinders and hoses', 'No leaks or chafing.'),
-    ],
-  },
-  grader: {
-    id: 'specific',
-    title: 'Grader',
-    items: [
-      item('gr_mold', 'Moldboard, cutting edges and end bits'),
-      item('gr_circle', 'Circle, drawbar and side-shift'),
-      item('gr_scar', 'Scarifier / ripper'),
-      item('gr_artic', 'Articulation and wheel lean'),
-    ],
-  },
-  water_truck: {
-    id: 'specific',
-    title: 'Water truck',
-    items: [
-      item('wt_tank', 'Tank, mounts and fill lid', 'No leaks; lid secured.'),
-      item('wt_spray', 'Spray heads, valves and cannon'),
-      item('wt_pump', 'Pump, PTO and hoses'),
-    ],
-  },
-  skid_steer: {
-    id: 'specific',
-    title: 'Skid steer',
-    items: [
-      item('ss_restraint', 'Seat bar and interlocks', 'Controls lock out with the bar raised.', { critical: true }),
-      item('ss_coupler', 'Attachment coupler', 'Locked, pins fully engaged.'),
-      item('ss_arms', 'Lift arms and lift-arm support'),
-      item('ss_bucket', 'Bucket or attachment condition'),
-    ],
-  },
-  forklift: {
-    id: 'specific',
-    title: 'Forklift / telehandler',
-    items: [
-      item('fk_forks', 'Forks', 'No cracks or bends; locking pins in.', { osha: '1910.178(q)(7)' }),
-      item('fk_mast', 'Mast or boom, chains and carriage', undefined, { osha: '1910.178(q)(7)' }),
-      item('fk_guard', 'Overhead guard and load backrest', 'In place, not damaged.', { cfr: '56.14106', osha: '1910.178(q)(7)', critical: true }),
-      item('fk_hyd', 'Lift and tilt cylinders', 'No leaks; load does not drift down.', { osha: '1910.178(q)(7)' }),
-      item('fk_plate', 'Capacity plate and load chart', 'Legible and in the cab.', { osha: '1910.178(q)(7)' }),
-    ],
-  },
-  light_vehicle: {
-    id: 'specific',
-    title: 'Light vehicle',
-    items: [
-      item('lv_flag', 'Buggy whip, flag and beacon', 'Required in the pit and on haul roads.'),
-      item('lv_firstaid', 'First-aid kit on board'),
-      item('lv_cargo', 'Cargo and tools secured'),
-    ],
-  },
+/** The marks, the way they are written in a box on the card. */
+export const ANSWER_MARK: Record<Answer, string> = { ok: 'OK', bo: 'BO', na: 'N/A' };
+
+/** The legend printed at the foot of the card. */
+export const ANSWER_LEGEND: Record<Answer, string> = {
+  ok: 'Inspection free of defects or concerns',
+  bo: 'Bad Order, needs repair. Safety items: red tag and report immediately',
+  na: 'Not applicable to this equipment',
 };
 
 export const CATEGORY_LABEL: Record<EquipmentCategory, string> = {
@@ -230,46 +145,24 @@ export const CATEGORY_ORDER: EquipmentCategory[] = [
   'water_truck', 'skid_steer', 'forklift', 'light_vehicle',
 ];
 
-const cache = new Map<EquipmentCategory, ChecklistTemplate>();
-
-export function templateFor(category: EquipmentCategory): ChecklistTemplate {
-  const cached = cache.get(category);
-  if (cached) return cached;
-  const template: ChecklistTemplate = {
-    id: `preop_${category}`,
-    title: `${CATEGORY_LABEL[category]} pre-operational inspection`,
-    version: TEMPLATE_VERSION,
-    sections: [walkAround(category), fluids(category), cab(category), functionTests(category), SPECIFIC[category]],
-  };
-  cache.set(category, template);
-  return template;
+export function findItem(checklist: ChecklistTemplate, itemId: string): ChecklistItem | undefined {
+  return checklist.items.find((i) => i.id === itemId);
 }
 
-export function templateItems(template: ChecklistTemplate): ChecklistItem[] {
-  return template.sections.flatMap((section) => section.items);
-}
-
-export function findItem(template: ChecklistTemplate, itemId: string): ChecklistItem | undefined {
-  return templateItems(template).find((i) => i.id === itemId);
-}
-
-/** A Bad Order on a critical item, or one the operator marked unsafe, takes the unit out of service. */
-export function isHazard(template: ChecklistTemplate, answer: InspectionAnswer): boolean {
+/** A Bad Order on a safety item, or one the operator marked unsafe, takes the unit out of service. */
+export function isHazard(checklist: ChecklistTemplate, answer: InspectionAnswer): boolean {
   if (answer.answer !== 'bo') return false;
-  return !!answer.hazard || !!findItem(template, answer.itemId)?.critical;
+  return !!answer.hazard || !!findItem(checklist, answer.itemId)?.critical;
 }
 
-export function inspectionResult(template: ChecklistTemplate, answers: InspectionAnswer[]): InspectionResult {
+export function inspectionResult(checklist: ChecklistTemplate, answers: InspectionAnswer[]): InspectionResult {
   const defects = answers.filter((a) => a.answer === 'bo');
   if (defects.length === 0) return 'pass';
-  return defects.some((a) => isHazard(template, a)) ? 'bad_order' : 'defect';
+  return defects.some((a) => isHazard(checklist, a)) ? 'bad_order' : 'defect';
 }
 
-export function countAnswers(answers: InspectionAnswer[]): Record<Answer, number> {
+export function countAnswers(answers: { answer: Answer }[]): Record<Answer, number> {
   const counts: Record<Answer, number> = { ok: 0, bo: 0, na: 0 };
   for (const a of answers) counts[a.answer] += 1;
   return counts;
 }
-
-/** Work areas offered on the operating sheet. */
-export const WORK_AREAS = ['Pit', 'Plant', 'Stockpiles', 'Haul road', 'Ponds', 'Shop / yard'];

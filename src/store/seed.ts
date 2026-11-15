@@ -1,9 +1,12 @@
+import { AREA_CONDITIONS, buildExam, SAMPLE_AREA_SHEETS, shiftAt, withFix, withMrf, type ExamDraft } from '../domain/areaExam';
 import { destination, toGeoStamp } from '../domain/geofence';
 import { DEFAULT_SITE } from '../domain/site';
-import { inspectionResult, templateFor, templateItems } from '../domain/templates';
+import { checklistFor, inspectionResult } from '../domain/templates';
 import { CA_RULES, startedLunch } from '../domain/time';
 import type {
   Account,
+  AreaExam,
+  AreaSheet,
   Employee,
   Equipment,
   EquipmentCategory,
@@ -24,7 +27,8 @@ import { seededRandom } from '../util/hash';
 /**
  * Sample crew, fleet and history so every screen has something to show: about
  * five weeks of time punches (enough to look back over a whole pay period) and
- * two weeks of pre-ops. All names, unit numbers and pay figures are made up.
+ * two weeks of equipment checklists and pre shift exams. All names, unit
+ * numbers and pay figures are made up.
  * "Today" is generated relative to the moment the demo starts, so there is
  * always a crew on the clock.
  */
@@ -34,7 +38,7 @@ export const DEMO_SUPERVISOR_ID = 'sup_demo';
 
 /** Days of time punches to generate. The start of the last full pay period is at most 30 days back. */
 const HISTORY_DAYS = 36;
-/** Workdays of pre-ops and operating sheets to generate. */
+/** Workdays of equipment checklists and pre shift exams to generate. */
 const PREOP_WORKDAYS = 12;
 
 export interface SeedData {
@@ -45,6 +49,9 @@ export interface SeedData {
   equipment: Equipment[];
   inspections: Inspection[];
   opLogs: OperatingLog[];
+  /** The work-area sheets people can make a pre shift exam on. */
+  areaSheets: AreaSheet[];
+  exams: AreaExam[];
   mrfs: Mrf[];
   mrfSeq: number;
   /** Hourly rate each person entered for their own pay estimate, in cents. */
@@ -89,17 +96,19 @@ const FLEET: FleetRow[] = [
   ['PU-34', 'light_vehicle', 'Chevrolet', 'Silverado 2500', 61877],
 ];
 
-const AREAS: Partial<Record<EquipmentCategory, string>> = {
-  loader: 'Stockpiles',
-  haul_truck: 'Haul road',
-  excavator: 'Pit',
-  dozer: 'Pit',
-  grader: 'Haul road',
-  water_truck: 'Haul road',
-  skid_steer: 'Plant',
-  forklift: 'Plant',
-  light_vehicle: 'Shop / yard',
-};
+/** Lines of the card that do not apply to a type of machine, so the sample cards mark them N/A. */
+const ON_TRACKS: EquipmentCategory[] = ['excavator', 'dozer'];
+const HAS_BED: EquipmentCategory[] = ['haul_truck', 'light_vehicle'];
+const notOn = (category: EquipmentCategory, line: string) =>
+  (ON_TRACKS.includes(category) && (line === 'tires' || line === 'wheel_chocks')) ||
+  (line === 'bed_condition' && !HAS_BED.includes(category));
+
+const CARD_COMMENTS = ['Greased the pins', 'Washed the windshield', 'Topped off the coolant', 'Blew out the air filter'];
+
+/** Who examines which work area: the first sheet, the second, the third, and round again. */
+const EXAMINERS = ['e10', 'e04', 'e09'];
+/** Conditions a lab does not have, so the sample exams on the third sheet mark them N/A. */
+const INDOORS_NA = ['berms', 'pulleys', 'belt_components', 'estops', 'mobile_equipment', 'haul_roads'];
 
 export function defaultSettings(demo: boolean): Settings {
   return {
@@ -115,13 +124,20 @@ export function defaultSettings(demo: boolean): Settings {
 export function emptyData(): SeedData {
   return {
     employees: [], accounts: [], shifts: [], leave: [], equipment: [],
-    inspections: [], opLogs: [], mrfs: [], mrfSeq: 1001, payRates: {},
+    inspections: [], opLogs: [], areaSheets: [], exams: [], mrfs: [], mrfSeq: 1001, payRates: {},
   };
 }
 
-export function buildDemoData(now: number): SeedData {
+/**
+ * `sheets` are the work-area sheets the sample exams are made on: the build's
+ * own when it names some, otherwise the made-up samples.
+ */
+export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHEETS): SeedData {
   const rand = seededRandom(5626);
   const between = (min: number, max: number) => min + Math.floor(rand() * (max - min + 1));
+  // A second stream for the details on the cards and exams, so they never shift the punches.
+  const extra = seededRandom(1848);
+  const pick = (min: number, max: number) => min + Math.floor(extra() * (max - min + 1));
   const site = DEFAULT_SITE;
 
   const onSite = (): GeoStamp =>
@@ -167,13 +183,13 @@ export function buildDemoData(now: number): SeedData {
   const nextId = (p: string) => `${p}_${(seq++).toString(36)}`;
 
   const allOk = (category: EquipmentCategory, overrides: Record<string, Partial<InspectionAnswer>> = {}) =>
-    templateItems(templateFor(category)).map((i): InspectionAnswer => ({
+    checklistFor(category).items.map((i): InspectionAnswer => ({
       itemId: i.id,
-      answer: i.id === 'cab_radio' && category === 'forklift' ? 'na' : 'ok',
+      answer: notOn(category, i.id) ? 'na' : 'ok',
       ...overrides[i.id],
     }));
 
-  /** Record a pre-op and, unless the unit was parked, the operating sheet that follows it. */
+  /** Record a unit on someone's checklist card and, unless it was parked, the hours they ran it. */
   function runUnit(opts: {
     employeeId: string;
     unit: string;
@@ -184,9 +200,11 @@ export function buildDemoData(now: number): SeedData {
     operate?: boolean;
   }): Inspection {
     const eq = byUnit.get(opts.unit)!;
-    const template = templateFor(eq.category);
+    const template = checklistFor(eq.category);
     const answers = allOk(eq.category, opts.overrides);
     const result = inspectionResult(template, answers);
+    const fueled = eq.meterUnit === 'hrs' && extra() < 0.12;
+    const wrote = extra() < 0.07;
     const inspection: Inspection = {
       id: nextId('insp'),
       equipmentId: eq.id,
@@ -196,9 +214,10 @@ export function buildDemoData(now: number): SeedData {
       startedAt: opts.inspectAt - between(4, 7) * MIN,
       submittedAt: opts.inspectAt,
       meter: eq.meter,
-      area: AREAS[eq.category],
       answers,
       result,
+      fuelGal: fueled ? pick(10, 45) : undefined,
+      comments: wrote ? CARD_COMMENTS[pick(0, CARD_COMMENTS.length - 1)] : undefined,
       decision: opts.decision,
     };
     inspections.push(inspection);
@@ -211,7 +230,6 @@ export function buildDemoData(now: number): SeedData {
         inspectionId: inspection.id,
         startAt: opts.inspectAt + MIN,
         startMeter: eq.meter,
-        area: AREAS[eq.category],
       };
       if (opts.endAt) {
         const hours = (opts.endAt - log.startAt) / HOUR;
@@ -311,7 +329,7 @@ export function buildDemoData(now: number): SeedData {
       }
       shifts.push(shift);
 
-      // Pre-op and operating sheet for people who run a unit, for the recent workdays.
+      // The equipment card of people who run a unit, for the recent workdays.
       const unit = unitOf.get(id);
       if (!unit || back > PREOP_WORKDAYS) continue;
       const inspectAt = start + between(6, 14) * MIN;
@@ -320,19 +338,22 @@ export function buildDemoData(now: number): SeedData {
       if (id === 'e03' && back === 6) {
         const bad = runUnit({
           employeeId: id, unit: 'HT-21', inspectAt,
-          overrides: { fn_backup: { answer: 'bo', note: 'Backup alarm silent in reverse' } },
+          overrides: { backup_alarm_horn: { answer: 'bo', note: 'Backup alarm silent in reverse' } },
         });
+        const remarks = 'Replaced backup alarm and tested in reverse. Returned to service.';
         const mrf: Mrf = {
           id: nextId('mrf'), number: 1041, equipmentId: bad.equipmentId, requestedBy: id,
           createdAt: inspectAt + 3 * MIN, priority: 'safety',
           description: 'Backup alarm does not sound when reverse is selected.',
-          items: [{ label: 'Backup alarm', note: 'Backup alarm silent in reverse', cfr: '56.14132' }],
+          items: [{ label: 'Backup alarm / horn', note: 'Backup alarm silent in reverse', cfr: '56.14132' }],
           meter: bad.meter, location: 'Bad-order row, north of shop', taggedOut: true,
           inspectionId: bad.id, status: 'completed',
+          assignedTo: 'e06', completedAt: inspectAt + 3 * HOUR, completedBy: 'e06', timeSpent: 225, remarks,
           history: [
             { at: inspectAt + 3 * MIN, by: id, status: 'open' },
+            { at: inspectAt + 20 * MIN, by: 'e14', status: 'open', assignedTo: 'e06' },
             { at: inspectAt + 55 * MIN, by: 'e06', status: 'in_progress', note: 'Alarm unit failed. Pulling a replacement from stock.' },
-            { at: inspectAt + 3 * HOUR, by: 'e06', status: 'completed', note: 'Replaced backup alarm and tested in reverse. Returned to service.' },
+            { at: inspectAt + 3 * HOUR, by: 'e06', status: 'completed', note: remarks },
           ],
         };
         bad.mrfId = mrf.id;
@@ -344,18 +365,19 @@ export function buildDemoData(now: number): SeedData {
       if (id === 'e13' && back === 1) {
         const defect = runUnit({
           employeeId: id, unit, inspectAt, endAt: parkAt, decision: 'operate',
-          overrides: { ld_cyl: { answer: 'bo', note: 'Oil seep at left lift cylinder rod seal' } },
+          overrides: { hyd_cyl_hoses: { answer: 'bo', note: 'Oil seep at left lift cylinder rod seal' } },
         });
         const mrf: Mrf = {
           id: nextId('mrf'), number: 1042, equipmentId: defect.equipmentId, requestedBy: id,
           createdAt: inspectAt + 4 * MIN, priority: 'high',
           description: 'Hydraulic oil seeping at the left lift cylinder rod seal. Level is holding.',
-          items: [{ label: 'Hydraulic cylinders and hoses', note: 'Oil seep at left lift cylinder rod seal' }],
-          meter: defect.meter, location: 'Working — stockpiles', taggedOut: false,
-          inspectionId: defect.id, status: 'in_progress',
+          items: [{ label: 'Hyd. cyl/hoses', note: 'Oil seep at left lift cylinder rod seal', cfr: '56.4102' }],
+          meter: defect.meter, location: 'Working at the stockpiles', taggedOut: false,
+          inspectionId: defect.id, status: 'in_progress', assignedTo: 'e06',
           history: [
             { at: inspectAt + 4 * MIN, by: id, status: 'open' },
-            { at: inspectAt + 2 * HOUR, by: 'e14', status: 'in_progress', note: 'Seal kit ordered. OK to run; check hydraulic level each pre-op.' },
+            { at: inspectAt + 70 * MIN, by: 'e14', status: 'open', assignedTo: 'e06' },
+            { at: inspectAt + 2 * HOUR, by: 'e14', status: 'in_progress', note: 'Seal kit ordered. OK to run; check the hydraulic level every morning.' },
           ],
         };
         defect.mrfId = mrf.id;
@@ -398,13 +420,13 @@ export function buildDemoData(now: number): SeedData {
     if (id === 'e05') {
       const bad = runUnit({
         employeeId: id, unit: 'EX-09', inspectAt,
-        overrides: { cab_belt: { answer: 'bo', note: 'Webbing frayed at the latch plate' } },
+        overrides: { seatbelts: { answer: 'bo', note: 'Seat belt webbing frayed at the latch plate' } },
       });
       const mrf: Mrf = {
         id: nextId('mrf'), number: 1043, equipmentId: bad.equipmentId, requestedBy: id,
         createdAt: inspectAt + 2 * MIN, priority: 'safety',
         description: 'Seat belt webbing is frayed at the latch plate. Belt needs to be replaced.',
-        items: [{ label: 'Seat belt', note: 'Webbing frayed at the latch plate', cfr: '56.14130' }],
+        items: [{ label: 'Seatbelts/DROPS/FOPS', note: 'Seat belt webbing frayed at the latch plate' }],
         meter: bad.meter, location: 'Parked at pit entrance, tagged', taggedOut: true,
         inspectionId: bad.id, status: 'open',
         history: [{ at: inspectAt + 2 * MIN, by: id, status: 'open' }],
@@ -418,8 +440,81 @@ export function buildDemoData(now: number): SeedData {
     runUnit({ employeeId: id, unit, inspectAt });
   }
 
+  // ---- Pre shift exams ------------------------------------------------------------------------
+  // Each sheet has its examiner, who goes round the area a few minutes after clocking in.
+  // The first sheet is left unexamined today, so whoever opens the preview has one to do.
+  const today0 = startOfDay(now);
+  const clear = (sheet: AreaSheet, index: number, startedAt: number, signedAt: number): ExamDraft => ({
+    sheetId: sheet.id,
+    shift: shiftAt(signedAt),
+    startedAt,
+    rows: Object.fromEntries(sheet.rows.map((row) => [row.id, { answer: 'ok' as const }])),
+    others: [],
+    conditions: Object.fromEntries(
+      AREA_CONDITIONS.map((c) => [c.id, { answer: index % 3 === 2 && INDOORS_NA.includes(c.id) ? ('na' as const) : ('ok' as const) }]),
+    ),
+  });
+  const firstExamDay = workdays[Math.max(0, workdays.length - PREOP_WORKDAYS)] ?? today0;
+  let exams: AreaExam[] = [];
+  sheets.forEach((sheet, index) => {
+    const examiner = EXAMINERS[index % EXAMINERS.length];
+    const leftForToday = index === 0 && sheets.length > 1;
+    for (const shift of shifts) {
+      if (shift.employeeId !== examiner || shift.clockIn.at < firstExamDay) continue;
+      if (leftForToday && shift.clockIn.at >= today0) continue;
+      const submittedAt = shift.clockIn.at + pick(14, 26) * MIN;
+      const built = buildExam(sheet, clear(sheet, index, submittedAt - pick(6, 11) * MIN, submittedAt), {
+        id: nextId('exam'), employeeId: examiner, submittedAt,
+      });
+      if (built.ok) exams.push(built.exam);
+    }
+  });
+  exams.sort((a, b) => a.submittedAt - b.submittedAt);
+
+  /** Rewrite one exam so it found something: the line gets a Bad Order and what was wrong. */
+  const find = (exam: AreaExam, line: { row?: number; condition: string }, note: string): { exam: AreaExam; key: string } => {
+    const row = line.row != null && exam.rows.length ? exam.rows[Math.min(line.row, exam.rows.length - 1)] : undefined;
+    const found: AreaExam = row
+      ? { ...exam, rows: exam.rows.map((r) => (r === row ? { ...r, guarding: 'bo' as const, note } : r)) }
+      : { ...exam, conditions: exam.conditions.map((c) => (c.id === line.condition ? { ...c, answer: 'bo' as const, note } : c)) };
+    return { exam: found, key: row ? `row:${row.id}` : `cond:${line.condition}` };
+  };
+  const replace = (next: AreaExam) => {
+    exams = exams.map((exam) => (exam.id === next.id ? next : exam));
+  };
+  const examsOn = (index: number, when: 'before' | 'today') =>
+    exams.filter((exam) => exam.sheetId === sheets[Math.min(index, sheets.length - 1)]?.id && (when === 'today' ? exam.submittedAt >= today0 : exam.submittedAt < today0));
+
+  // Found and put right on the spot, a few days ago.
+  const earlier = examsOn(1, 'before');
+  const tidy = earlier[Math.max(0, earlier.length - 5)];
+  if (tidy) {
+    const hose = find(tidy, { condition: 'ground' }, 'Wash-down hose left across the walkway');
+    replace(withFix(hose.exam, hose.key, { at: tidy.submittedAt + 25 * MIN, by: tidy.employeeId, note: 'Rolled up the hose and hung it on the rack' }));
+  }
+  // Found on the last exam before today, and still open.
+  const lastBefore = examsOn(2, 'before').filter((exam) => exam.id !== tidy?.id).slice(-1)[0];
+  if (lastBefore) replace(find(lastBefore, { condition: 'fire_extinguishers' }, 'Monthly tag has not been punched this month').exam);
+  // Found this morning and sent to maintenance.
+  const thisMorning = examsOn(1, 'today').filter((exam) => exam.id !== lastBefore?.id)[0];
+  if (thisMorning) {
+    const guard = find(thisMorning, { row: 1, condition: 'pulleys' }, 'Guard is off the drive coupling');
+    const line = guard.exam.rows.find((r) => `row:${r.id}` === guard.key);
+    const mrf: Mrf = {
+      id: nextId('mrf'), number: 1044, requestedBy: thisMorning.employeeId,
+      createdAt: thisMorning.submittedAt + 4 * MIN, priority: 'high',
+      location: line ? `${thisMorning.area}: ${line.label}` : thisMorning.area,
+      description: 'Guard is off the drive coupling. The bolts are in the tray beside it.',
+      items: [], taggedOut: false, examId: thisMorning.id, findingKey: guard.key, status: 'open',
+      history: [{ at: thisMorning.submittedAt + 4 * MIN, by: thisMorning.employeeId, status: 'open' }],
+    };
+    mrfs.push(mrf);
+    replace(withMrf(guard.exam, guard.key, mrf.id));
+  }
+
   return {
-    employees, accounts, shifts, leave, equipment, inspections, opLogs, mrfs, mrfSeq: 1044,
+    employees, accounts, shifts, leave, equipment, inspections, opLogs, areaSheets: sheets, exams, mrfs,
+    mrfSeq: Math.max(1040, ...mrfs.map((m) => m.number)) + 1,
     // A made-up rate so the sample employee's pay estimate has something to show.
     payRates: { [DEMO_EMPLOYEE_ID]: 2800 },
   };

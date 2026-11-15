@@ -1,10 +1,10 @@
-import { Check, Minus, X } from '../../components/icons';
+import { Check, FileText, Minus, X } from '../../components/icons';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
-import { Button, Divider, Page, Panel, Tag, Txt, UnitPlate } from '../../components/ui';
-import { countAnswers, isHazard, templateFor } from '../../domain/templates';
+import { Button, Divider, Notice, Page, Panel, Tag, Txt, UnitPlate } from '../../components/ui';
+import { ANSWER_MARK, checklistFor, countAnswers, findItem, FUEL_LINE, isHazard } from '../../domain/templates';
 import type { InspectionResult } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { employeeName, useStore } from '../../store/useStore';
@@ -17,30 +17,36 @@ export const RESULT_TAG: Record<InspectionResult, { label: string; tone: Tone }>
   bad_order: { label: 'Bad order', tone: 'bo' },
 };
 
-/** A submitted pre-op, exactly as it was signed. */
+/** One unit on someone's equipment checklist, exactly as it was signed. */
 export function InspectionDetailScreen({ navigation, route }: ScreenProps<'InspectionDetail'>) {
   const inspection = useStore((s) => s.inspections.find((i) => i.id === route.params.inspectionId));
   const unit = useStore((s) => s.equipment.find((e) => e.id === inspection?.equipmentId));
+  const log = useStore((s) => s.opLogs.find((l) => l.inspectionId === route.params.inspectionId));
   const employees = useStore((s) => s.employees);
   const mrf = useStore((s) => s.mrfs.find((m) => m.id === inspection?.mrfId));
 
   if (!inspection) return null;
-  const template = unit ? templateFor(unit.category) : undefined;
-  const byItem = new Map(inspection.answers.map((a) => [a.itemId, a]));
+  // The lines read the same on every machine; the unit's type only picks the standards.
+  const checklist = checklistFor(unit?.category ?? 'loader');
+  // A record signed on an earlier checklist keeps the lines it was signed on.
+  const earlier = inspection.templateId !== checklist.id;
   const counts = countAnswers(inspection.answers);
   const tag = RESULT_TAG[inspection.result];
+  const reading = unit?.meterUnit === 'mi' ? 'Odometer' : 'Equipment hours';
+  const gallons = (inspection.fuelGal ?? 0) + (log?.fuelGal ?? 0);
 
   return (
-    <Page title="Pre-op record" sub={`${fmtDate(inspection.submittedAt)}, ${fmtTime(inspection.submittedAt)}`} onBack={navigation.goBack} testID="inspection-detail">
+    <Page title="Equipment checklist" sub={`${fmtDate(inspection.submittedAt)}, ${fmtTime(inspection.submittedAt)}`} onBack={navigation.goBack} testID="inspection-detail">
       <Panel>
         <View style={styles.head}>
           {unit ? <UnitPlate unit={unit.unit} size="lg" /> : null}
           <View style={{ flex: 1, gap: 2 }}>
             <Txt v="strong">{unit ? `${unit.make} ${unit.model}` : 'Unit removed from fleet'}</Txt>
-            <Txt v="small" c={color.silica}>Inspected by {employeeName(employees, inspection.employeeId)}</Txt>
+            <Txt v="small" c={color.silica}>Checked by {employeeName(employees, inspection.employeeId)}</Txt>
             <Txt v="small" c={color.silica}>
-              Meter {fmtMeter(inspection.meter)}{unit ? ` ${unit.meterUnit}` : ''}{inspection.area ? `, ${inspection.area.toLowerCase()}` : ''}
+              {reading} {fmtMeter(inspection.meter)} at the start{log?.endMeter != null ? `, ${fmtMeter(log.endMeter)} at the end` : ''}
             </Txt>
+            {gallons > 0 ? <Txt v="small" c={color.silica}>{gallons} gallons of fuel added</Txt> : null}
           </View>
         </View>
         <View style={styles.tags}>
@@ -56,36 +62,55 @@ export function InspectionDetailScreen({ navigation, route }: ScreenProps<'Inspe
         ) : null}
       </Panel>
 
-      {mrf ? (
-        <Button label={`See MRF #${mrf.number}`} kind="outline" onPress={() => navigation.navigate('MrfDetail', { mrfId: mrf.id })} />
+      <View style={{ gap: space.sm }}>
+        <Button
+          testID="open-card"
+          label="See the whole card for the day"
+          icon={FileText}
+          kind="outline"
+          onPress={() => navigation.navigate('ChecklistCard', { employeeId: inspection.employeeId, day: inspection.submittedAt })}
+        />
+        {mrf ? (
+          <Button label={`See maintenance request #${mrf.number}`} kind="quiet" onPress={() => navigation.navigate('MrfDetail', { mrfId: mrf.id })} />
+        ) : null}
+      </View>
+
+      {earlier ? (
+        <Notice tone="info" title="Signed on an earlier checklist" body="This record keeps the lines it was signed on, so some are shown by their short names." />
       ) : null}
 
-      {template?.sections.map((section) => (
-        <Panel key={section.id} title={section.title} flush>
-          {section.items.map((item, i) => {
-            const answer = byItem.get(item.id);
-            const Icon = answer?.answer === 'ok' ? Check : answer?.answer === 'bo' ? X : Minus;
-            const tint = answer?.answer === 'ok' ? color.green : answer?.answer === 'bo' ? color.red : color.silica;
-            return (
-              <View key={item.id}>
-                {i > 0 ? <Divider inset={space.lg} /> : null}
-                <View style={styles.line}>
-                  <View style={[styles.mark, { borderColor: tint, backgroundColor: answer?.answer === 'bo' ? color.red : color.paper }]}>
-                    <Icon color={answer?.answer === 'bo' ? color.white : tint} size={18} strokeWidth={3} />
-                  </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Txt v="strong">{item.label}</Txt>
-                    {answer?.note ? <Txt v="body" c={color.red}>{answer.note}</Txt> : null}
-                    {answer && isHazard(template, answer) ? <Txt v="smallStrong" c={color.red}>Unsafe to run. Unit taken out of service.</Txt> : null}
-                    {answer?.answer === 'bo' ? <StandardRefs cfr={item.cfr} osha={item.osha} /> : null}
-                  </View>
-                  <Txt v="smallStrong" c={tint}>{answer?.answer === 'ok' ? 'OK' : answer?.answer === 'bo' ? 'BO' : 'N/A'}</Txt>
+      <Panel title="Check list items" flush>
+        {inspection.answers.map((answer, i) => {
+          const item = findItem(checklist, answer.itemId);
+          const Icon = answer.answer === 'ok' ? Check : answer.answer === 'bo' ? X : Minus;
+          const tint = answer.answer === 'ok' ? color.green : answer.answer === 'bo' ? color.red : color.silica;
+          return (
+            <View key={answer.itemId}>
+              {i > 0 ? <Divider inset={space.lg} /> : null}
+              <View style={styles.line}>
+                <View style={[styles.mark, { borderColor: tint, backgroundColor: answer.answer === 'bo' ? color.red : color.paper }]}>
+                  <Icon color={answer.answer === 'bo' ? color.white : tint} size={18} strokeWidth={3} />
                 </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Txt v="strong">{item?.label ?? answer.itemId}</Txt>
+                  {answer.itemId === FUEL_LINE && inspection.fuelGal ? <Txt v="small" c={color.silica}>{inspection.fuelGal} gallons added</Txt> : null}
+                  {answer.note ? <Txt v="body" c={color.red}>{answer.note}</Txt> : null}
+                  {isHazard(checklist, answer) ? <Txt v="smallStrong" c={color.red}>Unsafe to run. Unit taken out of service.</Txt> : null}
+                  {answer.answer === 'bo' ? <StandardRefs cfr={item?.cfr} osha={item?.osha} /> : null}
+                </View>
+                <Txt v="smallStrong" c={tint}>{ANSWER_MARK[answer.answer]}</Txt>
               </View>
-            );
-          })}
+            </View>
+          );
+        })}
+      </Panel>
+
+      {inspection.comments || log?.notes ? (
+        <Panel title="Comments">
+          {inspection.comments ? <Txt v="body">{inspection.comments}</Txt> : null}
+          {log?.notes ? <Txt v="body" c={color.inkSoft} style={inspection.comments ? { marginTop: space.sm } : undefined}>At the end of use: {log.notes}</Txt> : null}
         </Panel>
-      ))}
+      ) : null}
     </Page>
   );
 }
