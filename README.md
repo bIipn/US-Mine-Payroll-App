@@ -116,7 +116,7 @@ Every work area has its own sheet. The three in this repository are made-up samp
 - **For a build:** name them in `.env.local`. The name of an area, then each line of its sheet, with a blank line before the next area. `\n` ends a line:
 
 ```
-EXPO_PUBLIC_AREA_SHEETS="North plant\nFeed hopper\nBelt 4\nScreen deck\n\nLab\nScale\nDrying oven"
+EXPO_PUBLIC_AREA_SHEETS="North plant\nFeed bin\nConveyor 4\nJaw crusher\n\nCore shed\nCore saw\nCore racks"
 ```
 
 A signed exam keeps the lines it was made on, so changing a sheet later never changes a record.

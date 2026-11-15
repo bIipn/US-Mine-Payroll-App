@@ -2,9 +2,11 @@ import { startedLunch } from '../domain/time';
 import type { Lunch } from '../domain/types';
 
 /** Version of the saved app state. Raise it when the shape of the data changes. */
-export const STATE_VERSION = 4;
+export const STATE_VERSION = 5;
 
 type Saved = Record<string, unknown>;
+type SavedEvent = { at?: number; by?: string; status?: string; note?: string };
+type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; remarks?: string; history?: SavedEvent[] };
 
 /**
  * Bring app state saved by an older version up to date.
@@ -16,6 +18,10 @@ type Saved = Record<string, unknown>;
  * Version 4 built in the mine's paper forms: the one equipment checklist, the
  * pre shift exams and their area sheets, and the fields of the maintenance
  * request. A checklist signed on the earlier lines is kept as it was signed.
+ * Version 5 gives a request that was completed before the form had its own
+ * fields the date completed, completed by and remarks that are in its history,
+ * so it stops counting days open. It also reloads a preview's sample data,
+ * which moved to sample work areas that are not modelled on anyone's plant.
  *
  * A live build keeps every record. A preview build clears its "sample data
  * loaded" marker instead, so the sample crew is loaded again under the current
@@ -38,6 +44,14 @@ export function migratePersisted(saved: unknown, fromVersion: number, demo: bool
     state.exams = [];
     // The build's own area sheets are added at start-up.
     state.areaSheets = [];
+  }
+  if (fromVersion < 5 && Array.isArray(state.mrfs)) {
+    state.mrfs = state.mrfs.map((mrf: SavedMrf) => {
+      if (mrf?.status !== 'completed' || mrf.completedAt != null || !Array.isArray(mrf.history)) return mrf;
+      const done = [...mrf.history].reverse().find((entry) => entry?.status === 'completed');
+      if (done?.at == null) return mrf;
+      return { ...mrf, completedAt: done.at, completedBy: mrf.completedBy ?? done.by, remarks: mrf.remarks ?? done.note };
+    });
   }
   if (fromVersion < STATE_VERSION && demo && 'seededAt' in state) {
     state.seededAt = null;

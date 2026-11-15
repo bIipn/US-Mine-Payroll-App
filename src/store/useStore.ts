@@ -5,7 +5,7 @@ import { AREA_SHEETS, DEMO_MODE, ROSTER_OWNER } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { cleanText, parsePersonName, sameName, titleCase, withOwner, type PersonName } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
-import { checklistFor, findItem, inspectionResult, isHazard } from '../domain/templates';
+import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
 import { CA_RULES, lunchEndAt, startedLunch } from '../domain/time';
 import type {
   Account,
@@ -101,6 +101,12 @@ export interface CompleteMrfInput {
   remarks: string;
   /** Hundredths of an hour. */
   timeSpent?: number;
+  /**
+   * Who did the work: the name that goes on "Completed by". Left out, it is the
+   * person signed in. A supervisor closing a request out for the person it is
+   * assigned to can name that person instead; the history still shows who entered it.
+   */
+  completedBy?: string;
 }
 
 export interface EndUseInput {
@@ -502,17 +508,21 @@ export const useStore = create<Store>()(
           if (!session) return { ok: false, error: 'You are signed out.' };
           const unit = equipment.find((e) => e.id === draft.equipmentId);
           if (!unit) return { ok: false, error: 'That unit is no longer in the fleet list.' };
+          // A card is signed once. A second tap on the same card gets the checklist already on record.
+          const signed = inspections.find(
+            (i) => i.equipmentId === unit.id && i.employeeId === session.employeeId && i.startedAt === draft.startedAt,
+          );
+          if (signed) return { ok: true, inspection: signed };
           const template = checklistFor(unit.category);
           // Nothing is signed with a line of the card left blank, or a Bad Order that does not say what is wrong.
-          const marked = new Set(draft.answers.map((a) => a.itemId));
-          const blank = template.items.filter((i) => !marked.has(i.id)).length;
+          const { answers, blank } = signedAnswers(template, draft.answers);
           if (blank > 0) {
             return { ok: false, error: `Mark every line OK, BO or N/A. ${blank} ${blank === 1 ? 'is' : 'are'} still blank.` };
           }
-          if (draft.answers.some((a) => a.answer === 'bo' && !clean(a.note ?? ''))) {
+          if (answers.some((a) => a.answer === 'bo' && !a.note)) {
             return { ok: false, error: 'Say what is wrong on each Bad Order.' };
           }
-          const result = inspectionResult(template, draft.answers);
+          const result = inspectionResult(template, answers);
           const now = Date.now();
           const inspection: Inspection = {
             id: uid('insp_'),
@@ -523,7 +533,7 @@ export const useStore = create<Store>()(
             startedAt: draft.startedAt,
             submittedAt: now,
             meter: draft.meter,
-            answers: draft.answers,
+            answers,
             result,
             fuelGal: draft.fuelGal != null && draft.fuelGal > 0 ? draft.fuelGal : undefined,
             comments: draft.comments && clean(draft.comments) ? clean(draft.comments) : undefined,
@@ -590,6 +600,41 @@ export const useStore = create<Store>()(
           if (!clean(input.description)) return { ok: false, error: 'Describe the problem so maintenance knows what to look for.' };
           const location = input.location ? clean(input.location) : '';
           if (!input.equipmentId && !location) return { ok: false, error: 'Say where the problem is, or pick the unit it is on.' };
+          const description = clean(input.description);
+
+          // A request only points at what is really there: a unit in the fleet, a checklist made
+          // on that unit, a Bad Order on an exam that is still open. And one request for each.
+          if (input.equipmentId && !equipment.some((e) => e.id === input.equipmentId)) {
+            return { ok: false, error: 'That unit is no longer in the fleet list.' };
+          }
+          if (input.inspectionId) {
+            const checklist = inspections.find((i) => i.id === input.inspectionId);
+            if (!checklist || checklist.equipmentId !== input.equipmentId) {
+              return { ok: false, error: 'That checklist is not on record for this unit.' };
+            }
+            const sent = mrfs.find((m) => m.id === checklist.mrfId);
+            if (sent) return { ok: false, error: `Maintenance request #${sent.number} is already in for this checklist.` };
+          }
+          if (input.examId || input.findingKey) {
+            const exam = exams.find((x) => x.id === input.examId);
+            const finding = exam ? examFindings(exam).find((f) => f.key === input.findingKey) : undefined;
+            if (!finding) return { ok: false, error: 'That line is not a Bad Order on this exam.' };
+            if (finding.fixed) return { ok: false, error: 'The date it was fixed is already on the record.' };
+            const sent = mrfs.find((m) => m.id === finding.mrfId);
+            if (sent) return { ok: false, error: `Maintenance request #${sent.number} is already in for this.` };
+          }
+          // The same words about the same place from the same person, while the first is still
+          // open, is a second tap on the button and not a second problem.
+          const twin = mrfs.find(
+            (m) =>
+              m.status !== 'completed' &&
+              m.requestedBy === session.employeeId &&
+              m.equipmentId === input.equipmentId &&
+              (m.location ?? '') === location &&
+              m.description === description,
+          );
+          if (twin) return { ok: false, error: `That request is already in: #${twin.number}.` };
+
           const now = Date.now();
           const mrf: Mrf = {
             id: uid('mrf_'),
@@ -598,7 +643,7 @@ export const useStore = create<Store>()(
             createdAt: now,
             location: location || undefined,
             equipmentId: input.equipmentId,
-            description: clean(input.description),
+            description,
             priority: input.priority,
             items: input.items ?? [],
             meter: input.meter,
@@ -629,7 +674,8 @@ export const useStore = create<Store>()(
           if (!session) return signedOut;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can assign a request.' };
           const mrf = mrfs.find((m) => m.id === mrfId);
-          if (!mrf || mrf.status === 'completed') return { ok: false, error: 'That request is already completed.' };
+          if (!mrf) return { ok: false, error: 'That request no longer exists.' };
+          if (mrf.status === 'completed') return { ok: false, error: 'That request is already completed.' };
           if (!employees.some((e) => e.id === employeeId && e.active)) return { ok: false, error: 'Pick someone on the roster.' };
           const entry = { at: Date.now(), by: session.employeeId, status: mrf.status, assignedTo: employeeId };
           set({ mrfs: mrfs.map((m) => (m.id === mrfId ? { ...m, assignedTo: employeeId, history: [...m.history, entry] } : m)) });
@@ -648,20 +694,25 @@ export const useStore = create<Store>()(
           return { ok: true };
         },
 
-        completeMrf: (mrfId, { remarks, timeSpent }) => {
+        completeMrf: (mrfId, { remarks, timeSpent, completedBy: didTheWork }) => {
           const { session, mrfs, equipment, exams } = get();
           if (!session) return signedOut;
           const mrf = mrfs.find((m) => m.id === mrfId);
           if (!mrf) return { ok: false, error: 'That request no longer exists.' };
           if (!canWork(mrf)) return notYours;
           if (mrf.status === 'completed') return { ok: false, error: 'This request is already completed.' };
+          // "Completed by" is the person signed in. A supervisor closing it out for the person
+          // it is assigned to can put that person's name on the work instead, and nobody else's.
+          const completedBy = didTheWork ?? session.employeeId;
+          if (completedBy !== session.employeeId && !(isSupervisor() && completedBy === mrf.assignedTo)) {
+            return { ok: false, error: 'Completed by is you, or the person the request is assigned to.' };
+          }
           const done = clean(remarks);
           if (!done) return { ok: false, error: 'Say what was done. The remarks are the repair record.' };
           if (timeSpent != null && !(Number.isFinite(timeSpent) && timeSpent > 0 && timeSpent <= 100_000)) {
             return { ok: false, error: 'Enter the time spent in hours, like 1.5.' };
           }
           const now = Date.now();
-          const completedBy = mrf.assignedTo ?? session.employeeId;
           const all = mrfs.map((m): Mrf =>
             m.id === mrfId
               ? {
@@ -692,6 +743,11 @@ export const useStore = create<Store>()(
         submitExam: (draft) => {
           const { session, areaSheets, exams } = get();
           if (!session) return signedOut;
+          // An exam is signed once. A second tap on the same sheet gets the exam already on record.
+          const signed = exams.find(
+            (x) => x.sheetId === draft.sheetId && x.employeeId === session.employeeId && x.startedAt === draft.startedAt,
+          );
+          if (signed) return { ok: true, exam: signed };
           const sheet = areaSheets.find((s) => s.id === draft.sheetId && s.active);
           if (!sheet) return { ok: false, error: 'That area sheet is no longer on the list.' };
           const built = buildExam(sheet, draft, { id: uid('exam_'), employeeId: session.employeeId, submittedAt: Date.now() });

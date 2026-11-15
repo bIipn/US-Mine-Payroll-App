@@ -1,5 +1,5 @@
-import { checklistFor, findItem } from './templates';
-import { shiftTotals } from './time';
+import { checklistFor, EARLIER_CHECKLIST, findItem, onTheCard } from './templates';
+import { shiftFlags, shiftTotals } from './time';
 import type { Equipment, Inspection, OperatingLog, Shift } from './types';
 import { addDays, startOfDay } from '../util/format';
 
@@ -61,11 +61,15 @@ function buildCards(data: CardData, employeeId: string, day: number, checks: Ins
         fuelGal: inspection.fuelGal == null && log?.fuelGal == null ? undefined : gallons,
       });
 
-      // The lines read the same on every machine, so any checklist can name them.
+      // The lines read the same on every machine, so any checklist can name them. A checklist
+      // signed before the card was built in has other lines: it says so, and keeps what was written.
       const checklist = checklistFor(unit?.category ?? 'loader');
+      const earlier = !onTheCard(inspection);
+      if (earlier) card.comments.push({ n, text: EARLIER_CHECKLIST });
       for (const answer of inspection.answers) {
         if (answer.answer !== 'bo' || !answer.note) continue;
-        card.comments.push({ n, text: `${findItem(checklist, answer.itemId)?.label ?? answer.itemId}: ${answer.note}` });
+        const label = earlier ? undefined : findItem(checklist, answer.itemId)?.label;
+        card.comments.push({ n, text: label ? `${label}: ${answer.note}` : answer.note });
       }
       for (const text of [inspection.comments, log?.notes]) if (text) card.comments.push({ n, text });
     });
@@ -100,14 +104,33 @@ export function cardsBetween(data: CardData, from: number, to: number): DailyCar
     .sort((a, b) => b.columns[0].inspection.submittedAt - a.columns[0].inspection.submittedAt);
 }
 
+/** "Total daily hours worked" on the card, from the time clock. */
+export interface DayClock {
+  /** Paid hours for the day, in hundredths. */
+  paid: number;
+  /** A shift is still running, so `paid` is the hours so far. */
+  running: boolean;
+  /** A shift that day was never clocked out. It counts nothing until a supervisor sets its end. */
+  noClockOut: boolean;
+}
+
 /**
- * "Total daily hours worked" on the card: the person's paid hours from the time
- * clock for that day, in hundredths. A shift still open counts up to `now`.
+ * The person's paid hours from the time clock for that day. A shift still
+ * running counts up to `now`. A shift that was never clocked out counts nothing,
+ * the same as in payroll, so the card does not show a day that grows by the hour.
  */
-export function dayHoursWorked(shifts: Shift[], employeeId: string, day: number, now: number): number {
+export function dayClock(shifts: Shift[], employeeId: string, day: number, now: number): DayClock {
   const start = startOfDay(day);
   const end = addDays(start, 1);
-  return shifts
-    .filter((s) => s.employeeId === employeeId && s.clockIn.at >= start && s.clockIn.at < end)
-    .reduce((sum, s) => sum + shiftTotals(s, now).paid, 0);
+  const clock: DayClock = { paid: 0, running: false, noClockOut: false };
+  for (const shift of shifts) {
+    if (shift.employeeId !== employeeId || shift.clockIn.at < start || shift.clockIn.at >= end) continue;
+    if (!shift.clockOut && shiftFlags(shift, now).includes('missing_out')) {
+      clock.noClockOut = true;
+      continue;
+    }
+    if (!shift.clockOut) clock.running = true;
+    clock.paid += shiftTotals(shift, now).paid;
+  }
+  return clock;
 }

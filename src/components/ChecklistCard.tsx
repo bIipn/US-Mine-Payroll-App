@@ -1,8 +1,8 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { CARD_COLUMNS, type CardColumn, type DailyCard } from '../domain/checklistCard';
-import { ANSWER_LEGEND, ANSWER_MARK, checklistFor, FUEL_LINE } from '../domain/templates';
+import { CARD_COLUMNS, type CardColumn, type DailyCard, type DayClock } from '../domain/checklistCard';
+import { ANSWER_LEGEND, ANSWER_MARK, checklistFor, FUEL_LINE, onTheCard } from '../domain/templates';
 import type { Answer } from '../domain/types';
 import { haptic } from '../services/haptics';
 import { color, font, space } from '../theme/theme';
@@ -18,13 +18,11 @@ const HRS_W = 86;
  * equipment with its hours at the top, then a numbered column for each unit
  * against the 21 lines, the comments, and the legend.
  */
-export function ChecklistCard({ card, name, hoursWorked, stillWorking, onOpen }: {
+export function ChecklistCard({ card, name, clock, onOpen }: {
   card: DailyCard;
   name: string;
-  /** "Total daily hours worked", in hundredths, from the time clock. */
-  hoursWorked: number;
-  /** The person is still on the clock, so the total is the hours so far. */
-  stillWorking?: boolean;
+  /** "Total daily hours worked", from the time clock. */
+  clock: DayClock;
   /** Open one unit's record. */
   onOpen?: (inspectionId: string) => void;
 }) {
@@ -85,12 +83,17 @@ export function ChecklistCard({ card, name, hoursWorked, stillWorking, onOpen }:
       })}
 
       <GridRow style={styles.totalRow}>
-        <Box first style={{ alignItems: 'flex-end' }}>
+        <Box first>
           <Text style={printed}>{'<>'} Total daily hours worked {'<>'}</Text>
-          {stillWorking ? <Text style={styles.soFar}>So far today. Still on the clock.</Text> : null}
+          {clock.running ? <Text style={styles.soFar}>So far. Still on the clock.</Text> : null}
+          {clock.noClockOut ? (
+            <Text testID="card-no-clock-out" style={[styles.soFar, { color: color.red }]}>
+              No clock-out that day. Not counted until a supervisor sets the time.
+            </Text>
+          ) : null}
         </Box>
         <Box width={HRS_W}>
-          <Text testID="card-hours-worked" style={styles.total}>{hoursWorked > 0 ? fmtHrs(hoursWorked) : ''}</Text>
+          <Text testID="card-hours-worked" style={styles.total}>{clock.paid > 0 ? fmtHrs(clock.paid) : ''}</Text>
         </Box>
       </GridRow>
 
@@ -103,7 +106,8 @@ export function ChecklistCard({ card, name, hoursWorked, stillWorking, onOpen }:
       {lines.map((line) => (
         <GridRow key={line.id}>
           {slots.map((column, i) => {
-            const answer = column?.inspection.answers.find((a) => a.itemId === line.id)?.answer;
+            // An earlier checklist has no marks for these lines; its comment says so.
+            const answer = column && onTheCard(column.inspection) ? column.inspection.answers.find((a) => a.itemId === line.id)?.answer : undefined;
             const gallons = line.id === FUEL_LINE ? column?.fuelGal : undefined;
             return (
               <Box key={i} width={MARK_W} first={i === 0} style={styles.markBox}>
@@ -157,7 +161,8 @@ const fmtGal = (gallons: number) => `${Math.round(gallons * 10) / 10} gal`;
 const styles = StyleSheet.create({
   center: { alignItems: 'center', textAlign: 'center' },
   gridRow: { flexDirection: 'row', alignItems: 'stretch', borderTopWidth: 1, borderTopColor: RULE },
-  unitRow: { minHeight: 46 },
+  // A unit's row opens its record, so it is as tall as any other tap target.
+  unitRow: { minHeight: 56 },
   unitBox: { alignItems: 'flex-start', paddingHorizontal: space.sm },
   unit: { fontFamily: font.condBold, fontSize: 20, lineHeight: 23, color: color.ink },
   unitModel: { fontFamily: font.body, fontSize: 13, color: color.silica },
@@ -165,7 +170,7 @@ const styles = StyleSheet.create({
   hours: { fontFamily: font.cond, fontSize: 18, lineHeight: 21, color: color.ink, fontVariant: ['tabular-nums'] },
   totalRow: { minHeight: 44, borderTopWidth: 1.5, borderTopColor: color.ink },
   total: { fontFamily: font.condBold, fontSize: 24, lineHeight: 27, color: color.ink, fontVariant: ['tabular-nums'] },
-  soFar: { fontFamily: font.body, fontSize: 12, lineHeight: 15, color: color.silica },
+  soFar: { fontFamily: font.body, fontSize: 12, lineHeight: 15, color: color.silica, textAlign: 'center' },
   markBox: { paddingHorizontal: 0, minHeight: 30 },
   lineBox: { alignItems: 'flex-start', paddingHorizontal: space.sm },
   // Takes the width of its box, so a long name wraps instead of running off the card.

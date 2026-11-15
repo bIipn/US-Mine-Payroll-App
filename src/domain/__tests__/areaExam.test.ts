@@ -22,7 +22,8 @@ import type { AreaExam, AreaSheet } from '../types';
 
 const at = (h: number, m = 0, day = 13) => new Date(2026, 10, day, h, m).getTime();
 
-// The second page of every Pre Shift Exam, top to bottom, as it is printed.
+// The second page of every Pre Shift Exam, top to bottom, as it is printed. One spelling is
+// put right: on the first aid line the paper has "accesible".
 const PRINTED_CONDITIONS = [
   'Ground Conditions (stable footing, no trip hazards)',
   'Berms in Place & Maintained',
@@ -81,23 +82,59 @@ describe('area sheets', () => {
     }
   });
 
+  // The mine's own sheets are private and this repository is public (see AGENTS.md), so the
+  // samples must not borrow from them. Jest does not load .env.local, so this reads it itself,
+  // and only where a build on this machine names its sheets there. Nowhere else is there
+  // anything to compare with.
+  const named = (() => {
+    // This project has no Node types, so the file system is asked for by name with the two calls used here.
+    const fs = jest.requireActual<{ existsSync(file: string): boolean; readFileSync(file: string, encoding: 'utf8'): string }>('fs');
+    const here = expect.getState().testPath ?? '';
+    const file = `${here.slice(0, here.search(/[\\/]src[\\/]/))}/.env.local`;
+    if (!fs.existsSync(file)) return [];
+    const found = fs.readFileSync(file, 'utf8').match(/^EXPO_PUBLIC_AREA_SHEETS=(?:"([\s\S]*?)"|'([\s\S]*?)'|(.*))$/m);
+    return parseAreaSheets(found?.[1] ?? found?.[2] ?? found?.[3]);
+  })();
+
+  (named.length ? it : it.skip)('repeat no area and no line of the sheets a build on this machine names', () => {
+    const words = (sheets: AreaSheet[]) => sheets.flatMap((s) => [s.title, ...s.rows.map((r) => r.label)]);
+    const plain = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const own = new Set(words(named).map(plain));
+    expect(words(SAMPLE_AREA_SHEETS).filter((text) => own.has(plain(text)))).toEqual([]);
+  });
+
   it('are read from pasted text: a name, then one line for each line of the sheet', () => {
-    const sheets = parseAreaSheets('  North Plant areas:  \nFeed hopper\n  Pump 12 \nVacuum pump\nVacuum pump\n\n\nLab\nScale\n');
+    const sheets = parseAreaSheets('  North Plant areas:  \nDump pocket\n  Conveyor 12 \nCore saw\nCore saw\n\n\nCore shed\nCore racks\n');
     expect(sheets).toEqual([
       {
         id: 'north_plant',
         title: 'North Plant',
         active: true,
         rows: [
-          { id: 'feed_hopper', label: 'Feed hopper' },
-          { id: 'pump_12', label: 'Pump 12' },
+          { id: 'dump_pocket', label: 'Dump pocket' },
+          { id: 'conveyor_12', label: 'Conveyor 12' },
           // The same thing can be on a sheet twice. Each line keeps its own answer.
-          { id: 'vacuum_pump', label: 'Vacuum pump' },
-          { id: 'vacuum_pump_2', label: 'Vacuum pump' },
+          { id: 'core_saw', label: 'Core saw' },
+          { id: 'core_saw_2', label: 'Core saw' },
         ],
       },
-      { id: 'lab', title: 'Lab', active: true, rows: [{ id: 'scale', label: 'Scale' }] },
+      { id: 'core_shed', title: 'Core shed', active: true, rows: [{ id: 'core_racks', label: 'Core racks' }] },
     ]);
+  });
+
+  it('read the same whatever made the text: Windows line ends, or \\n typed out in a setting', () => {
+    const plain = parseAreaSheets('North Plant Pre Shift Exam\nDump pocket\nConveyor 12\n\nCore shed\nCore racks');
+    expect(plain.map((s) => [s.title, s.rows.length])).toEqual([['North Plant', 2], ['Core shed', 1]]);
+    expect(parseAreaSheets('North Plant Pre Shift Exam\r\nDump pocket\r\nConveyor 12\r\n\r\nCore shed\r\nCore racks\r\n')).toEqual(plain);
+    // An unquoted or single-quoted setting keeps the two characters \ and n instead of a line end.
+    expect(parseAreaSheets('North Plant Pre Shift Exam\\nDump pocket\\nConveyor 12\\n\\nCore shed\\nCore racks')).toEqual(plain);
+  });
+
+  it('take "areas" off a name only when it is the printed heading, with its colon', () => {
+    expect(makeSheet('North Plant areas:', '')?.title).toBe('North Plant');
+    expect(makeSheet('North Plant areas :  ', '')?.title).toBe('North Plant');
+    expect(makeSheet('Staging areas', '')?.title).toBe('Staging areas');
+    expect(makeSheet('North Plant Pre Shift Exam\r', '')?.title).toBe('North Plant');
   });
 
   it('read as nothing when a build names none', () => {
@@ -106,26 +143,26 @@ describe('area sheets', () => {
   });
 
   it('can be an area with no lines of its own yet, which still gets the conditions page', () => {
-    expect(makeSheet('Clay side', '')).toEqual({ id: 'clay_side', title: 'Clay side', active: true, rows: [] });
+    expect(makeSheet('Wash bay', '')).toEqual({ id: 'wash_bay', title: 'Wash bay', active: true, rows: [] });
   });
 
   it('need a name, and never share an id with a sheet that is already there', () => {
-    expect(makeSheet('  ', 'Scale')).toBeNull();
-    expect(makeSheet('Lab', 'Scale', ['lab', 'lab_2'])?.id).toBe('lab_3');
+    expect(makeSheet('  ', 'Core saw')).toBeNull();
+    expect(makeSheet('Crusher', 'Jaw crusher', ['crusher', 'crusher_2'])?.id).toBe('crusher_3');
   });
 
   it("are added to a phone's saved sheets when a build names new ones, and never brought back once removed", () => {
-    const lab: AreaSheet = { id: 'lab', title: 'Lab', active: false, rows: [] };
-    const configured = parseAreaSheets('Lab\nScale\n\nWash plant\nSump pump');
-    const merged = withSheets([lab], configured);
-    expect(merged.map((s) => [s.id, s.active])).toEqual([['lab', false], ['wash_plant', true]]);
+    const removed: AreaSheet = { id: 'crusher', title: 'Crusher', active: false, rows: [] };
+    const configured = parseAreaSheets('Crusher\nJaw crusher\n\nBagging plant\nFeed bin');
+    const merged = withSheets([removed], configured);
+    expect(merged.map((s) => [s.id, s.active])).toEqual([['crusher', false], ['bagging_plant', true]]);
     // Nothing to add: the same list comes back, so nothing is saved again.
     expect(withSheets(merged, configured)).toBe(merged);
   });
 });
 
 describe('marking a line', () => {
-  const line = { id: 'pump_12', label: 'Pump 12' };
+  const line = { id: 'conveyor_12', label: 'Conveyor 12' };
 
   it('is one tap for OK or N/A, which fills all three columns', () => {
     expect(examRow(line, { answer: 'ok' })).toEqual({ ...line, guarding: 'ok', electrical: 'ok', access: 'ok' });
@@ -146,10 +183,16 @@ describe('marking a line', () => {
   it('keeps the danger flag only on a Bad Order', () => {
     expect(examRow(line, { answer: 'ok', danger: true }).danger).toBeUndefined();
   });
+
+  it('keeps what was written only on a Bad Order: a note left on a line changed back to OK is not signed', () => {
+    const withdrawn = { columns: ['guarding' as const], note: 'Guard hanging by one bolt', danger: true };
+    expect(examRow(line, { answer: 'ok', ...withdrawn })).toEqual({ ...line, guarding: 'ok', electrical: 'ok', access: 'ok' });
+    expect(examRow(line, { answer: 'na', ...withdrawn })).toEqual({ ...line, guarding: 'na', electrical: 'na', access: 'na' });
+  });
 });
 
 describe('buildExam', () => {
-  const sheet = makeSheet('Wash plant', 'Sump pump\nSpirals\nOperator room')!;
+  const sheet = makeSheet('Bagging plant', 'Feed bin\nBag conveyor\nControl booth')!;
   const allOk = (): ExamDraft => ({
     sheetId: sheet.id,
     shift: 'day',
@@ -169,25 +212,33 @@ describe('buildExam', () => {
     const result = build(() => {});
     expect(result).toMatchObject({
       ok: true,
-      exam: { id: 'exam_1', sheetId: 'wash_plant', area: 'Wash plant', employeeId: 'e1', shift: 'day', startedAt: at(6, 10), submittedAt: at(6, 21) },
+      exam: { id: 'exam_1', sheetId: 'bagging_plant', area: 'Bagging plant', employeeId: 'e1', shift: 'day', startedAt: at(6, 10), submittedAt: at(6, 21) },
     });
     if (!result.ok) return;
-    expect(result.exam.rows.map((r) => r.label)).toEqual(['Sump pump', 'Spirals', 'Operator room']);
+    expect(result.exam.rows.map((r) => r.label)).toEqual(['Feed bin', 'Bag conveyor', 'Control booth']);
     expect(result.exam.conditions.map((c) => c.id)).toEqual(AREA_CONDITIONS.map((c) => c.id));
     expect(examResult(result.exam)).toBe('clear');
     expect(examCounts(result.exam)).toEqual({ ok: 23, bo: 0, na: 0, lines: 23 });
   });
 
   it('will not sign off with a line unanswered', () => {
-    expect(build((d) => { delete d.rows.spirals; })).toEqual({ ok: false, error: '1 line still needs an answer.' });
-    expect(build((d) => { delete d.rows.spirals; delete d.conditions.berms; })).toEqual({ ok: false, error: '2 lines still need an answer.' });
+    expect(build((d) => { delete d.rows.bag_conveyor; })).toEqual({ ok: false, error: '1 line still needs an answer.' });
+    expect(build((d) => { delete d.rows.bag_conveyor; delete d.conditions.berms; })).toEqual({ ok: false, error: '2 lines still need an answer.' });
+    // A mark that is not OK, BO or N/A is no answer.
+    expect(build((d) => { d.rows.bag_conveyor = {} as ExamDraft['rows'][string]; })).toEqual({ ok: false, error: '1 line still needs an answer.' });
+    expect(build((d) => { d.conditions.berms = { answer: 'maybe' } as unknown as ExamDraft['conditions'][string]; })).toEqual({
+      ok: false, error: '1 line still needs an answer.',
+    });
+    expect(build((d) => { d.others = [{ label: 'Hose reel', mark: {} as ExamDraft['rows'][string] }]; })).toEqual({
+      ok: false, error: '1 line still needs an answer.',
+    });
   });
 
   it('needs to know what is wrong, and which column, on every Bad Order', () => {
-    expect(build((d) => { d.rows.spirals = { answer: 'bo', columns: ['guarding'], note: ' ' }; })).toEqual({
+    expect(build((d) => { d.rows.bag_conveyor = { answer: 'bo', columns: ['guarding'], note: ' ' }; })).toEqual({
       ok: false, error: 'Say what is wrong on each Bad Order.',
     });
-    expect(build((d) => { d.rows.spirals = { answer: 'bo', columns: [], note: 'Guard off' }; })).toEqual({
+    expect(build((d) => { d.rows.bag_conveyor = { answer: 'bo', columns: [], note: 'Guard off' }; })).toEqual({
       ok: false, error: 'On each Bad Order, pick what is wrong: guarding, electrical or safe access.',
     });
     expect(build((d) => { d.conditions.lighting = { answer: 'bo' }; })).toEqual({
@@ -195,12 +246,43 @@ describe('buildExam', () => {
     });
   });
 
+  it('signs nothing that was written on a line and then withdrawn', () => {
+    const result = build((d) => {
+      d.rows.bag_conveyor = { answer: 'ok', columns: ['guarding'], note: 'Guard hanging by one bolt' };
+      d.conditions.lighting = { answer: 'na', note: 'Lamp out', danger: true };
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.exam.rows[1]).toEqual({ id: 'bag_conveyor', label: 'Bag conveyor', guarding: 'ok', electrical: 'ok', access: 'ok' });
+    expect(result.exam.conditions.find((c) => c.id === 'lighting')).toEqual({ id: 'lighting', answer: 'na' });
+    expect(examResult(result.exam)).toBe('clear');
+  });
+
+  it('gives a line written in under Other an id no printed line has', () => {
+    const odd = makeSheet('Yard', 'Other 1\nGate')!;
+    const result = buildExam(
+      odd,
+      {
+        sheetId: odd.id, shift: 'day', startedAt: at(6, 10),
+        rows: { other_1: { answer: 'ok' }, gate: { answer: 'ok' } },
+        others: [{ label: 'Hose reel', mark: { answer: 'bo', columns: ['access'], note: 'Reel blocks the walkway' } }],
+        conditions: Object.fromEntries(AREA_CONDITIONS.map((c) => [c.id, { answer: 'ok' as const }])),
+      },
+      who,
+    );
+    if (!result.ok) throw new Error(result.error);
+    expect(new Set(result.exam.rows.map((r) => r.id)).size).toBe(3);
+    // Recording the fix for the written-in line leaves the printed line that shares its name alone.
+    const written = result.exam.rows[2];
+    const fixed = withFix(result.exam, `row:${written.id}`, { at: at(9), by: 'e1' });
+    expect(fixed.rows.map((r) => !!r.fixed)).toEqual([false, false, true]);
+  });
+
   it('adds the lines written in under Other, after the printed ones', () => {
     const result = build((d) => {
-      d.others = [{ label: ' Portable pump ', mark: { answer: 'bo', columns: ['electrical'], note: 'Cord jacket cut' } }];
+      d.others = [{ label: ' Portable generator ', mark: { answer: 'bo', columns: ['electrical'], note: 'Cord jacket cut' } }];
     });
     expect(result.ok && result.exam.rows[3]).toEqual({
-      id: 'other_1', label: 'Portable pump', other: true, guarding: 'ok', electrical: 'bo', access: 'ok', note: 'Cord jacket cut',
+      id: 'other_1', label: 'Portable generator', other: true, guarding: 'ok', electrical: 'bo', access: 'ok', note: 'Cord jacket cut',
     });
     expect(build((d) => { d.others = [{ label: ' ', mark: { answer: 'ok' } }]; })).toEqual({
       ok: false, error: 'Name each line you added under Other.',
@@ -209,7 +291,7 @@ describe('buildExam', () => {
 });
 
 describe('conditions found', () => {
-  const sheet = makeSheet('Wash plant', 'Sump pump\nSpirals\nOperator room')!;
+  const sheet = makeSheet('Bagging plant', 'Feed bin\nBag conveyor\nControl booth')!;
   const exam = (id: string, submittedAt: number, change: (draft: ExamDraft) => void = () => {}): AreaExam => {
     const draft: ExamDraft = {
       sheetId: sheet.id, shift: 'day', startedAt: submittedAt - 600_000, others: [],
@@ -222,20 +304,20 @@ describe('conditions found', () => {
     return result.exam;
   };
   const found = exam('x1', at(6, 21), (d) => {
-    d.rows.spirals = { answer: 'bo', columns: ['guarding', 'access'], note: 'Guard off the drive', danger: true };
-    d.rows.operator_room = { answer: 'na' };
+    d.rows.bag_conveyor = { answer: 'bo', columns: ['guarding', 'access'], note: 'Guard off the drive', danger: true };
+    d.rows.control_booth = { answer: 'na' };
     d.conditions.fire_extinguishers = { answer: 'bo', note: 'Monthly tag not punched' };
   });
 
   it('lists each Bad Order with where it is and what is wrong', () => {
     expect(examFindings(found)).toEqual([
       {
-        key: 'row:spirals', examId: 'x1', sheetId: 'wash_plant', area: 'Wash plant', employeeId: 'e1', foundAt: at(6, 21),
-        label: 'Spirals', where: 'Guarding, safe access', note: 'Guard off the drive', danger: true,
+        key: 'row:bag_conveyor', examId: 'x1', sheetId: 'bagging_plant', area: 'Bagging plant', employeeId: 'e1', foundAt: at(6, 21),
+        label: 'Bag conveyor', where: 'Guarding, safe access', note: 'Guard off the drive', danger: true,
         refs: ['56.14107', '1910.212', '56.11001'],
       },
       {
-        key: 'cond:fire_extinguishers', examId: 'x1', sheetId: 'wash_plant', area: 'Wash plant', employeeId: 'e1', foundAt: at(6, 21),
+        key: 'cond:fire_extinguishers', examId: 'x1', sheetId: 'bagging_plant', area: 'Bagging plant', employeeId: 'e1', foundAt: at(6, 21),
         label: 'Fire extinguishers', where: 'Conditions', note: 'Monthly tag not punched', danger: false,
         refs: ['56.4201', '1910.157(e)(2)'],
       },
@@ -252,22 +334,39 @@ describe('conditions found', () => {
     expect(found.conditions.find((c) => c.id === 'fire_extinguishers')?.fixed).toBeUndefined();
     expect(fixed.rows).toBe(found.rows);
 
-    const sent = withMrf(found, 'row:spirals', 'mrf_9');
+    const sent = withMrf(found, 'row:bag_conveyor', 'mrf_9');
     expect(examFindings(sent)[0].mrfId).toBe('mrf_9');
     // A fix is recorded once: the first date stands.
     expect(withFix(fixed, 'cond:fire_extinguishers', { at: at(12), by: 'e1' })).toBe(fixed);
   });
 
+  it('touches only the line a key names: a key with no page in front of it matches nothing', () => {
+    const fix = { at: at(9, 5), by: 'sup1' };
+    expect(withFix(found, 'fire_extinguishers', fix)).toBe(found);
+    expect(withFix(found, 'page:fire_extinguishers', fix)).toBe(found);
+    expect(withFix(found, 'cond:no_such_line', fix)).toBe(found);
+    expect(withMrf(found, 'bag_conveyor', 'mrf_9')).toBe(found);
+  });
+
+  it('puts a danger ahead of everything else that is open', () => {
+    const tag = exam('x4', at(8, 0), (d) => { d.conditions.fire_extinguishers = { answer: 'bo', note: 'Tag not punched' }; });
+    const danger = exam('x5', at(5, 0), (d) => { d.conditions.ground = { answer: 'bo', note: 'Bank is sloughing onto the walkway', danger: true }; });
+    expect(openFindings([tag, danger]).map((f) => [f.label, f.danger])).toEqual([
+      ['Ground conditions', true],
+      ['Fire extinguishers', false],
+    ]);
+  });
+
   it('keeps a condition open, newest first, until it is fixed', () => {
-    const older = exam('x0', at(6, 30, 11), (d) => { d.conditions.lighting = { answer: 'bo', note: 'Lamp out over the sump' }; });
-    const elsewhere = { ...exam('x3', at(7, 0), (d) => { d.conditions.berms = { answer: 'bo', note: 'Berm washed out' }; }), sheetId: 'screening', area: 'Screening' };
-    const fixed = withFix(found, 'row:spirals', { at: at(10), by: 'e6' });
+    const older = exam('x0', at(6, 30, 11), (d) => { d.conditions.lighting = { answer: 'bo', note: 'Lamp out over the conveyor' }; });
+    const elsewhere = { ...exam('x3', at(7, 0), (d) => { d.conditions.berms = { answer: 'bo', note: 'Berm washed out' }; }), sheetId: 'crusher', area: 'Crusher' };
+    const fixed = withFix(found, 'row:bag_conveyor', { at: at(10), by: 'e6' });
     const open = openFindings([older, fixed, elsewhere]);
     expect(open.map((f) => [f.area, f.label])).toEqual([
-      ['Screening', 'Berms in place & maintained'],
-      ['Wash plant', 'Fire extinguishers'],
-      ['Wash plant', 'Lighting'],
+      ['Crusher', 'Berms in place & maintained'],
+      ['Bagging plant', 'Fire extinguishers'],
+      ['Bagging plant', 'Lighting'],
     ]);
-    expect(openFindings([older, fixed, elsewhere], 'wash_plant')).toHaveLength(2);
+    expect(openFindings([older, fixed, elsewhere], 'bagging_plant')).toHaveLength(2);
   });
 });

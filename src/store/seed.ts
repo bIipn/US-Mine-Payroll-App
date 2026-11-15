@@ -107,8 +107,10 @@ const CARD_COMMENTS = ['Greased the pins', 'Washed the windshield', 'Topped off 
 
 /** Who examines which work area: the first sheet, the second, the third, and round again. */
 const EXAMINERS = ['e10', 'e04', 'e09'];
-/** Conditions a lab does not have, so the sample exams on the third sheet mark them N/A. */
+/** Conditions an area under a roof does not have, so the sample exams on its sheet mark them N/A. */
 const INDOORS_NA = ['berms', 'pulleys', 'belt_components', 'estops', 'mobile_equipment', 'haul_roads'];
+/** An area that is a room or a shed, going by the name on its sheet. */
+const indoors = (sheet: AreaSheet) => /\b(lab|laboratory|office|shed)\b/i.test(sheet.title);
 
 export function defaultSettings(demo: boolean): Settings {
   return {
@@ -417,13 +419,26 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
     if (!unit) continue;
     const inspectAt = start + between(6, 11) * MIN;
 
+    if (id === 'e13') {
+      // The seep found on the last workday is still there. Its request is in and the unit is
+      // cleared to run, so the line is a Bad Order again and points at the same request.
+      const waiting = mrfs.find((m) => m.number === 1042);
+      const again = runUnit({
+        employeeId: id, unit, inspectAt, decision: 'operate',
+        overrides: { hyd_cyl_hoses: { answer: 'bo', note: 'Still seeping at the left lift cylinder rod seal. Level checked and holding.' } },
+      });
+      if (waiting) again.mrfId = waiting.id;
+      continue;
+    }
+
     if (id === 'e05') {
       const bad = runUnit({
         employeeId: id, unit: 'EX-09', inspectAt,
         overrides: { seatbelts: { answer: 'bo', note: 'Seat belt webbing frayed at the latch plate' } },
       });
+      // Numbered after the request from this morning's exam, which was sent first.
       const mrf: Mrf = {
-        id: nextId('mrf'), number: 1043, equipmentId: bad.equipmentId, requestedBy: id,
+        id: nextId('mrf'), number: 1044, equipmentId: bad.equipmentId, requestedBy: id,
         createdAt: inspectAt + 2 * MIN, priority: 'safety',
         description: 'Seat belt webbing is frayed at the latch plate. Belt needs to be replaced.',
         items: [{ label: 'Seatbelts/DROPS/FOPS', note: 'Seat belt webbing frayed at the latch plate' }],
@@ -444,14 +459,14 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
   // Each sheet has its examiner, who goes round the area a few minutes after clocking in.
   // The first sheet is left unexamined today, so whoever opens the preview has one to do.
   const today0 = startOfDay(now);
-  const clear = (sheet: AreaSheet, index: number, startedAt: number, signedAt: number): ExamDraft => ({
+  const clear = (sheet: AreaSheet, startedAt: number, signedAt: number): ExamDraft => ({
     sheetId: sheet.id,
     shift: shiftAt(signedAt),
     startedAt,
     rows: Object.fromEntries(sheet.rows.map((row) => [row.id, { answer: 'ok' as const }])),
     others: [],
     conditions: Object.fromEntries(
-      AREA_CONDITIONS.map((c) => [c.id, { answer: index % 3 === 2 && INDOORS_NA.includes(c.id) ? ('na' as const) : ('ok' as const) }]),
+      AREA_CONDITIONS.map((c) => [c.id, { answer: indoors(sheet) && INDOORS_NA.includes(c.id) ? ('na' as const) : ('ok' as const) }]),
     ),
   });
   const firstExamDay = workdays[Math.max(0, workdays.length - PREOP_WORKDAYS)] ?? today0;
@@ -463,7 +478,7 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
       if (shift.employeeId !== examiner || shift.clockIn.at < firstExamDay) continue;
       if (leftForToday && shift.clockIn.at >= today0) continue;
       const submittedAt = shift.clockIn.at + pick(14, 26) * MIN;
-      const built = buildExam(sheet, clear(sheet, index, submittedAt - pick(6, 11) * MIN, submittedAt), {
+      const built = buildExam(sheet, clear(sheet, submittedAt - pick(6, 11) * MIN, submittedAt), {
         id: nextId('exam'), employeeId: examiner, submittedAt,
       });
       if (built.ok) exams.push(built.exam);
@@ -492,16 +507,17 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
     const hose = find(tidy, { condition: 'ground' }, 'Wash-down hose left across the walkway');
     replace(withFix(hose.exam, hose.key, { at: tidy.submittedAt + 25 * MIN, by: tidy.employeeId, note: 'Rolled up the hose and hung it on the rack' }));
   }
-  // Found on the last exam before today, and still open.
-  const lastBefore = examsOn(2, 'before').filter((exam) => exam.id !== tidy?.id).slice(-1)[0];
-  if (lastBefore) replace(find(lastBefore, { condition: 'fire_extinguishers' }, 'Monthly tag has not been punched this month').exam);
-  // Found this morning and sent to maintenance.
-  const thisMorning = examsOn(1, 'today').filter((exam) => exam.id !== lastBefore?.id)[0];
+  // Found on the last exam of the first area, and still open. That area is the one left for
+  // today, so nobody has been round it since and no later exam says the line is fine.
+  const lastOnFirst = exams.filter((exam) => exam.sheetId === sheets[0]?.id && exam.id !== tidy?.id).slice(-1)[0];
+  if (lastOnFirst) replace(find(lastOnFirst, { condition: 'fire_extinguishers' }, 'Monthly tag has not been punched this month').exam);
+  // Found this morning and sent to maintenance: the first request of the day.
+  const thisMorning = examsOn(1, 'today')[0];
   if (thisMorning) {
     const guard = find(thisMorning, { row: 1, condition: 'pulleys' }, 'Guard is off the drive coupling');
     const line = guard.exam.rows.find((r) => `row:${r.id}` === guard.key);
     const mrf: Mrf = {
-      id: nextId('mrf'), number: 1044, requestedBy: thisMorning.employeeId,
+      id: nextId('mrf'), number: 1043, requestedBy: thisMorning.employeeId,
       createdAt: thisMorning.submittedAt + 4 * MIN, priority: 'high',
       location: line ? `${thisMorning.area}: ${line.label}` : thisMorning.area,
       description: 'Guard is off the drive coupling. The bolts are in the tray beside it.',
@@ -511,6 +527,7 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
     mrfs.push(mrf);
     replace(withMrf(guard.exam, guard.key, mrf.id));
   }
+  mrfs.sort((a, b) => a.number - b.number);
 
   return {
     employees, accounts, shifts, leave, equipment, inspections, opLogs, areaSheets: sheets, exams, mrfs,

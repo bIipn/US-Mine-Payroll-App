@@ -1,5 +1,5 @@
 import { STANDARDS } from '../standards';
-import { ANSWER_LEGEND, CATEGORY_ORDER, checklistFor, countAnswers, findItem, inspectionResult, isHazard } from '../templates';
+import { ANSWER_LEGEND, CATEGORY_ORDER, checklistFor, countAnswers, findItem, inspectionResult, isHazard, signedAnswers } from '../templates';
 import type { EquipmentCategory, InspectionAnswer } from '../types';
 
 // The lines of the paper Operator Equipment Checklist, top to bottom.
@@ -91,12 +91,46 @@ describe('operator equipment checklist', () => {
     expect(osha('loader', 'fire_extinguisher')).toBe('1910.157(e)(2)');
   });
 
-  it('carries the legend printed at the foot of the card', () => {
+  it('carries the legend printed at the foot of the card, word for word', () => {
     expect(ANSWER_LEGEND).toEqual({
-      ok: 'Inspection free of defects or concerns',
-      bo: 'Bad Order, needs repair. Safety items: red tag and report immediately',
-      na: 'Not applicable to this equipment',
+      ok: 'inspection free of defects/concerns',
+      bo: 'Bad Order, Needs Repair (Safety items; red tag and report immediately.)',
+      na: 'Not applicable to specific equipment',
     });
+  });
+});
+
+describe('signedAnswers', () => {
+  const checklist = checklistFor('loader');
+  const all = (overrides: Record<string, Partial<InspectionAnswer>> = {}): InspectionAnswer[] =>
+    checklist.items.map((i) => ({ itemId: i.id, answer: 'ok', ...overrides[i.id] }));
+
+  it('puts one answer for each line on the record, in the order of the card', () => {
+    const jumbled = [...all(), { itemId: 'not_on_the_card', answer: 'ok' as const }, { itemId: 'lights', answer: 'na' as const }].reverse();
+    const signed = signedAnswers(checklist, jumbled);
+    expect(signed.blank).toBe(0);
+    expect(signed.answers.map((a) => a.itemId)).toEqual(checklist.items.map((i) => i.id));
+  });
+
+  it('keeps a note and the unsafe mark only on a Bad Order', () => {
+    const signed = signedAnswers(
+      checklist,
+      all({
+        lights: { answer: 'ok', note: 'Left work light out', hazard: true },
+        bed_condition: { answer: 'na', note: 'No bed' },
+        tires: { answer: 'bo', note: '  Sidewall cut  to the cords ', hazard: true },
+      }),
+    ).answers;
+    expect(signed.find((a) => a.itemId === 'lights')).toEqual({ itemId: 'lights', answer: 'ok' });
+    expect(signed.find((a) => a.itemId === 'bed_condition')).toEqual({ itemId: 'bed_condition', answer: 'na' });
+    expect(signed.find((a) => a.itemId === 'tires')).toEqual({ itemId: 'tires', answer: 'bo', note: 'Sidewall cut to the cords', hazard: true });
+  });
+
+  it('counts a line as blank until it is marked OK, BO or N/A', () => {
+    expect(signedAnswers(checklist, all().filter((a) => a.itemId !== 'fuel')).blank).toBe(1);
+    const odd = all({ lights: { answer: 'fine' as unknown as InspectionAnswer['answer'] }, gauges: { answer: undefined as unknown as InspectionAnswer['answer'] } });
+    expect(signedAnswers(checklist, odd).blank).toBe(2);
+    expect(signedAnswers(checklist, []).blank).toBe(21);
   });
 });
 

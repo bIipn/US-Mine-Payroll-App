@@ -3,7 +3,7 @@ import { AREA_CONDITIONS, examCounts, examFindings, examResult, rowAnswer, SHIFT
 import { cardsBetween } from '../domain/checklistCard';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { standard } from '../domain/standards';
-import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, findItem, isHazard } from '../domain/templates';
+import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, findItem, isHazard, onTheCard } from '../domain/templates';
 import { backFromLunchAt, FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
 import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Shift } from '../domain/types';
 import { addDays, DAY, fmtDateTime, fmtDayShort, fmtWeekday, HOUR, startOfDay, ymd } from '../util/format';
@@ -225,9 +225,11 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
   const within = (ms: number) => ms >= from && ms < to;
   const lastDay = to - DAY;
   const stamp = `${fmtDayShort(from)} to ${fmtDayShort(lastDay)}, ${new Date(lastDay).getFullYear()}. Generated ${fmtDateTime(now)}.`;
+  /** What a row says where its unit used to be, once the unit is off the fleet list. */
+  const REMOVED = 'Removed from fleet';
   const describe = (id: string) => {
     const unit = unitOf.get(id);
-    return unit ? `${unit.make} ${unit.model}` : 'Removed from fleet';
+    return unit ? `${unit.make} ${unit.model}` : REMOVED;
   };
   const resultCell = (i: Inspection): CellInput =>
     i.result === 'pass' ? { v: 'Passed', s: 'ok' } : i.result === 'defect' ? { v: 'Defect', s: 'warn' } : { v: 'Bad order', s: 'bad' };
@@ -240,7 +242,8 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
   const inspections = data.inspections.filter((i) => within(i.submittedAt)).sort((a, b) => a.submittedAt - b.submittedAt);
   // The lines read the same on every machine.
   const cardLines = checklistFor('loader').items;
-  const legend = `OK = ${ANSWER_LEGEND.ok}. BO = ${ANSWER_LEGEND.bo}. N/A = ${ANSWER_LEGEND.na}.`;
+  // The card's legend, word for word. Its second line ends with its own full stop, inside the bracket.
+  const legend = `OK = ${ANSWER_LEGEND.ok}. BO = ${ANSWER_LEGEND.bo} N/A = ${ANSWER_LEGEND.na}.`;
 
   const checklists: Sheet = {
     name: 'Equipment Checklists',
@@ -258,7 +261,8 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
       .flatMap((card) =>
         card.columns.map((column): CellInput[] => {
           const i = column.inspection;
-          const byLine = new Map(i.answers.map((a) => [a.itemId, a.answer]));
+          // A checklist signed before the card has other lines: its boxes stay empty and the comments say so.
+          const byLine = new Map(onTheCard(i) ? i.answers.map((a) => [a.itemId, a.answer]) : []);
           const mrf = i.mrfId ? mrfOf.get(i.mrfId) : undefined;
           return [
             date(i.submittedAt), time(i.submittedAt), nameOf(employeeOf.get(i.employeeId)), { v: column.n, s: 'int' },
@@ -284,18 +288,24 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
       { header: 'Unsafe to run', width: 13 }, { header: 'MRF #', width: 8 }, { header: 'MRF status', width: 13 },
     ],
     rows: inspections.flatMap((i) => {
+      // A Bad Order stays on the record after its unit leaves the fleet. The lines are the same
+      // on every machine; only the standard beside a line depends on the type, so with the unit
+      // gone none is cited.
       const unit = unitOf.get(i.equipmentId);
-      if (!unit) return [];
-      const template = checklistFor(unit.category);
+      const template = checklistFor(unit?.category ?? 'loader');
+      const earlier = !onTheCard(i);
       const mrf = i.mrfId ? mrfOf.get(i.mrfId) : undefined;
       return i.answers
         .filter((a) => a.answer === 'bo')
         .map((a): CellInput[] => {
-          const item = findItem(template, a.itemId);
-          const hazard = isHazard(template, a);
+          const item = earlier ? undefined : findItem(template, a.itemId);
+          const cited = unit ? item : undefined;
+          // An earlier checklist does not say which line parked the unit, only that the checklist did.
+          const hazard = earlier ? i.result === 'bad_order' : isHazard(template, a);
           return [
-            date(i.submittedAt), { v: unit.unit, s: 'bold' }, nameOf(employeeOf.get(i.employeeId)), item?.label ?? a.itemId,
-            { v: a.note ?? '', s: 'wrap' }, standard(item?.cfr)?.cite ?? '', standard(item?.osha)?.cite ?? '',
+            date(i.submittedAt), { v: unit?.unit ?? REMOVED, s: 'bold' }, nameOf(employeeOf.get(i.employeeId)),
+            earlier ? 'Earlier checklist' : (item?.label ?? a.itemId),
+            { v: a.note ?? '', s: 'wrap' }, standard(cited?.cfr)?.cite ?? '', standard(cited?.osha)?.cite ?? '',
             hazard ? { v: 'Yes', s: 'bad' } : 'No', mrf ? { v: mrf.number, s: 'int' } : null,
             mrf ? statusCell(mrf) : { v: 'No MRF', s: 'bad' },
           ];
@@ -311,7 +321,8 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
       { header: 'Date', width: 12 }, { header: 'Unit', width: 9 }, { header: 'Equipment', width: 26 }, { header: 'Operator', width: 24 },
       { header: 'Start', width: 11 }, { header: 'End', width: 11 }, { header: 'Hours in use', width: 12 },
       { header: 'Equp. hrs st', width: 12 }, { header: 'Equp. hrs end', width: 13 }, { header: 'Hours on unit', width: 12 },
-      { header: 'Gallons added', width: 13 }, { header: 'Parked safe', width: 12 }, { header: 'Notes', width: 34 },
+      // The card's "Gallons added" also counts what went on the Fuel line at the check, so this column has its own name.
+      { header: 'Gallons at end of use', width: 19 }, { header: 'Parked safe', width: 12 }, { header: 'Notes', width: 34 },
     ],
     rows: data.opLogs
       .filter((l) => within(l.startAt))
@@ -363,7 +374,7 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
   const conditionSheet: Sheet = {
     name: 'Exam Conditions',
     title: 'Conditions found on pre shift exams',
-    subtitle: `Each condition that may affect safety or health, with the date it was corrected once it has been (30 CFR 56.18002(b) and (c)). ${stamp}`,
+    subtitle: `Each condition that may affect safety or health found in the period, plus any older one still open, with the date it was corrected once it has been (30 CFR 56.18002(b) and (c)). ${stamp}`,
     columns: [
       { header: 'Date', width: 12 }, { header: 'Shift', width: 8 }, { header: 'Area', width: 22 }, { header: 'Found by', width: 24 },
       { header: 'Line', width: 32 }, { header: 'Found in', width: 22 }, { header: 'What was wrong', width: 46 },
@@ -371,8 +382,12 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
       { header: 'Status', width: 10 }, { header: 'Date fixed', width: 20 }, { header: 'Fixed by', width: 24 },
       { header: 'What was done', width: 46 }, { header: 'Days open', width: 10 },
     ],
-    rows: exams.flatMap((exam) =>
-      examFindings(exam).map((f): CellInput[] => {
+    // A condition found before the period and not fixed yet is carried forward, as an open request is.
+    rows: data.exams
+      .filter((exam) => exam.submittedAt < to)
+      .sort((a, b) => a.submittedAt - b.submittedAt)
+      .flatMap((exam) => examFindings(exam).filter((f) => within(f.foundAt) || !f.fixed).map((f) => ({ exam, f })))
+      .map(({ exam, f }): CellInput[] => {
         const mrf = f.mrfId ? mrfOf.get(f.mrfId) : undefined;
         return [
           ...examHead(exam), { v: f.label, s: 'bold' }, f.where, { v: f.note ?? '', s: 'wrap' },
@@ -382,7 +397,6 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
           daysBetween(f.foundAt, f.fixed?.at ?? now),
         ];
       }),
-    ),
   };
 
   const lineSheet: Sheet = {
@@ -425,7 +439,7 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
         const remarks = m.remarks ?? [...m.history].reverse().find((h) => h.note)?.note ?? '';
         return [
           { v: m.number, s: 'int' }, { v: new Date(m.createdAt), s: 'datetime' }, nameOf(employeeOf.get(m.requestedBy)),
-          m.location ?? '', { v: unit?.unit ?? '', s: 'bold' }, { v: m.description, s: 'wrap' },
+          m.location ?? '', { v: m.equipmentId ? (unit?.unit ?? REMOVED) : '', s: 'bold' }, { v: m.description, s: 'wrap' },
           m.priority === 'safety' ? { v: 'Safety', s: 'bad' } : m.priority === 'high' ? { v: 'High', s: 'warn' } : 'Routine',
           statusCell(m),
           m.taggedOut ? (m.status === 'completed' ? 'Was red tagged' : { v: 'Yes', s: 'bad' }) : 'No',

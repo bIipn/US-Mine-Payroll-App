@@ -93,14 +93,20 @@ function unique(base: string, taken: Set<string>): string {
 /**
  * A sheet from its name and its lines, one to a line of text. The heading can be
  * typed the way it is printed: "North Plant areas:" and "North Plant Pre Shift
- * Exam" both give "North Plant".
+ * Exam" both give "North Plant". Without the colon "areas" is part of the name,
+ * so "Staging areas" stays as it is.
  */
 export function makeSheet(title: string, rowsText: string, takenIds: string[] = []): AreaSheet | null {
-  const name = cleanText(title.replace(/:\s*$/, '').replace(/\s+pre[\s-]?shift exam$/i, '').replace(/\s+areas$/i, ''));
+  const name = cleanText(
+    cleanText(title)
+      .replace(/\s+areas\s*:$/i, '')
+      .replace(/:$/, '')
+      .replace(/\s+pre[\s-]?shift exam$/i, ''),
+  );
   if (!name) return null;
   const rowIds = new Set<string>();
   const rows = rowsText
-    .split('\n')
+    .split(/\r?\n/)
     .map(cleanText)
     .filter(Boolean)
     .map((label) => ({ id: unique(slug(label), rowIds), label }));
@@ -109,11 +115,14 @@ export function makeSheet(title: string, rowsText: string, takenIds: string[] = 
 
 /**
  * Sheets from pasted text: the name of an area, then one line for each line of
- * its sheet, with a blank line before the next area.
+ * its sheet, with a blank line before the next area. Line ends can be Windows
+ * ones, or `\n` typed out, which is what a setting holds when it is not in
+ * double quotes.
  */
 export function parseAreaSheets(text: string | undefined): AreaSheet[] {
   const sheets: AreaSheet[] = [];
-  for (const block of (text ?? '').split(/\n\s*\n/)) {
+  const plain = (text ?? '').replace(/\\n/g, '\n').replace(/\r\n?/g, '\n');
+  for (const block of plain.split(/\n\s*\n/)) {
     const lines = block.split('\n').filter((line) => cleanText(line));
     if (lines.length === 0) continue;
     const sheet = makeSheet(lines[0], lines.slice(1).join('\n'), sheets.map((s) => s.id));
@@ -134,15 +143,17 @@ export function withSheets(existing: AreaSheet[], configured: AreaSheet[]): Area
 }
 
 /**
- * Made-up sheets for the sample data. The mine's real sheets are not in this
+ * Made-up sheets for the sample data: a plant that is nothing like the mine's
+ * own. The real sheets list the mine's equipment and are not in this
  * repository: a build names them (see `AREA_SHEETS` in src/config.ts) or a
- * supervisor adds them in the app.
+ * supervisor adds them in the app. Do not model a sample on a real sheet; where
+ * a build's sheets are on the machine, a test holds the two apart.
  */
 export const SAMPLE_AREA_SHEETS: AreaSheet[] = parseAreaSheets(
   [
-    'Screening plant\nFeed hopper\nFeed belt\nScreen deck\nSlurry pump 1\nSlurry pump 2\nCyclone stand\nSump pump\nMotor control center\nOversize belt',
-    'Wash plant\nSump area\nSlurry pump 3\nSlurry pump 4\nFirst floor spirals\nSecond floor spirals\nClassifier\nOperator room\nLower level\nElectrical room',
-    'Lab\nScale\nSample mixer\nDrying oven\nVacuum pump\nAir compressor\nBench vent\nGas cylinders',
+    'Crusher\nDump pocket\nGrizzly feeder\nJaw crusher\nRock breaker\nDischarge conveyor\nSurge bin\nControl booth\nLube unit\nDust collector',
+    'Bagging plant\nFeed bin\nBag conveyor\nBulk bag filler\nPalletizer\nStretch wrapper\nBucket elevator\nBaghouse\nLoading dock\nForklift lane',
+    'Core shed\nCore saw\nCore splitter\nLogging benches\nCore racks\nSample store\nRoller door\nEyewash station',
   ].join('\n\n'),
 );
 
@@ -162,10 +173,18 @@ export interface ConditionMark {
   danger?: boolean;
 }
 
-const extras = (mark: { answer: Answer; note?: string; danger?: boolean }) => ({
-  ...(mark.note && cleanText(mark.note) ? { note: cleanText(mark.note) } : null),
-  ...(mark.answer === 'bo' && mark.danger ? { danger: true } : null),
-});
+/**
+ * What was written beside a mark. It goes on the record only with a Bad Order:
+ * a note typed on a line that was then changed back to OK has been withdrawn,
+ * and the form no longer shows it to the person signing.
+ */
+const extras = (mark: { answer: Answer; note?: string; danger?: boolean }) =>
+  mark.answer !== 'bo'
+    ? null
+    : {
+        ...(mark.note && cleanText(mark.note) ? { note: cleanText(mark.note) } : null),
+        ...(mark.danger ? { danger: true } : null),
+      };
 
 /**
  * One line of the area sheet. OK or N/A fills all three columns. A Bad Order
@@ -205,6 +224,10 @@ export interface ExamDraft {
 
 export type BuiltExam = { ok: true; exam: AreaExam } | { ok: false; error: string };
 
+const ANSWERS: Answer[] = ['ok', 'bo', 'na'];
+/** A line has an answer once it is marked OK, BO or N/A. Anything else is still blank. */
+const answered = (mark: { answer?: Answer } | undefined): boolean => !!mark && ANSWERS.includes(mark.answer as Answer);
+
 /**
  * Turn a filled-in sheet into the record: who examined the area, when, where,
  * and every line with what was found. Nothing is signed with a line left blank
@@ -216,7 +239,9 @@ export function buildExam(
   who: { id: string; employeeId: string; submittedAt: number },
 ): BuiltExam {
   const blank =
-    sheet.rows.filter((r) => !draft.rows[r.id]).length + AREA_CONDITIONS.filter((c) => !draft.conditions[c.id]).length;
+    sheet.rows.filter((r) => !answered(draft.rows[r.id])).length +
+    draft.others.filter((o) => !answered(o.mark)).length +
+    AREA_CONDITIONS.filter((c) => !answered(draft.conditions[c.id])).length;
   if (blank > 0) return { ok: false, error: `${blank} ${blank === 1 ? 'line still needs' : 'lines still need'} an answer.` };
   if (draft.others.some((o) => !cleanText(o.label))) return { ok: false, error: 'Name each line you added under Other.' };
 
@@ -227,6 +252,8 @@ export function buildExam(
     return { ok: false, error: 'On each Bad Order, pick what is wrong: guarding, electrical or safe access.' };
   }
 
+  // A written-in line is other_1, other_2 and so on, stepping past any printed line with that id.
+  const lineIds = new Set(sheet.rows.map((r) => r.id));
   return {
     ok: true,
     exam: {
@@ -239,7 +266,7 @@ export function buildExam(
       submittedAt: who.submittedAt,
       rows: [
         ...sheet.rows.map((r) => examRow(r, draft.rows[r.id])),
-        ...draft.others.map((o, i) => examRow({ id: `other_${i + 1}`, label: cleanText(o.label), other: true }, o.mark)),
+        ...draft.others.map((o, i) => examRow({ id: unique(`other_${i + 1}`, lineIds), label: cleanText(o.label), other: true }, o.mark)),
       ],
       conditions: AREA_CONDITIONS.map((c): ExamCondition => {
         const mark = draft.conditions[c.id];
@@ -308,13 +335,13 @@ export function examFindings(exam: AreaExam): Finding[] {
   return [...fromRows, ...fromConditions];
 }
 
-/** Conditions that have no fix date yet, newest first. */
+/** Conditions that have no fix date yet: a danger first, then the newest. */
 export function openFindings(exams: AreaExam[], sheetId?: string): Finding[] {
   return exams
     .filter((exam) => !sheetId || exam.sheetId === sheetId)
     .flatMap(examFindings)
     .filter((finding) => !finding.fixed)
-    .sort((a, b) => b.foundAt - a.foundAt);
+    .sort((a, b) => Number(b.danger) - Number(a.danger) || b.foundAt - a.foundAt);
 }
 
 /** How many lines were OK, Bad Order and N/A. A line of the area sheet counts once. */
@@ -334,12 +361,14 @@ export function examResult(exam: AreaExam): ExamResult {
   return found.some((f) => f.danger) ? 'danger' : 'conditions';
 }
 
+/** Change the one line a key names: `row:<id>` on the area sheet, `cond:<id>` on the conditions page. Any other key changes nothing. */
 function onLine(exam: AreaExam, key: string, change: <T extends ExamRow | ExamCondition>(line: T) => T): AreaExam {
   const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
   if (kind === 'row') {
     const rows = exam.rows.map((row) => (row.id === id ? change(row) : row));
     return rows.some((row, i) => row !== exam.rows[i]) ? { ...exam, rows } : exam;
   }
+  if (kind !== 'cond') return exam;
   const conditions = exam.conditions.map((c) => (c.id === id ? change(c) : c));
   return conditions.some((c, i) => c !== exam.conditions[i]) ? { ...exam, conditions } : exam;
 }

@@ -86,9 +86,44 @@ describe('migratePersisted', () => {
     });
   });
 
+  describe('from before a completed request kept its own date', () => {
+    const done = (at: number) => ({ at, by: 'e6', status: 'completed', note: 'Replaced backup alarm and tested in reverse' });
+    const v4 = {
+      ...v1,
+      leave: [{ id: 'lv1' }],
+      payRates: { e1: 2500 },
+      exams: [{ id: 'x1' }],
+      areaSheets: [{ id: 'crusher' }],
+      mrfs: [
+        { id: 'm1', number: 1001, status: 'completed', createdAt: 1000, history: [{ at: 1000, by: 'e1', status: 'open' }, done(5000)] },
+        { id: 'm2', number: 1002, status: 'open', createdAt: 1500, history: [{ at: 1500, by: 'e1', status: 'open' }] },
+        { id: 'm3', number: 1003, status: 'completed', createdAt: 2000, completedAt: 9000, completedBy: 'e2', remarks: 'As entered', history: [done(9500)] },
+        { id: 'm4', number: 1004, status: 'completed', createdAt: 2500 },
+      ],
+    };
+
+    it('fills in date completed, completed by and remarks from the history, in a live build', () => {
+      const next = migratePersisted(v4, 4, false) as typeof v4;
+      expect(next.mrfs[0]).toEqual({ ...v4.mrfs[0], completedAt: 5000, completedBy: 'e6', remarks: 'Replaced backup alarm and tested in reverse' });
+      // An open request, one that already has its fields, and one with no history are left as they are.
+      expect(next.mrfs.slice(1)).toEqual(v4.mrfs.slice(1));
+      expect(next.exams).toEqual(v4.exams);
+      expect(next.session).toEqual(v1.session);
+    });
+
+    it('reloads the sample data in a preview build, so it shows the sample areas of this version', () => {
+      const next = migratePersisted(v4, 4, true);
+      expect(next.seededAt).toBeNull();
+      expect(next.session).toBeNull();
+    });
+  });
+
   it('leaves data from the current version alone', () => {
-    const v4 = { ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'lab' }] };
-    expect(migratePersisted(v4, 4, true)).toEqual(v4);
+    const v5 = {
+      ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'crusher' }],
+      mrfs: [{ id: 'm1', status: 'completed', history: [{ at: 5000, by: 'e6', status: 'completed', note: 'Done' }] }],
+    };
+    expect(migratePersisted(v5, 5, true)).toEqual(v5);
   });
 
   it('copes with nothing saved', () => {

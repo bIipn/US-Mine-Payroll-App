@@ -1,4 +1,4 @@
-import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, SAMPLE_AREA_SHEETS, shiftAt } from '../../domain/areaExam';
+import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, rowAnswer, SAMPLE_AREA_SHEETS, shiftAt } from '../../domain/areaExam';
 import { payPeriodOf, previousPayPeriod } from '../../domain/payPeriod';
 import { computePayroll, computeRange } from '../../domain/payroll';
 import { checklistFor } from '../../domain/templates';
@@ -141,6 +141,43 @@ describe('sample data', () => {
     expect(open.map((f) => !!f.mrfId).sort()).toEqual([false, true]);
     expect(open.find((f) => f.mrfId)?.foundAt).toBeGreaterThanOrEqual(today);
     expect(open.find((f) => !f.mrfId)?.foundAt).toBeLessThan(today);
+  });
+
+  it.each(DAYS)('numbers the maintenance requests in the order they were sent, opened at %d', (now) => {
+    const data = buildDemoData(now);
+    const byNumber = [...data.mrfs].sort((a, b) => a.number - b.number).map((m) => m.createdAt);
+    expect(byNumber).toEqual([...byNumber].sort((a, b) => a - b));
+  });
+
+  it.each(DAYS)('never passes a line while what was found on it is still open, opened at %d', (now) => {
+    const data = buildDemoData(now);
+    // An exam made after a condition was found, in the same area, does not mark that line OK.
+    for (const open of openFindings(data.exams)) {
+      const [page, id] = [open.key.slice(0, open.key.indexOf(':')), open.key.slice(open.key.indexOf(':') + 1)];
+      for (const exam of data.exams.filter((x) => x.sheetId === open.sheetId && x.submittedAt > open.foundAt)) {
+        const answer = page === 'row' ? rowAnswer(exam.rows.find((r) => r.id === id)!) : exam.conditions.find((c) => c.id === id)!.answer;
+        expect([exam.area, open.label, answer]).toEqual([exam.area, open.label, 'bo']);
+      }
+    }
+    // A unit with a request still open on a line does not pass that line on a later checklist.
+    for (const mrf of data.mrfs.filter((m) => m.status !== 'completed' && m.inspectionId)) {
+      const first = data.inspections.find((i) => i.id === mrf.inspectionId)!;
+      const lines = first.answers.filter((a) => a.answer === 'bo').map((a) => a.itemId);
+      const later = data.inspections.filter((i) => i.equipmentId === first.equipmentId && i.submittedAt > first.submittedAt);
+      for (const check of later) {
+        for (const line of lines) expect([mrf.number, line, check.answers.find((a) => a.itemId === line)?.answer]).toEqual([mrf.number, line, 'bo']);
+        // The later checklist points at the request that is already in, not at a new one.
+        expect(check.mrfId).toBe(mrf.id);
+      }
+    }
+  });
+
+  it('marks the outdoor conditions N/A only on the sheet of an indoor area, whatever its place in the list', () => {
+    const named = parseAreaSheets('North plant\nFeeder\n\nBag house\nFan\n\nYard\nGate\n\nAssay lab\nBalance');
+    const data = buildDemoData(DAYS[4], named);
+    const haulRoads = (area: string) => data.exams.filter((x) => x.area === area).map((x) => x.conditions.find((c) => c.id === 'haul_roads')?.answer);
+    expect(new Set(haulRoads('Assay lab'))).toEqual(new Set(['na']));
+    expect(new Set(haulRoads('Yard'))).toEqual(new Set(['ok']));
   });
 
   it('puts an exam made in the small hours on the night shift', () => {

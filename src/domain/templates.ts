@@ -1,3 +1,4 @@
+import { cleanText } from './roster';
 import type {
   Answer,
   ChecklistItem,
@@ -19,6 +20,18 @@ import type {
  */
 
 const CHECKLIST_VERSION = 1;
+/** The id on every checklist made on the card's 21 lines. */
+export const CHECKLIST_ID = 'operator_equipment_checklist';
+
+/**
+ * Whether a checklist was made on the card's lines. One signed before the card
+ * was built in keeps its own answers, which are not the 21 lines, so it is
+ * shown as an earlier checklist and never laid over the card's boxes.
+ */
+export const onTheCard = (inspection: { templateId: string }): boolean => inspection.templateId === CHECKLIST_ID;
+
+/** What a card or an export says in place of the boxes of an earlier checklist. */
+export const EARLIER_CHECKLIST = 'Made on the checklist used before this card, so its lines are not the ones printed here';
 
 /** The line that also takes the gallons of fuel added. */
 export const FUEL_LINE = 'fuel';
@@ -109,7 +122,7 @@ export function checklistFor(category: EquipmentCategory): ChecklistTemplate {
   const cached = cache.get(category);
   if (cached) return cached;
   const checklist: ChecklistTemplate = {
-    id: 'operator_equipment_checklist',
+    id: CHECKLIST_ID,
     title: 'Operator equipment checklist',
     version: CHECKLIST_VERSION,
     items: LINES.map((line) => ({ ...line, cfr: mshaFor(category, line.id), osha: oshaFor(category, line.id) })),
@@ -121,11 +134,15 @@ export function checklistFor(category: EquipmentCategory): ChecklistTemplate {
 /** The marks, the way they are written in a box on the card. */
 export const ANSWER_MARK: Record<Answer, string> = { ok: 'OK', bo: 'BO', na: 'N/A' };
 
-/** The legend printed at the foot of the card. */
+/**
+ * The legend printed at the foot of the card, word for word: each line follows
+ * its mark and an equals sign, as in "OK = inspection free of defects/concerns".
+ * The capitals and the punctuation are the paper's. Do not tidy them.
+ */
 export const ANSWER_LEGEND: Record<Answer, string> = {
-  ok: 'Inspection free of defects or concerns',
-  bo: 'Bad Order, needs repair. Safety items: red tag and report immediately',
-  na: 'Not applicable to this equipment',
+  ok: 'inspection free of defects/concerns',
+  bo: 'Bad Order, Needs Repair (Safety items; red tag and report immediately.)',
+  na: 'Not applicable to specific equipment',
 };
 
 export const CATEGORY_LABEL: Record<EquipmentCategory, string> = {
@@ -153,6 +170,29 @@ export function findItem(checklist: ChecklistTemplate, itemId: string): Checklis
 export function isHazard(checklist: ChecklistTemplate, answer: InspectionAnswer): boolean {
   if (answer.answer !== 'bo') return false;
   return !!answer.hazard || !!findItem(checklist, answer.itemId)?.critical;
+}
+
+const MARKS: Answer[] = ['ok', 'bo', 'na'];
+
+/**
+ * The answers as they go on the record: one for each line of the card, in the
+ * card's order. A note, or the mark that a defect is unsafe to run with, stays
+ * only on a Bad Order: one typed on a line that was then changed back to OK has
+ * been withdrawn. `blank` counts the lines with no OK, BO or N/A yet.
+ */
+export function signedAnswers(
+  checklist: ChecklistTemplate,
+  answers: InspectionAnswer[],
+): { answers: InspectionAnswer[]; blank: number } {
+  const marked = new Map(answers.filter((a) => MARKS.includes(a.answer)).map((a) => [a.itemId, a]));
+  const signed = checklist.items.flatMap((item): InspectionAnswer[] => {
+    const mark = marked.get(item.id);
+    if (!mark) return [];
+    const bad = mark.answer === 'bo';
+    const note = bad && mark.note ? cleanText(mark.note) : '';
+    return [{ itemId: item.id, answer: mark.answer, ...(note ? { note } : null), ...(bad && mark.hazard ? { hazard: true } : null) }];
+  });
+  return { answers: signed, blank: checklist.items.length - signed.length };
 }
 
 export function inspectionResult(checklist: ChecklistTemplate, answers: InspectionAnswer[]): InspectionResult {

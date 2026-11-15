@@ -4,9 +4,9 @@ import { View } from 'react-native';
 
 import { ChecklistCard } from '../../components/ChecklistCard';
 import { Button, EmptyState, Page, Txt } from '../../components/ui';
-import { dailyCards, dayHoursWorked } from '../../domain/checklistCard';
+import { dailyCards, dayClock } from '../../domain/checklistCard';
 import type { ScreenProps } from '../../navigation/types';
-import { employeeName, openShiftOf, useMe, useStore } from '../../store/useStore';
+import { employeeName, useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDate, fmtRelativeDay, startOfDay } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -33,10 +33,10 @@ export function ChecklistCardScreen({ navigation, route }: ScreenProps<'Checklis
     () => dailyCards({ inspections, opLogs, equipment }, employeeId, day),
     [inspections, opLogs, equipment, employeeId, day],
   );
-  const hours = dayHoursWorked(shifts, employeeId, day, now);
-  const stillWorking = today && !!openShiftOf(shifts, employeeId, now);
+  const clock = dayClock(shifts, employeeId, day, now);
   const name = employeeName(employees, employeeId);
-  const addUnit = () => navigation.navigate('Main', { screen: 'Equipment', params: { tab: 'equipment' } });
+  // Back to the tabs that are already under this screen, not a second copy of them on top.
+  const addUnit = () => navigation.popTo('Main', { screen: 'Equipment', params: { tab: 'equipment' } });
 
   return (
     <Page
@@ -59,8 +59,7 @@ export function ChecklistCardScreen({ navigation, route }: ScreenProps<'Checklis
             <ChecklistCard
               card={card}
               name={name}
-              hoursWorked={hours}
-              stillWorking={stillWorking}
+              clock={clock}
               onOpen={(inspectionId) => navigation.navigate('InspectionDetail', { inspectionId })}
             />
           </View>

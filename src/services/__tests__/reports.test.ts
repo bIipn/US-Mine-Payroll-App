@@ -93,7 +93,7 @@ describe('safety report', () => {
     const dozer = rows.find((r) => r.Unit === 'D-03')!;
     expect([dozer['Fire extinguisher'], dozer['Tires/nuts / pressure'], dozer['Bed condition']]).toEqual(['OK', 'N/A', 'N/A']);
     const tagged = rows.find((r) => r.Unit === 'EX-09')!;
-    expect([tagged['Seatbelts/DROPS/FOPS'], tagged.Result, tagged['MRF #']]).toEqual(['BO', 'Bad order', 1043]);
+    expect([tagged['Seatbelts/DROPS/FOPS'], tagged.Result, tagged['MRF #']]).toEqual(['BO', 'Bad order', 1044]);
     // "#" is the unit's column on that person's card for the day.
     const herrera = rows.filter((r) => r.Employee === 'Herrera, Luis').slice(-2);
     expect(herrera.map((r) => [r['#'], r.Unit])).toEqual([[1, 'EX-09'], [2, 'EX-07']]);
@@ -103,7 +103,7 @@ describe('safety report', () => {
     const exams = table(report.bytes, 4);
     expect(headers(report.bytes, 4)).toEqual(['Date', 'Shift', 'Area', 'Examined by', 'Time', 'Lines', 'OK', 'Bad Order', 'N/A', 'Still open', 'Result']);
     expect(exams).toHaveLength(data.exams.length);
-    expect(exams[exams.length - 1]).toMatchObject({ Shift: 'Day', Area: 'Lab', 'Examined by': 'Ruiz, Angela', Lines: 27, 'N/A': 6, Result: 'Clear' });
+    expect(exams[exams.length - 1]).toMatchObject({ Shift: 'Day', Area: 'Core shed', 'Examined by': 'Ruiz, Angela', Lines: 27, 'N/A': 6, Result: 'Clear' });
 
     const lines = table(report.bytes, 6);
     expect(lines).toHaveLength(data.exams.reduce((sum, exam) => sum + exam.rows.length + exam.conditions.length, 0));
@@ -113,9 +113,9 @@ describe('safety report', () => {
   it('lists each condition found, with the date it was fixed once there is one', () => {
     const found = table(report.bytes, 5);
     expect(found.map((r) => [r.Area, r.Line, r['Found in'], r['MRF #'], r.Status])).toEqual([
-      ['Wash plant', 'Ground conditions', 'Conditions', undefined, 'Fixed'],
-      ['Lab', 'Fire extinguishers', 'Conditions', undefined, 'Open'],
-      ['Wash plant', 'Slurry pump 3', 'Guarding', 1044, 'Open'],
+      ['Bagging plant', 'Ground conditions', 'Conditions', undefined, 'Fixed'],
+      ['Crusher', 'Fire extinguishers', 'Conditions', undefined, 'Open'],
+      ['Bagging plant', 'Bag conveyor', 'Guarding', 1043, 'Open'],
     ]);
     expect(found.map((r) => typeof r['Date fixed'])).toEqual(['number', 'undefined', 'undefined']);
     expect(found[0]).toMatchObject({ 'What was done': 'Rolled up the hose and hung it on the rack', 'Fixed by': 'Whitfield, Dana' });
@@ -132,8 +132,61 @@ describe('safety report', () => {
     expect([done.Unit, done['Assigned to'], done['Completed by'], done['Time spent (hrs)'], done.Remarks]).toEqual([
       'HT-21', 'Brooks, Tyler', 'Brooks, Tyler', 2.25, 'Replaced backup alarm and tested in reverse. Returned to service.',
     ]);
-    const fromExam = rows.find((r) => r['MRF #'] === 1044)!;
-    expect([fromExam.By, fromExam.Location, fromExam.Unit, fromExam.Status]).toEqual(['Whitfield, Dana', 'Wash plant: Slurry pump 3', undefined, 'Open']);
+    const fromExam = rows.find((r) => r['MRF #'] === 1043)!;
+    expect([fromExam.By, fromExam.Location, fromExam.Unit, fromExam.Status]).toEqual(['Whitfield, Dana', 'Bagging plant: Bag conveyor', undefined, 'Open']);
+  });
+
+  it('prints the legend of the card word for word on the checklist sheet', () => {
+    expect(sheetText(report.bytes, 1)[1]).toContain(
+      'OK = inspection free of defects/concerns. BO = Bad Order, Needs Repair (Safety items; red tag and report immediately.) N/A = Not applicable to specific equipment.',
+    );
+  });
+
+  it('keeps every Bad Order on the record after its unit is taken out of the fleet', () => {
+    const before = table(report.bytes, 2);
+    expect(before.length).toBeGreaterThanOrEqual(3);
+    const gone = { ...data, equipment: data.equipment.filter((e) => e.unit !== 'EX-09' && e.unit !== 'HT-21') };
+    const after = safetyReport(gone, addDays(to, -30), to, now).bytes;
+    expect(table(after, 2).map((r) => [r.Line, r['What was wrong']])).toEqual(before.map((r) => [r.Line, r['What was wrong']]));
+    expect(table(after, 2).filter((r) => r.Unit === 'Removed from fleet').map((r) => r.Line)).toEqual(['Backup alarm / horn', 'Seatbelts/DROPS/FOPS']);
+    // The request for it says the unit is gone. A request for a place in the plant never had one.
+    const requests = table(after, 7);
+    expect(requests.find((r) => r['MRF #'] === 1044)?.Unit).toBe('Removed from fleet');
+    expect(requests.find((r) => r['MRF #'] === 1043)?.Unit).toBeUndefined();
+  });
+
+  it('carries a condition that is still open into a later export, the way it carries a request', () => {
+    const onlyToday = safetyReport(data, startOfDay(now), to, now).bytes;
+    // Found before today and not fixed yet, then the one found this morning. The one fixed days ago is not repeated.
+    expect(table(onlyToday, 5).map((r) => [r.Area, r.Line, r.Status])).toEqual([
+      ['Crusher', 'Fire extinguishers', 'Open'],
+      ['Bagging plant', 'Bag conveyor', 'Open'],
+    ]);
+  });
+
+  it('names the gallons on the equipment use sheet for what they are: the ones added at the end of use', () => {
+    const head = headers(report.bytes, 3);
+    expect(head).toContain('Gallons at end of use');
+    expect(head).not.toContain('Gallons added');
+  });
+
+  it('says a checklist was made before the card, instead of showing 21 empty boxes and a line id', () => {
+    const first = data.inspections[0];
+    const old = {
+      ...first, templateId: 'preop_loader', templateVersion: 2, result: 'bad_order' as const, mrfId: undefined, comments: undefined,
+      answers: [{ itemId: 'fn_brakes', answer: 'bo' as const, note: 'Pedal fades' }, { itemId: 'fluid_levels', answer: 'ok' as const }],
+    };
+    const bytes = safetyReport({ ...data, inspections: [old, ...data.inspections.slice(1)] }, addDays(to, -30), to, now).bytes;
+    const lines = checklistFor('loader').items.map((i) => i.label);
+    const empty = table(bytes, 1).filter((r) => lines.every((line) => r[line] === undefined));
+    expect(empty).toHaveLength(1);
+    expect(empty[0].Comments).toBe('Made on the checklist used before this card, so its lines are not the ones printed here; Pedal fades');
+    expect(empty[0].Result).toBe('Bad order');
+    expect(table(bytes, 2).filter((r) => r.Line === 'Earlier checklist')).toEqual([
+      expect.objectContaining({ 'What was wrong': 'Pedal fades', 'Unsafe to run': 'Yes', MSHA: undefined }),
+    ]);
+    // Nothing shows a raw line id.
+    expect(table(bytes, 2).some((r) => r.Line === 'fn_brakes')).toBe(false);
   });
 });
 

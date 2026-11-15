@@ -1,4 +1,4 @@
-import { cardsBetween, dailyCards, dayHoursWorked } from '../checklistCard';
+import { cardsBetween, dailyCards, dayClock } from '../checklistCard';
 import { checklistFor } from '../templates';
 import { startedLunch } from '../time';
 import type { Equipment, Inspection, InspectionAnswer, OperatingLog, Shift } from '../types';
@@ -107,7 +107,7 @@ describe('cardsBetween', () => {
   });
 });
 
-describe('dayHoursWorked', () => {
+describe('dayClock', () => {
   const punch = (when: number) => ({ at: when });
   const shift = (id: string, employeeId: string, inAt: number, outAt?: number, lunchAt?: number): Shift => ({
     id, employeeId, clockIn: punch(inAt), clockOut: outAt ? punch(outAt) : undefined,
@@ -120,14 +120,24 @@ describe('dayHoursWorked', () => {
       shift('other-day', 'e1', at(12, 6, 0), at(12, 14, 30)),
       shift('other-person', 'e2', at(13, 6, 0), at(13, 14, 30)),
     ];
-    expect(dayHoursWorked(shifts, 'e1', at(13, 20), at(13, 20))).toBe(1225);
+    expect(dayClock(shifts, 'e1', at(13, 20), at(13, 20))).toEqual({ paid: 1225, running: false, noClockOut: false });
   });
 
   it('counts the hours so far for someone still on the clock', () => {
-    expect(dayHoursWorked([shift('s1', 'e1', at(13, 6, 0))], 'e1', day(13), at(13, 9, 30))).toBe(350);
+    expect(dayClock([shift('s1', 'e1', at(13, 6, 0))], 'e1', day(13), at(13, 9, 30))).toEqual({ paid: 350, running: true, noClockOut: false });
   });
 
   it('is zero on a day off', () => {
-    expect(dayHoursWorked([], 'e1', day(13), at(13, 9))).toBe(0);
+    expect(dayClock([], 'e1', day(13), at(13, 9))).toEqual({ paid: 0, running: false, noClockOut: false });
+  });
+
+  it('counts nothing for a shift that was never clocked out, as payroll does, and says so', () => {
+    const forgot = [shift('s1', 'e1', at(12, 6, 0))];
+    // The next morning, and three days on: the total does not keep growing.
+    expect(dayClock(forgot, 'e1', day(12), at(13, 10, 18))).toEqual({ paid: 0, running: false, noClockOut: true });
+    expect(dayClock(forgot, 'e1', day(12), at(16, 10, 18))).toEqual({ paid: 0, running: false, noClockOut: true });
+    // A second shift that day, clocked out properly, still counts.
+    const both = [shift('s0', 'e1', at(12, 1, 0), at(12, 5, 0)), ...forgot];
+    expect(dayClock(both, 'e1', day(12), at(13, 10, 18))).toEqual({ paid: 400, running: false, noClockOut: true });
   });
 });

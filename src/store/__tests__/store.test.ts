@@ -196,6 +196,35 @@ describe('equipment', () => {
       ok: false, error: 'Say what is wrong on each Bad Order.',
     });
     expect(s().inspections).toHaveLength(before);
+    // A mark that is not OK, BO or N/A is a line still blank.
+    const odd = answers('L-12', { gauges: { answer: 'fine' as unknown as InspectionAnswer['answer'] } });
+    expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: odd })).toEqual({
+      ok: false, error: 'Mark every line OK, BO or N/A. 1 is still blank.',
+    });
+    expect(s().inspections).toHaveLength(before);
+  });
+
+  it('signs nothing that was written on a line and then changed back to OK', () => {
+    const l12 = unit('L-12');
+    const result = s().submitInspection({
+      equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter,
+      answers: answers('L-12', { brakes: { answer: 'ok', note: 'Pedal fades', hazard: true }, lights: { answer: 'bo', note: ' Left work light out ' } }),
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.inspection.result).toBe('defect');
+    expect(result.inspection.answers.find((a) => a.itemId === 'brakes')).toEqual({ itemId: 'brakes', answer: 'ok' });
+    expect(result.inspection.answers.find((a) => a.itemId === 'lights')).toEqual({ itemId: 'lights', answer: 'bo', note: 'Left work light out' });
+    expect(unit('L-12').status).toBe('defect');
+  });
+
+  it('signs a checklist once, however many times the button lands', () => {
+    const l12 = unit('L-12');
+    const before = s().inspections.length;
+    const draft = { equipmentId: l12.id, startedAt: Date.now() - 300_000, meter: l12.meter, answers: answers('L-12') };
+    const first = s().submitInspection(draft);
+    expect(s().submitInspection(draft)).toEqual(first);
+    expect(s().inspections).toHaveLength(before + 1);
+    expect(s().opLogs.filter((l) => l.equipmentId === l12.id && !l.endAt)).toHaveLength(1);
   });
 
   it('takes a unit out of service on a safety Bad Order until the request is completed', () => {
@@ -246,9 +275,9 @@ describe('equipment', () => {
 });
 
 describe('maintenance requests', () => {
-  const request = () => {
+  const request = (description = 'Tail roller is seized') => {
     s().signInDemo('employee');
-    const result = s().createMrf({ location: ' Wash plant, slurry pump 3 ', priority: 'high', description: 'Packing gland is spraying', taggedOut: false });
+    const result = s().createMrf({ location: ' Bagging plant, bag conveyor ', priority: 'high', description, taggedOut: false });
     if (!result.ok) throw new Error(result.error);
     return result.mrf;
   };
@@ -256,11 +285,55 @@ describe('maintenance requests', () => {
 
   it('can be for a place in the plant instead of a fleet unit', () => {
     const mrf = request();
-    expect(mrf).toMatchObject({ requestedBy: 'emp_demo', location: 'Wash plant, slurry pump 3', status: 'open', createdAt: at(6, 15) });
+    expect(mrf).toMatchObject({ requestedBy: 'emp_demo', location: 'Bagging plant, bag conveyor', status: 'open', createdAt: at(6, 15) });
     expect(mrf.equipmentId).toBeUndefined();
     expect(s().createMrf({ priority: 'high', description: 'Something is loose', taggedOut: false })).toEqual({
       ok: false, error: 'Say where the problem is, or pick the unit it is on.',
     });
+  });
+
+  it('is sent once, however many times the button lands', () => {
+    const first = request();
+    const before = s().mrfs.length;
+    expect(s().createMrf({ location: 'Bagging plant, bag conveyor', priority: 'high', description: 'Tail roller is seized', taggedOut: false })).toEqual({
+      ok: false, error: `That request is already in: #${first.number}.`,
+    });
+    expect(s().mrfs).toHaveLength(before);
+    // Something else wrong in the same place is a request of its own.
+    expect(s().createMrf({ location: 'Bagging plant, bag conveyor', priority: 'high', description: 'Belt is tracking off', taggedOut: false })).toMatchObject({ ok: true });
+  });
+
+  it('is not sent for a unit or a checklist that is not there', () => {
+    s().signInDemo('employee');
+    const before = s().mrfs.length;
+    const l12 = unit('L-12');
+    expect(s().createMrf({ equipmentId: 'eq_nowhere', priority: 'high', description: 'Loose step', taggedOut: false })).toEqual({
+      ok: false, error: 'That unit is no longer in the fleet list.',
+    });
+    expect(s().createMrf({ equipmentId: l12.id, inspectionId: 'insp_nowhere', priority: 'high', description: 'Loose step', taggedOut: false })).toEqual({
+      ok: false, error: 'That checklist is not on record for this unit.',
+    });
+    // A checklist made on another unit cannot be attached to this one.
+    const other = s().inspections.find((i) => i.equipmentId !== l12.id)!;
+    expect(s().createMrf({ equipmentId: l12.id, inspectionId: other.id, priority: 'high', description: 'Loose step', taggedOut: false })).toMatchObject({ ok: false });
+    expect(s().mrfs).toHaveLength(before);
+  });
+
+  it('is sent once for a checklist: the next one says which request is already in', () => {
+    s().signInDemo('employee');
+    const wt = unit('WT-01');
+    const check = s().submitInspection({
+      equipmentId: wt.id, startedAt: Date.now(), meter: wt.meter,
+      answers: answers('WT-01', { lights: { answer: 'bo', note: 'Left tail light out' } }),
+    });
+    if (!check.ok) throw new Error(check.error);
+    const input = { equipmentId: wt.id, inspectionId: check.inspection.id, priority: 'high' as const, taggedOut: false };
+    const first = s().createMrf({ ...input, description: 'Left tail light is out' });
+    if (!first.ok) throw new Error(first.error);
+    expect(s().createMrf({ ...input, description: 'Tail light, again' })).toEqual({
+      ok: false, error: `Maintenance request #${first.mrf.number} is already in for this checklist.`,
+    });
+    expect(s().inspections.find((i) => i.id === check.inspection.id)?.mrfId).toBe(first.mrf.id);
   });
 
   it('fills in the rest of the paper form as the work is done', () => {
@@ -272,16 +345,16 @@ describe('maintenance requests', () => {
     // The person it is assigned to does the work and signs it off.
     s().signInDemo('employee');
     jest.setSystemTime(at(8, 0));
-    expect(s().startMrf(id, 'Pump locked out')).toEqual({ ok: true });
+    expect(s().startMrf(id, 'Conveyor locked out')).toEqual({ ok: true });
     jest.setSystemTime(at(9, 30));
-    expect(s().completeMrf(id, { remarks: ' Repacked the gland and ran it for ten minutes ', timeSpent: 150 })).toEqual({ ok: true });
+    expect(s().completeMrf(id, { remarks: ' Replaced the tail roller and ran it for ten minutes ', timeSpent: 150 })).toEqual({ ok: true });
     expect(saved(id)).toMatchObject({
       status: 'completed',
       assignedTo: 'emp_demo',
       completedAt: at(9, 30),
       completedBy: 'emp_demo',
       timeSpent: 150,
-      remarks: 'Repacked the gland and ran it for ten minutes',
+      remarks: 'Replaced the tail roller and ran it for ten minutes',
     });
     expect(saved(id).history.map((h) => [h.status, h.by, h.assignedTo])).toEqual([
       ['open', 'emp_demo', undefined],
@@ -299,6 +372,38 @@ describe('maintenance requests', () => {
     expect([saved(id).status, saved(id).assignedTo]).toEqual(['open', undefined]);
     s().signInDemo('supervisor');
     expect(s().assignMrf(id, 'nobody')).toMatchObject({ ok: false });
+    // Not to someone who has been taken off the roster, and not once it is completed.
+    s().setEmployeeActive('e06', false);
+    expect(s().assignMrf(id, 'e06')).toEqual({ ok: false, error: 'Pick someone on the roster.' });
+    expect(s().completeMrf(id, { remarks: 'Replaced the tail roller' })).toEqual({ ok: true });
+    expect(s().assignMrf(id, 'e03')).toEqual({ ok: false, error: 'That request is already completed.' });
+    expect(s().assignMrf('mrf_nowhere', 'e03')).toEqual({ ok: false, error: 'That request no longer exists.' });
+  });
+
+  it('is completed by whoever closes it, unless a supervisor says the person it is assigned to did the work', () => {
+    let belt = 0;
+    const closedBy = (input: { completedBy?: string }, as: 'supervisor' | 'employee' = 'supervisor', assignTo = 'e06') => {
+      const { id } = request(`Tail roller is seized on belt ${++belt}`);
+      s().signInDemo('supervisor');
+      s().assignMrf(id, assignTo);
+      s().signInDemo(as);
+      const result = s().completeMrf(id, { remarks: `Replaced the tail roller ${id}`, ...input });
+      return { result, mrf: saved(id) };
+    };
+    // Said nothing: the name on the form is the person who closed it.
+    const plain = closedBy({});
+    expect([plain.result, plain.mrf.completedBy]).toEqual([{ ok: true }, 'sup_demo']);
+    // The supervisor closes it out for the mechanic who did the work. History still shows who entered it.
+    const forMechanic = closedBy({ completedBy: 'e06' });
+    expect([forMechanic.result, forMechanic.mrf.completedBy, forMechanic.mrf.history.slice(-1)[0].by]).toEqual([{ ok: true }, 'e06', 'sup_demo']);
+    // Nobody can put a third person's name on the work.
+    const third = closedBy({ completedBy: 'e03' });
+    expect(third.result).toEqual({ ok: false, error: 'Completed by is you, or the person the request is assigned to.' });
+    expect(third.mrf.status).toBe('open');
+    // The person it is assigned to signs for their own work, not for someone else.
+    const assignee = closedBy({ completedBy: 'sup_demo' }, 'employee', 'emp_demo');
+    expect(assignee.result).toMatchObject({ ok: false });
+    expect(closedBy({}, 'employee', 'emp_demo').mrf.completedBy).toBe('emp_demo');
   });
 
   it('is not closed without saying what was done, or with a time spent that makes no sense', () => {
@@ -327,7 +432,7 @@ describe('pre shift exams', () => {
     change(d);
     return d;
   };
-  const lampOut = (d: ExamDraft) => { d.conditions.lighting = { answer: 'bo', note: 'Lamp out over the sump' }; };
+  const lampOut = (d: ExamDraft) => { d.conditions.lighting = { answer: 'bo', note: 'Lamp out over the conveyor' }; };
   const saved = (id: string) => s().exams.find((e) => e.id === id)!;
 
   it('records who examined the area, when, and every line', () => {
@@ -374,12 +479,82 @@ describe('pre shift exams', () => {
     expect(s().markFixed(result.exam.id, 'cond:lighting')).toEqual({ ok: true });
   });
 
+  it('is signed once, however many times the button lands', () => {
+    s().signInDemo('employee');
+    const before = s().exams.length;
+    const same = draft(lampOut);
+    const first = s().submitExam(same);
+    expect(s().submitExam(same)).toEqual(first);
+    expect(s().exams).toHaveLength(before + 1);
+    // Going round the same area again later is a new exam.
+    expect(s().submitExam({ ...draft(), startedAt: Date.now() })).toMatchObject({ ok: true });
+    expect(s().exams).toHaveLength(before + 2);
+  });
+
+  it('is not made on a sheet a supervisor has taken off the list', () => {
+    s().signInDemo('supervisor');
+    s().setAreaSheetActive(sheet().id, false);
+    const before = s().exams.length;
+    expect(s().submitExam(draft())).toEqual({ ok: false, error: 'That area sheet is no longer on the list.' });
+    expect(s().exams).toHaveLength(before);
+  });
+
+  it('only sends a request for a Bad Order that is open and has no request yet', () => {
+    s().signInDemo('employee');
+    const result = s().submitExam(draft(lampOut));
+    if (!result.ok) throw new Error(result.error);
+    const before = s().mrfs.length;
+    // `null` leaves the exam out; a parameter default would put it back in for `undefined`.
+    const send = (findingKey: string | undefined, examId: string | null = result.exam.id) =>
+      s().createMrf({
+        location: `${sheet().title}: Lighting`, priority: 'high', description: `Lamp out, ${findingKey}, ${examId}`, taggedOut: false,
+        examId: examId ?? undefined, findingKey,
+      });
+
+    // A line that was marked OK, a key with no page, an exam that is not there, and half a link.
+    expect(send('cond:berms')).toEqual({ ok: false, error: 'That line is not a Bad Order on this exam.' });
+    expect(send('lighting')).toEqual({ ok: false, error: 'That line is not a Bad Order on this exam.' });
+    expect(send('cond:lighting', 'exam_nowhere')).toEqual({ ok: false, error: 'That line is not a Bad Order on this exam.' });
+    expect(send(undefined)).toEqual({ ok: false, error: 'That line is not a Bad Order on this exam.' });
+    expect(send('cond:lighting', null)).toEqual({ ok: false, error: 'That line is not a Bad Order on this exam.' });
+    expect(s().mrfs).toHaveLength(before);
+    expect(s().exams.find((x) => x.id === result.exam.id)).toEqual(result.exam);
+
+    const first = send('cond:lighting');
+    if (!first.ok) throw new Error(first.error);
+    expect(send('cond:lighting')).toEqual({ ok: false, error: `Maintenance request #${first.mrf.number} is already in for this.` });
+    expect(examFindings(saved(result.exam.id))[0].mrfId).toBe(first.mrf.id);
+
+    // Once the date fixed is on the record there is nothing left to send.
+    const again = s().submitExam({ ...draft(lampOut), startedAt: Date.now() });
+    if (!again.ok) throw new Error(again.error);
+    expect(s().markFixed(again.exam.id, 'cond:lighting', 'Changed the lamp')).toEqual({ ok: true });
+    expect(send('cond:lighting', again.exam.id)).toEqual({ ok: false, error: 'The date it was fixed is already on the record.' });
+    expect(s().mrfs).toHaveLength(before + 1);
+  });
+
+  it('keeps the first date fixed when the request is completed after the line was marked fixed by hand', () => {
+    s().signInDemo('supervisor');
+    const result = s().submitExam(draft(lampOut));
+    if (!result.ok) throw new Error(result.error);
+    const mrf = s().createMrf({
+      location: `${sheet().title}: Lighting`, priority: 'high', description: 'Lamp out over the conveyor', taggedOut: false,
+      examId: result.exam.id, findingKey: 'cond:lighting',
+    });
+    if (!mrf.ok) throw new Error(mrf.error);
+    jest.setSystemTime(at(9, 5));
+    expect(s().markFixed(result.exam.id, 'cond:lighting', 'Changed the lamp')).toEqual({ ok: true });
+    jest.setSystemTime(at(13, 40));
+    expect(s().completeMrf(mrf.mrf.id, { remarks: 'Replaced the ballast as well' })).toEqual({ ok: true });
+    expect(saved(result.exam.id).conditions.find((c) => c.id === 'lighting')?.fixed).toEqual({ at: at(9, 5), by: 'sup_demo', note: 'Changed the lamp' });
+  });
+
   it('sends a condition on a maintenance request, and dates the fix when the request is completed', () => {
     s().signInDemo('employee');
     const result = s().submitExam(draft(lampOut));
     if (!result.ok) throw new Error(result.error);
     const mrf = s().createMrf({
-      location: `${sheet().title}: Lighting`, priority: 'high', description: 'Lamp out over the sump', taggedOut: false,
+      location: `${sheet().title}: Lighting`, priority: 'high', description: 'Lamp out over the conveyor', taggedOut: false,
       examId: result.exam.id, findingKey: 'cond:lighting',
     });
     if (!mrf.ok) throw new Error(mrf.error);
@@ -398,24 +573,24 @@ describe('area sheets', () => {
   it('let a supervisor add a sheet, change its lines and take it off the list', () => {
     s().signInDemo('supervisor');
     const before = s().areaSheets.length;
-    const added = s().addAreaSheet(' Clay side ', 'Feeder\nBelt');
-    expect(added).toMatchObject({ ok: true, sheet: { id: 'clay_side', title: 'Clay side', active: true } });
+    const added = s().addAreaSheet(' Wash bay ', 'Feeder\nBelt');
+    expect(added).toMatchObject({ ok: true, sheet: { id: 'wash_bay', title: 'Wash bay', active: true } });
     expect(s().areaSheets).toHaveLength(before + 1);
     expect(s().addAreaSheet('  ', 'Feeder')).toEqual({ ok: false, error: 'Give the sheet the name of its work area.' });
-    expect(s().addAreaSheet('clay SIDE', 'Feeder')).toEqual({ ok: false, error: 'There is already a sheet called Clay side.' });
+    expect(s().addAreaSheet('wash BAY', 'Feeder')).toEqual({ ok: false, error: 'There is already a sheet called Wash bay.' });
 
-    expect(s().updateAreaSheet('clay_side', 'Clay plant', 'Feeder\nBelt\nPug mill')).toEqual({ ok: true });
-    const sheet = s().areaSheets.find((x) => x.id === 'clay_side')!;
-    expect([sheet.title, sheet.rows.map((r) => r.label)]).toEqual(['Clay plant', ['Feeder', 'Belt', 'Pug mill']]);
+    expect(s().updateAreaSheet('wash_bay', 'Truck wash', 'Feeder\nBelt\nHose reel')).toEqual({ ok: true });
+    const sheet = s().areaSheets.find((x) => x.id === 'wash_bay')!;
+    expect([sheet.title, sheet.rows.map((r) => r.label)]).toEqual(['Truck wash', ['Feeder', 'Belt', 'Hose reel']]);
 
-    s().setAreaSheetActive('clay_side', false);
-    expect(s().areaSheets.find((x) => x.id === 'clay_side')?.active).toBe(false);
+    s().setAreaSheetActive('wash_bay', false);
+    expect(s().areaSheets.find((x) => x.id === 'wash_bay')?.active).toBe(false);
   });
 
   it('are not something an employee can change', () => {
     s().signInDemo('employee');
     const before = s().areaSheets;
-    expect(s().addAreaSheet('Clay side', 'Feeder')).toMatchObject({ ok: false });
+    expect(s().addAreaSheet('Wash bay', 'Feeder')).toMatchObject({ ok: false });
     expect(s().updateAreaSheet(before[0].id, 'Renamed', 'One line')).toMatchObject({ ok: false });
     s().setAreaSheetActive(before[0].id, false);
     expect(s().areaSheets).toEqual(before);
@@ -443,10 +618,10 @@ describe('area sheets', () => {
     expect(s().exams.length).toBeGreaterThan(5);
     expect(new Set(s().exams.map((e) => e.area))).toEqual(new Set(['North plant', 'Bag house']));
     // A sheet named later reaches a phone whose data was already saved, once.
-    const more = [...named, ...parseAreaSheets('Clay side')];
+    const more = [...named, ...parseAreaSheets('Wash bay')];
     s().ensureSeeded(null, more);
     s().ensureSeeded(null, more);
-    expect(s().areaSheets.map((x) => x.title)).toEqual(['North plant', 'Bag house', 'Clay side']);
+    expect(s().areaSheets.map((x) => x.title)).toEqual(['North plant', 'Bag house', 'Wash bay']);
   });
 });
 
