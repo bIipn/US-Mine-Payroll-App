@@ -196,6 +196,14 @@ describe('equipment', () => {
       ok: false, error: 'Say what is wrong on each Bad Order.',
     });
     expect(s().inspections).toHaveLength(before);
+    // A card needs the hours off the machine: a reading that is not a number never reaches the fleet list.
+    for (const meter of [Number.NaN, -5, Number.POSITIVE_INFINITY]) {
+      expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter, answers: answers('L-12') })).toEqual({
+        ok: false, error: 'Enter the reading off the machine.',
+      });
+    }
+    expect(unit('L-12').meter).toBe(l12.meter);
+    expect(s().inspections).toHaveLength(before);
     // A mark that is not OK, BO or N/A is a line still blank.
     const odd = answers('L-12', { gauges: { answer: 'fine' as unknown as InspectionAnswer['answer'] } });
     expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: odd })).toEqual({

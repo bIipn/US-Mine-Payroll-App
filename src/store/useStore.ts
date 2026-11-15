@@ -513,6 +513,8 @@ export const useStore = create<Store>()(
             (i) => i.equipmentId === unit.id && i.employeeId === session.employeeId && i.startedAt === draft.startedAt,
           );
           if (signed) return { ok: true, inspection: signed };
+          // "Equp. hrs st" is a reading off the machine. Anything else would go on the card and into the fleet list.
+          if (!Number.isFinite(draft.meter) || draft.meter < 0) return { ok: false, error: 'Enter the reading off the machine.' };
           const template = checklistFor(unit.category);
           // Nothing is signed with a line of the card left blank, or a Bad Order that does not say what is wrong.
           const { answers, blank } = signedAnswers(template, draft.answers);
