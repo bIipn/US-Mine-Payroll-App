@@ -4,13 +4,14 @@ import { StyleSheet, View } from 'react-native';
 
 import { PaperLine, PaperRow, PaperSheet } from '../../components/Paper';
 import { StandardRefs } from '../../components/Standards';
-import { Avatar, Button, Divider, Field, Notice, Page, Panel, Row, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
+import { Avatar, Button, Divider, Field, Notice, Page, Panel, Row, Segmented, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
+import { examFindings, openFindings } from '../../domain/areaExam';
 import type { Employee, MrfEvent, MrfPriority, MrfStatus } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
 import { employeeName, useMe, useStore } from '../../store/useStore';
 import { color, space, type Tone } from '../../theme/theme';
-import { fmtDateTime, fmtHrs, fmtMeter, fullName, initials, toHundredths } from '../../util/format';
+import { fmtDate, fmtDateTime, fmtHrs, fmtMeter, fullName, initials, toHundredths } from '../../util/format';
 
 export const MRF_STATUS: Record<MrfStatus, { label: string; tone: Tone }> = {
   open: { label: 'Open', tone: 'bo' },
@@ -41,9 +42,12 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
   const employees = useStore((s) => s.employees);
   const { assignMrf, startMrf, completeMrf, showToast } = useStore.getState();
 
+  const exams = useStore((s) => s.exams);
+
   const [sheet, setSheet] = useState<'assign' | 'start' | 'complete' | null>(null);
   const [note, setNote] = useState('');
   const [hours, setHours] = useState('');
+  const [doneBy, setDoneBy] = useState<'assignee' | 'me'>('assignee');
   const [error, setError] = useState<string | null>(null);
 
   if (!mrf || !me) return null;
@@ -55,10 +59,18 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
   const name = (id?: string) => (id ? employeeName(employees, id) : '');
   const where = [unit ? `${unit.unit} ${unit.make} ${unit.model}` : '', mrf.location ?? ''].filter(Boolean).join(', ');
   const crew = employees.filter((e) => e.active).sort((a, b) => Number(isMaintenance(b)) - Number(isMaintenance(a)) || a.lastName.localeCompare(b.lastName));
+  // A supervisor closing a request out for the person it is assigned to says whose work it was.
+  const forSomeone = supervisor && !!mrf.assignedTo && mrf.assignedTo !== me.id;
+  // The line on the pre shift exam this request was sent for, and the same line found again since.
+  const exam = exams.find((x) => x.id === mrf.examId);
+  const finding = exam && mrf.findingKey ? examFindings(exam).find((f) => f.key === mrf.findingKey) : undefined;
+  const foundAgain = exam && finding ? openFindings(exams, exam.sheetId).filter((f) => f.key === finding.key && f.examId !== exam.id) : [];
+  const live = () => useStore.getState().mrfs.find((m) => m.id === mrf.id);
 
   const open = (next: typeof sheet) => {
     setNote('');
     setHours('');
+    setDoneBy('assignee');
     setError(null);
     setSheet(next);
   };
@@ -69,6 +81,8 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
   };
 
   const start = () => {
+    // A second tap that lands while the sheet is closing has nothing left to do.
+    if (live()?.status !== 'open') return;
     const result = startMrf(mrf.id, note);
     if (!result.ok) return fail(result.error);
     haptic.success();
@@ -77,14 +91,30 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
   };
 
   const complete = () => {
+    if (live()?.status === 'completed') return;
     const typed = hours.trim();
     const value = Number(typed);
     if (typed && !(Number.isFinite(value) && value > 0)) return fail('Enter the time spent in hours, like 1.5.');
     // Hours typed as a decimal are kept as hundredths, the way the timesheet does.
-    const result = completeMrf(mrf.id, { remarks: note, timeSpent: typed ? toHundredths(value * 60) : undefined });
+    const result = completeMrf(mrf.id, {
+      remarks: note,
+      timeSpent: typed ? toHundredths(value * 60) : undefined,
+      completedBy: forSomeone && doneBy === 'assignee' ? mrf.assignedTo : undefined,
+    });
     if (!result.ok) return fail(result.error);
     haptic.success();
-    showToast(unit && mrf.taggedOut ? `Request #${mrf.number} completed. ${unit.unit} is back in service.` : `Request #${mrf.number} completed`);
+    // Say what is true of the unit now: another request can still have it red tagged.
+    const now = unit ? useStore.getState().equipment.find((e) => e.id === unit.id)?.status : undefined;
+    const again = foundAgain[0];
+    if (again) {
+      showToast(`Request #${mrf.number} completed. The same line is still open on the exam of ${fmtDate(again.foundAt)}.`, 'warn');
+    } else if (unit && mrf.taggedOut && now === 'out_of_service') {
+      showToast(`Request #${mrf.number} completed. ${unit.unit} stays red tagged on another request.`, 'warn');
+    } else if (unit && mrf.taggedOut) {
+      showToast(`Request #${mrf.number} completed. ${unit.unit} is back in service.`);
+    } else {
+      showToast(`Request #${mrf.number} completed`);
+    }
     setSheet(null);
   };
 
@@ -233,11 +263,37 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
             hint="Leave blank if you did not keep track."
           />
         ) : null}
-        {sheet === 'complete' && unit && mrf.taggedOut ? (
-          <Txt v="small" c={color.silica}>Completing this takes the red tag off and puts the unit back in service.</Txt>
+        {sheet === 'complete' && forSomeone ? (
+          <View style={{ gap: 6 }}>
+            <Txt v="smallStrong">Who did the work?</Txt>
+            <Segmented<'assignee' | 'me'>
+              testID="mrf-done-by"
+              value={doneBy}
+              onChange={setDoneBy}
+              options={[{ value: 'assignee', label: name(mrf.assignedTo) }, { value: 'me', label: 'I did' }]}
+            />
+            <Txt v="small" c={color.silica}>
+              That name goes on the form as Completed by. The history shows that you entered it.
+            </Txt>
+          </View>
         ) : null}
-        {sheet === 'complete' && mrf.examId ? (
-          <Txt v="small" c={color.silica}>Today goes on the pre shift exam as the date this was fixed.</Txt>
+        {sheet === 'complete' && !forSomeone ? (
+          <Txt v="small" c={color.silica}>Your name, {fullName(me)}, goes on the form as Completed by.</Txt>
+        ) : null}
+        {sheet === 'complete' && unit && mrf.taggedOut ? (
+          <Txt v="small" c={color.silica}>Completing this takes this request's red tag off. The unit goes back in service unless another request still has it tagged.</Txt>
+        ) : null}
+        {sheet === 'complete' && finding ? (
+          <Txt v="small" c={color.silica}>
+            {finding.fixed
+              ? `The pre shift exam already has ${fmtDate(finding.fixed.at)} as the date this was fixed. That date stands.`
+              : 'Today goes on the pre shift exam as the date this was fixed.'}
+          </Txt>
+        ) : null}
+        {sheet === 'complete' && foundAgain.length > 0 ? (
+          <Txt v="small" c={color.red}>
+            The same line was found again on {fmtDate(foundAgain[0].foundAt)} and is still open on that exam. Completing this does not close it there.
+          </Txt>
         ) : null}
         <Button
           testID="mrf-apply"

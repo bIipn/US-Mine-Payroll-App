@@ -616,8 +616,12 @@ export function ToastHost() {
     if (!toast) return;
     opacity.setValue(0);
     Animated.timing(opacity, { toValue: 1, duration: 160, useNativeDriver: Platform.OS !== 'web' }).start();
+    const shown = toast;
     const timer = setTimeout(() => {
-      Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: Platform.OS !== 'web' }).start(() => clear());
+      Animated.timing(opacity, { toValue: 0, duration: 200, useNativeDriver: Platform.OS !== 'web' }).start(({ finished }) => {
+        // A newer message can arrive while this one is fading out. That one is not this one's to clear.
+        if (finished && useStore.getState().toast === shown) clear();
+      });
     }, 3200);
     return () => clearTimeout(timer);
   }, [toast, opacity, clear]);

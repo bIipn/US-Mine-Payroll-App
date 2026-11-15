@@ -3,6 +3,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, ProgressBar, Sheet, Tag, TopBar, Txt, TriChoice, UnitPlate } from '../../components/ui';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, FUEL_LINE } from '../../domain/templates';
@@ -39,6 +40,13 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
 
   const checklist = useMemo(() => (unit ? checklistFor(unit.category) : undefined), [unit]);
   const items = checklist?.items ?? [];
+
+  // Once anything is marked or written, leaving asks first. Signing lets go of the guard before it moves on.
+  const sent = useRef(false);
+  const guard = useLeaveGuard(navigation, Object.keys(draft).length > 0 || !!comments.trim() || !!gallons.trim(), {
+    title: 'Leave this checklist?',
+    body: 'It is not signed yet. What you have marked on it will be lost.',
+  });
 
   if (!unit || !checklist || !me) return null;
 
@@ -88,6 +96,8 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
   };
 
   const submit = () => {
+    // One card for one signature, however many times the button lands.
+    if (sent.current) return;
     const answers: InspectionAnswer[] = items.map((i) => ({
       itemId: i.id,
       answer: draft[i.id].answer,
@@ -106,10 +116,12 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
       showToast(result.error, 'bo');
       return;
     }
+    sent.current = true;
     setSigning(false);
     if (result.inspection.result === 'pass') haptic.success();
     else haptic.warning();
-    navigation.replace('InspectionResult', { inspectionId: result.inspection.id });
+    const inspectionId = result.inspection.id;
+    guard.done(() => navigation.replace('InspectionResult', { inspectionId }));
   };
 
   return (
@@ -302,6 +314,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
         />
         <Button testID="submit-preop" label="Submit checklist" kind={hazard ? 'red' : 'yellow'} disabled={!certified} onPress={submit} />
       </Sheet>
+      {guard.sheet}
     </KeyboardAvoidingView>
   );
 }

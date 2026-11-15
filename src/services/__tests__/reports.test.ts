@@ -190,6 +190,24 @@ describe('safety report', () => {
   });
 });
 
+describe('an hourly rate', () => {
+  it('never goes in an export, whoever makes it', () => {
+    // A rate nothing else in the sample data comes to: $912.34 an hour, kept as cents.
+    const data = { ...buildDemoData(now), payRates: { emp_demo: 91234, e03: 91234 } };
+    const period = payPeriodOf(now);
+    const to = addDays(startOfDay(now), 1);
+    const books = [
+      payrollReport(data, { start: period.start, end: period.end, payDate: period.payDate }, now).bytes,
+      safetyReport(data, addDays(to, -30), to, now).bytes,
+    ];
+    for (const bytes of books) {
+      const everything = Object.values(unzipSync(bytes)).map((file) => strFromU8(file)).join('\n');
+      expect(everything).not.toMatch(/912\.34|91234/);
+      expect(everything.toLowerCase()).not.toContain('hourly rate');
+    }
+  });
+});
+
 /** The column headings of a worksheet, left to right. */
 function headers(bytes: Uint8Array, index: number): (string | number)[] {
   return Object.values(sheetRows(bytes, index)[2]);

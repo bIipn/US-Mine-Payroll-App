@@ -57,7 +57,7 @@ This is a working preview. Every flow above runs, on sample data.
 | **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export |
 | **Sample data** | 14 made-up employees, 14 made-up units, 3 made-up work areas, about five weeks of punches and two weeks of checklists and exams. Nothing in it is a real US Mine record |
 | **The mine's own sheets** | The equipment checklist and the conditions page are the mine's, line for line. The area sheets in this repository are made-up samples: a build names the real ones in `.env.local`, or a supervisor types them in (see The paper forms) |
-| **To confirm with the mine** | Which lines of the equipment checklist are safety items that always red tag the unit (the app uses fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls). What "DROPS" on the card stands for (it is shown as printed). Which shifts there are (the app offers day and night) |
+| **To confirm with the mine** | Which lines of the equipment checklist are safety items that always red tag the unit (the app uses fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls). What "DROPS" on the card stands for (it is shown as printed). Which shifts there are (the paper leaves "Date+Shift" blank; the app offers day and night). Whether N/A belongs on the pre shift exam (the paper has only OK and Bad Order; the app adds N/A so a line that does not apply can still be answered). Whether to keep the one spelling the app puts right on the conditions page ("accesible"). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks) |
 | **To confirm with payroll** | Which way a pay date moves when the 5th or 20th is a weekend or bank holiday (the app moves it to the banking day before), and which holidays are paid |
 | **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet |
 | **Keep the paper for now** | The standard asks for exam records to be kept for a year and shown to MSHA on request. Until the shared backend holds them, a record made in this preview lives on one device, so it does not replace the paper yet |
@@ -73,7 +73,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 281 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
+npm test           # 328 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -98,15 +98,26 @@ Three of the mine's paper forms are built in. The app keeps their wording and th
 
 **Operator Equipment Checklist.** One card for every piece of equipment at the mine. Its 21 lines are in `src/domain/templates.ts` exactly as printed, from Fire extinguisher to Bed condition, each marked OK, BO or N/A:
 
-- OK is an inspection free of defects or concerns.
-- BO is Bad Order, needs repair. A Bad Order on a safety item red tags the unit and is reported right away.
-- N/A is a line that does not apply to that equipment, such as tires on a dozer.
+```
+OK = inspection free of defects/concerns
+BO = Bad Order, Needs Repair (Safety items; red tag and report immediately.)
+N/A = Not applicable to specific equipment
+```
+
+That is the legend at the foot of the card, word for word, and it is what the app shows. The card does not say which lines are the safety items, so the app has to: see "To confirm with the mine" above. A note written on a Bad Order goes on the record only while the line is a Bad Order; change the line back to OK and the note is withdrawn with it.
 
 The unit goes on the person's card for the day with its equipment hours at the start. Ending use adds the hours at the end and any gallons added. The card screen lays the day out as the paper does: up to four numbered columns against the lines, the comments, and the legend. A fifth unit starts a second card.
 
 **Pre Shift Exam.** The examination of a work area before work starts in it on the shift. Page one is the area's own sheet: each line is checked for guarding, electrical and safe access. Page two is the same for every area: 20 conditions, each OK or Bad Order. On the phone a line is one tap for OK or N/A; a Bad Order asks which column it is in and what was found. A Bad Order stays open on the area, and on the supervisor's board, until its date fixed is recorded. That happens one of two ways: the examiner or a supervisor marks it fixed, or the maintenance request it was sent on is completed.
 
-**Maintenance Request.** By, date, location and problem when it is sent; assigned to, date completed, time spent, completed by and remarks as the work is done. A supervisor assigns it. A supervisor, or the person it is assigned to, starts and completes it.
+A few things the phone does that the paper leaves to the person:
+
+- What is written goes under the line it belongs to, under the paper's "Notes / Date fixed" heading, because a phone has no room for that column.
+- A line with a condition still open says so when the area is examined again, and "Rest are OK" passes over it, so it is looked at and marked by hand. Marking it OK does not close the earlier finding: only its own date fixed does. The same line found again on a later exam is a record of its own.
+- A Bad Order marked as a danger shows as "Danger, keep out" wherever the area is listed, ahead of anything else that is open.
+- Leaving a half-filled exam or checklist asks first, so a back swipe in gloves does not throw the marks away. Each is signed once, however many times the button lands.
+
+**Maintenance Request.** By, date, location and problem when it is sent; assigned to, date completed, time spent, completed by and remarks as the work is done. A supervisor assigns it. A supervisor, or the person it is assigned to, starts and completes it; the person it is assigned to finds it on their Clock screen and under My records. "Completed by" is whoever closes it. A supervisor closing one out for the person it is assigned to is asked who did the work, and the history shows who entered it. A request is only ever for something that is there: a unit in the fleet, a checklist made on that unit, or a Bad Order that is still open and has no request yet. The crew calls the form an MRF, so the exports head its number "MRF #".
 
 ### Area sheets
 

@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { BellRing, ChevronRight, ClipboardCheck, Coffee, Factory, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils } from '../../components/icons';
+import { BellRing, ChevronRight, ClipboardCheck, Coffee, Factory, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils, Wrench } from '../../components/icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -271,6 +271,8 @@ export function ClockScreen() {
 
           {shift ? <PreShiftChecks employeeId={me.id} now={now} /> : null}
 
+          <AssignedToMe employeeId={me.id} />
+
           {myUnits.length > 0 ? (
             <Panel title="You have checked out" flush>
               {myUnits.map((log) => {
@@ -391,6 +393,35 @@ function PreShiftChecks({ employeeId, now }: { employeeId: string; now: number }
         right={units > 0 ? <Tag label="Done" tone="ok" /> : undefined}
         chevron
         onPress={() => open('equipment')}
+      />
+    </Panel>
+  );
+}
+
+/**
+ * Maintenance requests waiting on this person. A supervisor assigns a request;
+ * the person it is assigned to works it, and this is where they find out.
+ */
+function AssignedToMe({ employeeId }: { employeeId: string }) {
+  const navigation = useNavigation();
+  const mrfs = useStore((s) => s.mrfs);
+  const equipment = useStore((s) => s.equipment);
+  const mine = mrfs.filter((m) => m.assignedTo === employeeId && m.status !== 'completed');
+  if (mine.length === 0) return null;
+  const first = mine[0];
+  const unit = equipment.find((e) => e.id === first.equipmentId);
+  return (
+    <Panel title="Assigned to you" flush>
+      <Row
+        testID="go-my-requests"
+        left={<Wrench color={color.ink} size={26} />}
+        title={mine.length === 1 ? `Maintenance request #${first.number}` : `${mine.length} maintenance requests`}
+        sub={mine.length === 1 ? `${unit ? unit.unit : (first.location ?? 'In the plant')}. ${first.description}` : 'Open the list to see what each one is'}
+        right={<Tag label={mine.some((m) => m.taggedOut) ? 'Red tagged' : mine.some((m) => m.status === 'open') ? 'To start' : 'In progress'} tone={mine.some((m) => m.taggedOut) ? 'bo' : 'warn'} />}
+        chevron
+        onPress={() =>
+          mine.length === 1 ? navigation.navigate('MrfDetail', { mrfId: first.id }) : navigation.navigate('MyRecords', { tab: 'requests' })
+        }
       />
     </Panel>
   );

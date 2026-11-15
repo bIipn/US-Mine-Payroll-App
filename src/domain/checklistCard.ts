@@ -20,6 +20,8 @@ export interface CardColumn {
   unit?: Equipment;
   hoursStart: number;
   hoursEnd?: number;
+  /** Someone has the unit checked out on this checklist and has not ended use. A unit that was parked never is. */
+  inUse: boolean;
   /** Gallons added, at the check and at the end of use together. */
   fuelGal?: number;
 }
@@ -58,6 +60,7 @@ function buildCards(data: CardData, employeeId: string, day: number, checks: Ins
         unit,
         hoursStart: inspection.meter,
         hoursEnd: log?.endMeter,
+        inUse: !!log && log.endAt == null,
         fuelGal: inspection.fuelGal == null && log?.fuelGal == null ? undefined : gallons,
       });
 

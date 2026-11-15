@@ -40,6 +40,31 @@ describe('dailyCards', () => {
     ]);
   });
 
+  it('says a unit is in use only while someone has it checked out', () => {
+    const inspections = [
+      check('ran', 'L-12', at(13, 6)),
+      check('running', 'HT-21', at(13, 7)),
+      // A defect the operator parked the unit for: it was checked and never run.
+      check('parked', 'D-03', at(13, 8), { result: 'defect', decision: 'parked' }),
+    ];
+    const opLogs = [use('ran', 'L-12', { endAt: at(13, 6, 50), endMeter: 101 }), use('running', 'HT-21')];
+    const [card] = dailyCards({ inspections, opLogs, equipment: fleet }, 'e1', day(13));
+    expect(card.columns.map((c) => [c.unit?.unit, c.inUse])).toEqual([['L-12', false], ['HT-21', true], ['D-03', false]]);
+  });
+
+  it('says so when a checklist was made before the card, and keeps what was written on it', () => {
+    const old = check('old', 'L-12', at(13, 6), {
+      templateId: 'preop_loader', result: 'bad_order',
+      answers: [{ itemId: 'fn_brakes', answer: 'bo', note: 'Pedal fades' }, { itemId: 'fluid_levels', answer: 'ok' }],
+    });
+    const [card] = dailyCards({ inspections: [old, check('new', 'HT-21', at(13, 9), { answers: answers({ lights: { answer: 'bo', note: 'Lamp out' } }) })], opLogs: [], equipment: fleet }, 'e1', day(13));
+    expect(card.comments).toEqual([
+      { n: 1, text: 'Made on the checklist used before this card, so its lines are not the ones printed here' },
+      { n: 1, text: 'Pedal fades' },
+      { n: 2, text: 'Lights: Lamp out' },
+    ]);
+  });
+
   it('starts a second card after four units, as the paper would', () => {
     const inspections = ['L-12', 'HT-21', 'D-03', 'G-02', 'WT-01'].map((name, i) => check(`i${i}`, name, at(13, 6 + i)));
     const cards = dailyCards({ inspections, opLogs: [], equipment: fleet }, 'e1', day(13));

@@ -1,11 +1,12 @@
-import { Plus, Trash } from '../../components/icons';
+import { Plus, Siren, Trash } from '../../components/icons';
 import React, { useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, IconButton, MultiChoice, Notice, ProgressBar, Segmented, Sheet, Tag, TopBar, Txt, TriChoice } from '../../components/ui';
-import { AREA_CONDITIONS, EXAM_COLUMNS, openFindings, shiftAt, SHIFTS, type ExamDraft } from '../../domain/areaExam';
+import { AREA_CONDITIONS, EXAM_COLUMNS, openFindings, shiftAt, SHIFTS, type ExamDraft, type Finding } from '../../domain/areaExam';
 import type { Answer, ExamColumn, ShiftName } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -37,6 +38,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
   const me = useMe();
   const sheet = useStore((s) => s.areaSheets.find((x) => x.id === route.params.sheetId));
   const exams = useStore((s) => s.exams);
+  const mrfs = useStore((s) => s.mrfs);
   const allowAllOk = useStore((s) => s.settings.allowSectionAllOk);
   const { submitExam, showToast } = useStore.getState();
 
@@ -54,6 +56,20 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
   const [showMissing, setShowMissing] = useState(false);
 
   const stillOpen = useMemo(() => (sheet ? openFindings(exams, sheet.id) : []), [exams, sheet]);
+  /** What is still open on each line, by the line's key. A danger comes first, then the newest. */
+  const openOn = useMemo(() => {
+    const byLine = new Map<string, Finding>();
+    for (const finding of stillOpen) if (!byLine.has(finding.key)) byLine.set(finding.key, finding);
+    return byLine;
+  }, [stillOpen]);
+
+  // Once anything is marked, leaving asks first. Signing lets go of the guard before it moves on.
+  const sent = useRef(false);
+  const dirty = Object.keys(rows).length + Object.keys(conditions).length + others.length > 0;
+  const guard = useLeaveGuard(navigation, dirty, {
+    title: 'Leave this exam?',
+    body: 'It is not signed yet. What you have marked on it will be lost.',
+  });
 
   if (!sheet || !me) return null;
 
@@ -91,7 +107,9 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
       showToast(
         left > 0
           ? `${left} ${left === 1 ? 'line still needs' : 'lines still need'} an answer`
-          : 'Finish each Bad Order: what is wrong, and where',
+          : others.some((o) => !o.label.trim())
+            ? 'Name the line you added under Other, or take it off'
+            : 'Finish each Bad Order: what is wrong, and where',
         'warn',
       );
       return;
@@ -100,6 +118,8 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
   };
 
   const submit = () => {
+    // One exam for one signature, however many times the button lands.
+    if (sent.current) return;
     const draft: ExamDraft = {
       sheetId: sheet.id,
       shift,
@@ -113,10 +133,31 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
       showToast(result.error, 'bo');
       return;
     }
+    sent.current = true;
     setSigning(false);
     if (counts.bo > 0) haptic.warning();
     else haptic.success();
-    navigation.replace('AreaExamDetail', { examId: result.exam.id, fresh: true });
+    const examId = result.exam.id;
+    guard.done(() => navigation.replace('AreaExamDetail', { examId, fresh: true }));
+  };
+
+  /** A reminder on a line that has a condition open from an earlier exam. */
+  const openNote = (key: string, answer?: Answer) => {
+    const open = openOn.get(key);
+    if (!open) return null;
+    const request = open.mrfId ? mrfs.find((m) => m.id === open.mrfId) : undefined;
+    return (
+      <View testID={`open-${key}`} style={styles.open}>
+        <Txt v="smallStrong" c={color.red}>{open.danger ? 'Danger, still open' : 'Still open'} from {fmtDate(open.foundAt)}</Txt>
+        <Txt v="small" c={color.inkSoft}>
+          {open.note ?? open.where}
+          {request ? `. Maintenance request #${request.number} is in.` : ''}
+        </Txt>
+        {answer === 'ok' || answer === 'na' ? (
+          <Txt v="small" c={color.inkSoft}>Marking it here does not close it. If it has been fixed, the date fixed goes on that exam.</Txt>
+        ) : null}
+      </View>
+    );
   };
 
   const place = (key: string) => (e: { nativeEvent: { layout: { y: number } } }) => {
@@ -158,24 +199,33 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
     </View>
   );
 
+  // "Rest are OK" passes over a line that has a condition still open: that one is looked at and marked by hand.
   const restOk = (which: 'rows' | 'conditions') => {
+    const skipped =
+      which === 'rows'
+        ? sheet.rows.filter((r) => !rows[r.id] && openOn.has(`row:${r.id}`)).length
+        : AREA_CONDITIONS.filter((c) => !conditions[c.id] && openOn.has(`cond:${c.id}`)).length;
     if (which === 'rows') {
       setRows((d) => {
         const next = { ...d };
-        for (const r of sheet.rows) if (!next[r.id]) next[r.id] = blank('ok');
+        for (const r of sheet.rows) if (!next[r.id] && !openOn.has(`row:${r.id}`)) next[r.id] = blank('ok');
         return next;
       });
       setOthers((list) => list.map((o) => (o.mark ? o : { ...o, mark: blank('ok') })));
     } else {
       setConditions((d) => {
         const next = { ...d };
-        for (const c of AREA_CONDITIONS) if (!next[c.id]) next[c.id] = blank('ok');
+        for (const c of AREA_CONDITIONS) if (!next[c.id] && !openOn.has(`cond:${c.id}`)) next[c.id] = blank('ok');
         return next;
       });
     }
+    if (skipped > 0) {
+      showToast(skipped === 1 ? 'One line has a condition still open. Mark that one yourself.' : `${skipped} lines have a condition still open. Mark those yourself.`, 'warn');
+    }
   };
-  const rowsLeft = sheet.rows.some((r) => !rows[r.id]) || others.some((o) => !o.mark);
-  const conditionsLeft = AREA_CONDITIONS.some((c) => !conditions[c.id]);
+  const rowsLeft = sheet.rows.some((r) => !rows[r.id] && !openOn.has(`row:${r.id}`)) || others.some((o) => !o.mark);
+  const conditionsLeft = AREA_CONDITIONS.some((c) => !conditions[c.id] && !openOn.has(`cond:${c.id}`));
+  const dangerOpen = stillOpen.some((f) => f.danger);
 
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -199,11 +249,18 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
         </View>
 
         {stillOpen.length > 0 ? (
-          <Notice
-            tone="bo"
-            title={stillOpen.length === 1 ? 'One condition is still open here' : `${stillOpen.length} conditions are still open here`}
-            body={stillOpen.map((f) => `${f.label}: ${f.note ?? f.where}`).join('\n')}
-          />
+          <View testID="exam-still-open">
+            <Notice
+              tone="bo"
+              icon={dangerOpen ? Siren : undefined}
+              title={
+                dangerOpen
+                  ? 'A danger is still open here. People stay out until it is fixed.'
+                  : stillOpen.length === 1 ? 'One condition is still open here' : `${stillOpen.length} conditions are still open here`
+              }
+              body={stillOpen.map((f) => `${f.danger ? 'Danger. ' : ''}${f.label}: ${f.note ?? f.where}`).join('\n')}
+            />
+          </View>
         ) : null}
 
         <View style={styles.sectionHead}>
@@ -226,6 +283,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
           return (
             <View key={row.id} testID={`line-row-${row.id}`} onLayout={place(`row-${row.id}`)} style={[styles.item, flagged && styles.itemFlagged, mark?.answer === 'bo' && styles.itemBad]}>
               <Txt v="strong">{row.label}</Txt>
+              {openNote(`row:${row.id}`, mark?.answer)}
               <TriChoice testID={`row-${row.id}`} value={mark?.answer} onChange={(answer) => setRow(row.id, { answer })} />
               {mark?.answer === 'bo' ? badOrder(`row-${row.id}`, mark, (patch) => setRow(row.id, patch), true) : null}
             </View>
@@ -280,6 +338,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
               <Txt v="strong">{condition.label}</Txt>
               {condition.detail ? <Txt v="small" c={color.silica}>{condition.detail}</Txt> : null}
               <StandardRefs refs={condition.refs} />
+              {openNote(`cond:${condition.id}`, mark?.answer)}
               <TriChoice testID={`cond-${condition.id}`} value={mark?.answer} onChange={(answer) => setCondition(condition.id, { answer })} />
               {mark?.answer === 'bo' ? badOrder(`cond-${condition.id}`, mark, (patch) => setCondition(condition.id, patch), false) : null}
             </View>
@@ -320,6 +379,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
         />
         <Button testID="exam-submit" label="Submit exam" kind={danger ? 'red' : 'yellow'} disabled={!certified} onPress={submit} />
       </Sheet>
+      {guard.sheet}
     </KeyboardAvoidingView>
   );
 }
@@ -349,6 +409,7 @@ const styles = StyleSheet.create({
   itemBad: { borderColor: color.red, borderWidth: 2.5, padding: space.lg - 1.5 },
   otherHead: { flexDirection: 'row', alignItems: 'flex-end', gap: space.sm },
   bad: { gap: space.md, marginTop: 4, padding: space.md, borderRadius: radius.md, backgroundColor: color.redTint },
+  open: { gap: 2, paddingVertical: space.sm, paddingHorizontal: space.md, borderLeftWidth: 4, borderLeftColor: color.red, backgroundColor: color.redTint },
   footer: {
     paddingHorizontal: space.lg,
     paddingTop: space.md,

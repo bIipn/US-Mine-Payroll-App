@@ -2,7 +2,8 @@ import { Factory, Plus } from '../../components/icons';
 import React, { useState } from 'react';
 import { View } from 'react-native';
 
-import { Button, Divider, EmptyState, Field, Page, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
+import { Button, Divider, EmptyState, Field, Notice, Page, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
+import { openFindings } from '../../domain/areaExam';
 import type { AreaSheet } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -38,16 +39,29 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
   };
 
   const save = () => {
-    const result = current ? updateAreaSheet(current.id, title, rows) : addAreaSheet(title, rows);
-    if (!result.ok) {
+    // The toast gives the name as it was saved: a heading typed as "North Plant areas:" is kept as "North Plant".
+    let saved: string | undefined;
+    let problem: string | undefined;
+    if (current) {
+      const result = updateAreaSheet(current.id, title, rows);
+      if (result.ok) saved = useStore.getState().areaSheets.find((s) => s.id === current.id)?.title;
+      else problem = result.error;
+    } else {
+      const result = addAreaSheet(title, rows);
+      if (result.ok) saved = result.sheet.title;
+      else problem = result.error;
+    }
+    if (problem != null) {
       haptic.error();
-      setError(result.error);
+      setError(problem);
       return;
     }
     haptic.success();
-    showToast(current ? `${title.trim()} sheet saved` : `${title.trim()} sheet added`);
+    showToast(`${saved ?? title.trim()} sheet ${current ? 'saved' : 'added'}`);
     setEditing(null);
   };
+  /** Conditions found in the area being changed that have no date fixed yet. */
+  const openHere = current ? openFindings(exams, current.id).length : 0;
 
   return (
     <Page
@@ -129,6 +143,15 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
           <Txt v="small" c={color.silica}>Exams already signed keep the lines they were made on.</Txt>
         ) : null}
         <Button testID="sheet-save" label={current ? 'Save the sheet' : 'Add the sheet'} kind="ink" onPress={save} />
+        {current && openHere > 0 ? (
+          <View testID="sheet-open-warning">
+            <Notice
+              tone="bo"
+              title={openHere === 1 ? 'One condition is still open in this area' : `${openHere} conditions are still open in this area`}
+              body="Off the list, the crew no longer sees the area or what is open in it. It stays on the Crew board until its date fixed is recorded."
+            />
+          </View>
+        ) : null}
         {current ? (
           <Button
             testID="sheet-remove"
@@ -136,7 +159,12 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
             kind="outline"
             onPress={() => {
               setAreaSheetActive(current.id, false);
-              showToast(`${current.title} taken off the list`, 'info');
+              showToast(
+                openHere > 0
+                  ? `${current.title} taken off the list. ${openHere} still open on the Crew board.`
+                  : `${current.title} taken off the list`,
+                openHere > 0 ? 'warn' : 'info',
+              );
               setEditing(null);
             }}
           />

@@ -21,7 +21,8 @@ export type RootStackParamList = {
   ShiftDetail: { shiftId: string };
   Site: undefined;
   Standards: undefined;
-  MyRecords: undefined;
+  /** `tab` opens it on one of its three lists. */
+  MyRecords: { tab?: 'cards' | 'exams' | 'requests' } | undefined;
   OnSite: undefined;
   TimeLogs: undefined;
   SafetyLog: undefined;

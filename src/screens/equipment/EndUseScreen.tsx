@@ -1,5 +1,5 @@
 import { Wrench } from '../../components/icons';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
@@ -23,6 +23,7 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   const [notes, setNotes] = useState('');
   const [parked, setParked] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sent = useRef(false);
 
   if (!log || !unit) return null;
 
@@ -31,6 +32,8 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   const used = Number.isFinite(meterValue) && meter.trim() ? meterValue - log.startMeter : null;
 
   const submit = () => {
+    // A second tap that lands while the screen is going would go back twice.
+    if (sent.current) return;
     if (!meter.trim() || !Number.isFinite(meterValue)) {
       setError('Enter the reading off the machine.');
       return;
@@ -46,6 +49,7 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
       setError(result.error);
       return;
     }
+    sent.current = true;
     haptic.success();
     showToast(`${unit.unit} checked back in`);
     navigation.goBack();

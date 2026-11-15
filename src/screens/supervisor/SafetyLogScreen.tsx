@@ -2,7 +2,7 @@ import { ClipboardCheck, Factory, FileSpreadsheet } from '../../components/icons
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Button, Chips, Divider, EmptyState, Page, Panel, Row, Segmented, Tag, UnitPlate } from '../../components/ui';
+import { Button, Chips, Divider, EmptyState, Page, Panel, Row, Segmented, Tag, Txt, UnitPlate } from '../../components/ui';
 import { examFindings, examResult } from '../../domain/areaExam';
 import { cardsBetween } from '../../domain/checklistCard';
 import type { ScreenProps } from '../../navigation/types';
@@ -15,6 +15,8 @@ import { useNow } from '../../util/hooks';
 
 type Tab = 'cards' | 'exams';
 type Range = '1' | '7' | '30';
+/** The most rows the list shows at once. */
+const SHOWN = 120;
 
 /** Safety's record of the two paper forms: everyone's equipment cards, and the pre shift exams. */
 export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
@@ -71,11 +73,12 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
         <EmptyState icon={ClipboardCheck} title="Nothing in this range" body="Widen the range to see earlier records." />
       ) : tab === 'cards' ? (
         <Panel flush>
-          {cards.slice(0, 120).map((card, n) => {
+          {cards.slice(0, SHOWN).map((card, n) => {
             const units = card.columns.map((c) => c.unit?.unit ?? 'Removed');
             const bad = card.columns.filter((c) => c.inspection.result === 'bad_order').length;
             const defects = card.columns.filter((c) => c.inspection.result === 'defect').length;
-            const inUse = card.columns.filter((c) => c.inspection.result !== 'bad_order' && c.hoursEnd == null && card.day === startOfDay(now)).length;
+            // Only a unit someone still has checked out: one that was parked after a defect never ran.
+            const inUse = card.columns.filter((c) => c.inUse).length;
             return (
               <View key={`${card.employeeId}-${card.day}-${n}`}>
                 {n > 0 ? <Divider inset={space.lg} /> : null}
@@ -102,7 +105,7 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
         </Panel>
       ) : (
         <Panel flush>
-          {made.slice(0, 120).map((exam, n) => {
+          {made.slice(0, SHOWN).map((exam, n) => {
             const result = examResult(exam);
             const open = examFindings(exam).filter((f) => !f.fixed).length;
             return (
@@ -130,6 +133,12 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
           })}
         </Panel>
       )}
+      {/* The number on the tab is every record in the range. Say so when the list under it is shorter. */}
+      {shown > SHOWN ? (
+        <Txt v="small" c={color.silica} style={{ paddingHorizontal: 4 }}>
+          Showing the latest {SHOWN} of {shown}. The Excel export has all of them.
+        </Txt>
+      ) : null}
     </Page>
   );
 }

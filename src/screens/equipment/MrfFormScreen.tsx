@@ -1,5 +1,5 @@
 import { Truck, X } from '../../components/icons';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Button, Divider, Field, IconButton, Notice, Page, Panel, Row, Segmented, Sheet, Toggle, Txt, UnitPlate } from '../../components/ui';
@@ -43,8 +43,11 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
   const [error, setError] = useState<{ field: 'location' | 'problem'; text: string } | null>(null);
 
   const taggedOut = !!unit && (priority === 'safety' || tagged);
+  const sent = useRef(false);
 
   const submit = () => {
+    // One request for one tap on Send, however many land before the screen has gone.
+    if (sent.current) return;
     if (!unit && !location.trim()) {
       haptic.error();
       setError({ field: 'location', text: 'Say where the problem is, or pick the unit it is on.' });
@@ -68,6 +71,7 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
       setError({ field: 'problem', text: result.error });
       return;
     }
+    sent.current = true;
     haptic.success();
     showToast(`Maintenance request #${result.mrf.number} sent`);
     if (inspection || finding) navigation.goBack();

@@ -1,10 +1,10 @@
 import { useNavigation } from '@react-navigation/native';
-import { Factory, ListChecks, Wrench } from '../../components/icons';
+import { Factory, ListChecks, Siren, Wrench } from '../../components/icons';
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
-import { Button, Divider, EmptyState, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
+import { Button, Divider, EmptyState, Notice, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
 import { openFindings, SHIFTS } from '../../domain/areaExam';
 import type { AreaExam } from '../../domain/types';
 import { employeeName, useMe, useStore } from '../../store/useStore';
@@ -55,19 +55,27 @@ export function AreaList({ now }: { now: number }) {
         <Panel flush>
           {active.map((s, i) => {
             const exam = latest.get(s.id);
-            const waiting = open.filter((f) => f.sheetId === s.id).length;
+            const here = open.filter((f) => f.sheetId === s.id);
+            const waiting = here.length;
+            // A danger is not one more open item: people stay out of the area, so the row says so.
+            const danger = here.some((f) => f.danger);
             return (
               <View key={s.id}>
                 {i > 0 ? <Divider inset={space.lg} /> : null}
                 <Row
                   testID={`area-${s.id}`}
-                  left={<View style={styles.areaIcon}><Factory color={color.ink} size={24} /></View>}
+                  left={
+                    <View style={[styles.areaIcon, danger && { backgroundColor: color.red }]}>
+                      {danger ? <Siren color={color.white} size={24} /> : <Factory color={color.ink} size={24} />}
+                    </View>
+                  }
                   title={s.title}
                   sub={exam ? `Examined at ${fmtTime(exam.submittedAt)} by ${by(exam)}` : 'Not examined yet today'}
                   below={
                     <>
+                      {danger ? <Tag label="Danger, keep out" tone="bo" solid icon={Siren} /> : null}
                       <Tag label={exam ? 'Examined today' : 'Exam due'} tone={exam ? 'ok' : 'warn'} />
-                      {waiting > 0 ? <Tag label={`${waiting} open`} tone="bo" solid /> : null}
+                      {waiting > 0 ? <Tag label={`${waiting} open`} tone="bo" solid={!danger} /> : null}
                     </>
                   }
                   chevron
@@ -100,17 +108,25 @@ export function AreaList({ now }: { now: number }) {
               {` The sheet has ${sheet.rows.length} ${sheet.rows.length === 1 ? 'line' : 'lines'} of its own and the 20 conditions.`}
             </Txt>
 
+            {sheetOpen.some((f) => f.danger) ? (
+              <View testID="area-danger">
+                <Notice tone="bo" icon={Siren} title="A danger is open here" body="People stay out of the area until it is fixed. Check with your supervisor before you go in." />
+              </View>
+            ) : null}
+
             {sheetOpen.length > 0 ? (
               <View style={styles.openBox}>
                 <Txt v="smallStrong" c={color.red} style={{ paddingHorizontal: space.lg }}>
                   {sheetOpen.length === 1 ? 'Still open in this area' : `${sheetOpen.length} still open in this area`}
                 </Txt>
-                {sheetOpen.slice(0, 4).map((f) => (
+                {/* Every one of them, a danger first, so the count above is the number of rows under it. */}
+                {sheetOpen.map((f) => (
                   <Row
                     key={`${f.examId}-${f.key}`}
                     testID={`open-${f.key}`}
                     title={f.label}
                     sub={`${f.note ?? f.where}. Found ${fmtRelativeDay(f.foundAt, now).toLowerCase()}.`}
+                    below={f.danger ? <Tag label="Danger" tone="bo" solid icon={Siren} /> : f.mrfId ? <Tag label="With maintenance" tone="bo" /> : undefined}
                     chevron
                     onPress={() => go(() => navigation.navigate('AreaExamDetail', { examId: f.examId }))}
                   />

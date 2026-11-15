@@ -31,6 +31,8 @@ export function ExamSheet({ exam, examiner, nameOf, mrfNumber }: {
     if (!line.note && !line.fixed && number == null) return null;
     return (
       <View style={styles.notes}>
+        {/* The heading of the paper's last column. There is no room for a column, so it sits over what was written. */}
+        <Text style={styles.notesHead}>Notes / Date fixed</Text>
         {line.note ? <Text style={[styles.note, !line.fixed && { color: color.red }]}>{line.note}</Text> : null}
         {line.danger ? <Text style={[styles.note, { color: color.red, fontFamily: font.bodyBold }]}>Marked as a danger. People kept out.</Text> : null}
         {number != null ? <Text style={styles.noteSmall}>Maintenance request #{number}</Text> : null}
@@ -127,7 +129,8 @@ const styles = StyleSheet.create({
   lineText: { fontFamily: font.cond, fontSize: 16, lineHeight: 19, color: color.ink },
   detail: { fontFamily: font.body, fontSize: 13, color: color.silica },
   other: { fontFamily: font.body, fontSize: 13, color: color.silica },
-  notes: { gap: 2, paddingHorizontal: space.sm, paddingBottom: 6, paddingTop: 1, backgroundColor: color.kaolin },
+  notes: { gap: 2, paddingHorizontal: space.sm, paddingBottom: 6, paddingTop: 3, backgroundColor: color.kaolin },
+  notesHead: { fontFamily: font.cond, fontSize: 11.5, lineHeight: 14, letterSpacing: 0.3, textTransform: 'uppercase', color: color.silica },
   note: { fontFamily: font.bodySemi, fontSize: 13.5, lineHeight: 18, color: color.ink },
   noteSmall: { fontFamily: font.body, fontSize: 12.5, lineHeight: 16, color: color.silica },
 });

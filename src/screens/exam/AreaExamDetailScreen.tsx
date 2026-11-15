@@ -7,7 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { ExamSheet } from '../../components/ExamSheet';
 import { StandardRefs, StepCard } from '../../components/Standards';
 import { Button, Field, IconButton, Sheet, Tag, Txt } from '../../components/ui';
-import { examCounts, examFindings, SHIFTS, type Finding } from '../../domain/areaExam';
+import { examCounts, examFindings, openFindings, SHIFTS, type Finding } from '../../domain/areaExam';
 import { AREA_CONDITION_STEPS, AREA_DANGER_STEPS } from '../../domain/standards';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -22,7 +22,8 @@ import { fmtDate, fmtDateTime, fmtTime } from '../../util/format';
 export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExamDetail'>) {
   const insets = useSafeAreaInsets();
   const me = useMe();
-  const exam = useStore((s) => s.exams.find((x) => x.id === route.params.examId));
+  const exams = useStore((s) => s.exams);
+  const exam = exams.find((x) => x.id === route.params.examId);
   const employees = useStore((s) => s.employees);
   const mrfs = useStore((s) => s.mrfs);
   const { markFixed, showToast } = useStore.getState();
@@ -41,6 +42,10 @@ export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExa
   const shift = SHIFTS.find((s) => s.id === exam.shift)?.label.toLowerCase() ?? exam.shift;
   const canFix = me.role === 'supervisor' || exam.employeeId === me.id;
   const mrfOf = (id?: string) => mrfs.find((m) => m.id === id);
+  // The same line found again on another exam of this area is a record of its own: each keeps
+  // its own date fixed, so nothing here closes it. The person is told it is there.
+  const elsewhere = openFindings(exams, exam.sheetId).filter((f) => f.examId !== exam.id);
+  const alsoOpen = (key: string) => elsewhere.filter((f) => f.key === key);
 
   const look =
     found.length === 0
@@ -67,7 +72,9 @@ export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExa
       return;
     }
     haptic.success();
-    showToast(`${fixing.label} marked fixed`);
+    const again = alsoOpen(fixing.key)[0];
+    if (again) showToast(`${fixing.label} marked fixed here. It is still open on the exam of ${fmtDate(again.foundAt)}.`, 'warn');
+    else showToast(`${fixing.label} marked fixed`);
     setFixing(null);
     setNote('');
   };
@@ -127,6 +134,20 @@ export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExa
                         kind="quiet"
                         onPress={() => navigation.navigate('MrfDetail', { mrfId: mrf.id })}
                       />
+                    ) : null}
+                    {!f.fixed && alsoOpen(f.key).length > 0 ? (
+                      <View testID={`also-open-${f.key}`} style={{ gap: 6 }}>
+                        <Txt v="small" c={color.red}>
+                          Also found on this line on {fmtDate(alsoOpen(f.key)[0].foundAt)}
+                          {alsoOpen(f.key).length > 1 ? `, and ${alsoOpen(f.key).length - 1} more` : ''}, and still open there. Each exam gets its own date fixed.
+                        </Txt>
+                        <Button
+                          label="See that exam"
+                          size="md"
+                          kind="quiet"
+                          onPress={() => navigation.push('AreaExamDetail', { examId: alsoOpen(f.key)[0].examId })}
+                        />
+                      </View>
                     ) : null}
                     {!f.fixed ? (
                       <View style={styles.actions}>
