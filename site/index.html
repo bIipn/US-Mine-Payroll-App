@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MineMuster: coming soon</title>
+<meta name="description" content="MineMuster is shift software for mine crews: the time clock, the equipment checklist, the pre shift exam, maintenance requests and payroll hours, on the crew's phones. Coming soon.">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://minemuster.com/">
+<link rel="icon" type="image/png" sizes="48x48" href="favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MineMuster">
+<meta property="og:url" content="https://minemuster.com/">
+<meta property="og:title" content="MineMuster: coming soon">
+<meta property="og:description" content="Shift software for mine crews: the time clock, the equipment checklist, the pre shift exam, maintenance requests and payroll hours, on the phone. Coming soon.">
+<meta property="og:image" content="https://minemuster.com/brand/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="MineMuster">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MineMuster: coming soon">
+<meta name="twitter:description" content="Shift software for mine crews: the time clock, the equipment checklist, the pre shift exam, maintenance requests and payroll hours, on the phone. Coming soon.">
+<meta name="twitter:image" content="https://minemuster.com/brand/og-image.png">
+<meta name="twitter:image:alt" content="MineMuster">
+<style>
+@font-face{font-family:"Barlow";src:url("fonts/barlow-500.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:"Barlow Condensed";src:url("fonts/barlow-condensed-600.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"Barlow Condensed";src:url("fonts/barlow-condensed-700.woff2") format("woff2");font-weight:700;font-style:normal;font-display:swap}
+
+:root{
+  --black:#000;
+  --panel:#0b0b0b;
+  --ink-1:#f4f4f2;   /* headings, 19:1 on black */
+  --ink-2:#cfd3d8;   /* body, 14:1 on black */
+  --ink-3:#a4aab2;   /* small print, 9:1 on black */
+  --steel:#cfd2d5;
+  --rule:#34373a;
+  --yellow:#ffc400;  /* the app's action colour, used here only for the status light */
+  --gutter:clamp(1rem,5vw,4rem);
+  --text:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --cond:"Barlow Condensed","Arial Narrow","Roboto Condensed",sans-serif;
+  --logo-ratio:2.1563; /* the logo is 1600 x 742 */
+  --reserve:20rem;     /* height kept free under the logo for the words above the fold */
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--black);-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;background:var(--black);color:var(--ink-2);font:500 1.125rem/1.55 var(--text);font-synthesis:none;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+img{display:block;max-width:100%;height:auto}
+h1,h2,h3,p,ol,ul{margin:0}
+::selection{background:var(--yellow);color:#1c1b19}
+:focus-visible{outline:3px solid var(--yellow);outline-offset:3px}
+
+.wrap{width:100%;max-width:72rem;margin-inline:auto;padding-inline:var(--gutter)}
+
+/* ---------- The sign: the logo, what it is, and that it is coming ---------- */
+.hero{position:relative;text-align:center;padding:clamp(2.5rem,8vh,6rem) 0 clamp(3rem,8vh,5.5rem)}
+.hero::after{ /* a rule that fades out at both ends, like the lines beside MINE MUSTER */
+  content:"";position:absolute;left:0;right:0;bottom:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(207,210,213,.5) 50%,transparent)}
+
+/* The logo takes the width of a phone and never grows so tall that the words under it fall below the fold. */
+.logo{margin-inline:auto;line-height:0;
+  width:min(100%,47.5rem,max(17.5rem,(100vh - var(--reserve)) * var(--logo-ratio)));
+  width:min(100%,47.5rem,max(17.5rem,(100svh - var(--reserve)) * var(--logo-ratio)))}
+.logo img{width:100%}
+
+.lede{max-width:24ch;margin:clamp(1.25rem,3.5vh,2.25rem) auto 0;color:var(--ink-1);font-size:clamp(1.5rem,1.05rem + 1.9vw,2.375rem);line-height:1.22;letter-spacing:-.005em;text-wrap:balance}
+.sub{max-width:36rem;margin:1rem auto 0;color:var(--ink-2);font-size:clamp(1.0625rem,1rem + .3vw,1.1875rem);line-height:1.5;text-wrap:balance}
+.status{margin-top:clamp(1.5rem,4vh,2.5rem)}
+.soon{display:inline-flex;align-items:center;gap:.7rem;color:var(--yellow);font-family:var(--cond);font-weight:700;font-size:1.25rem;line-height:1;text-transform:uppercase;letter-spacing:.14em}
+.lamp{flex:none;width:.75rem;height:.75rem;border-radius:50%;background:var(--yellow);box-shadow:0 0 0 3px rgba(255,196,0,.18),0 0 16px 2px rgba(255,196,0,.5)}
+.building{margin-top:.6rem;color:var(--ink-3);font-size:1rem}
+
+/* A phone on its side: the words close up so the logo keeps a readable size. */
+@media (max-height:34rem) and (orientation:landscape){
+  :root{--reserve:13.5rem}
+  .hero{padding-top:1rem}
+  .lede{font-size:1.25rem;margin-top:.75rem;max-width:none}
+  .sub{font-size:1rem;margin-top:.4rem;max-width:44rem}
+  .status{margin-top:.9rem}
+}
+
+/* ---------- One shift ---------- */
+.shift{padding:clamp(3.5rem,9vw,7rem) 0 clamp(3rem,7vw,5.5rem)}
+.shift-grid{display:grid;gap:2.25rem}
+.kicker{display:block;margin-bottom:.8rem;color:var(--ink-3);font-family:var(--cond);font-weight:600;font-size:1.0625rem;letter-spacing:.14em;text-transform:uppercase}
+h2{color:var(--ink-1);font-family:var(--cond);font-weight:700;text-transform:uppercase;letter-spacing:.035em;font-size:clamp(2rem,1.35rem + 2.6vw,3.25rem);line-height:1.02;text-wrap:balance}
+.intro p{margin-top:1rem;max-width:26rem}
+
+/* An example of the day's time sheet, worked out the way the paper is: shown on wide screens. */
+.card{display:none;margin:2.5rem 0 0;max-width:20rem;border:1px solid var(--rule);background:var(--panel)}
+.card>div{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;padding:.7rem 1rem;border-top:1px solid #1f2123}
+.card>div:first-child{border-top:0}
+.card dt{color:var(--ink-3);font-family:var(--cond);font-weight:600;font-size:1rem;letter-spacing:.12em;text-transform:uppercase}
+.card dd{margin:0;color:var(--ink-1);font-family:var(--cond);font-weight:600;font-size:1.125rem;letter-spacing:.05em;text-transform:uppercase;font-variant-numeric:tabular-nums;text-align:right}
+.card .card-head{background:#141516}
+.card .card-head dt{color:var(--ink-1);font-weight:700}
+.card .card-head dd{color:var(--ink-3)}
+.card .card-total{border-top:1px solid var(--rule)}
+.card .card-total dd{font-weight:700;font-size:2rem;line-height:1;letter-spacing:.02em}
+
+.day{list-style:none;padding:0;--lx:.6875rem;--dy:.6875rem}
+.day li{position:relative;display:grid;grid-template-columns:1.375rem minmax(0,1fr);column-gap:1rem;padding-bottom:clamp(1.85rem,3.4vw,2.6rem)}
+.day li:last-child{padding-bottom:0}
+.day li::before{content:"";position:absolute;left:var(--lx);top:var(--dy);bottom:calc(-1 * var(--dy));width:1px;transform:translateX(-50%);background:linear-gradient(var(--rule),#25272a)}
+.day li:last-child::before{display:none}
+.when{grid-column:2;grid-row:1;color:var(--steel);font-family:var(--cond);font-weight:600;font-size:1.125rem;line-height:1.25;letter-spacing:.06em;text-transform:uppercase}
+.dot{grid-column:1;grid-row:1;justify-self:center;width:.8125rem;height:.8125rem;margin-top:calc(var(--dy) - .40625rem);border-radius:50%;background:var(--black);border:2px solid var(--steel);position:relative;z-index:1}
+.day li:last-child .dot{background:var(--steel)}
+.what{grid-column:2;grid-row:2;margin-top:.2rem}
+.what h3{color:var(--ink-1);font-family:var(--cond);font-weight:700;font-size:1.5rem;line-height:1.15;text-transform:uppercase;letter-spacing:.045em}
+.what p{margin-top:.4rem;max-width:34rem}
+
+@media (min-width:40rem){
+  .day{--lx:10.375rem;--dy:.875rem}
+  .day li{grid-template-columns:9rem 2.75rem minmax(0,1fr);column-gap:0}
+  .when{grid-column:1;grid-row:1;text-align:right;font-size:1.125rem;line-height:1.55}
+  .dot{grid-column:2;grid-row:1}
+  .what{grid-column:3;grid-row:1;margin-top:0}
+  .what h3{font-size:1.625rem;line-height:1.08}
+}
+@media (min-width:64rem){
+  .shift-grid{grid-template-columns:minmax(0,22rem) minmax(0,1fr);gap:4.5rem}
+  body{font-size:1.1875rem}
+  .intro{position:sticky;top:3rem;align-self:start}
+  .card{display:block}
+}
+
+/* ---------- The paper it replaces, each company, and who it is for ---------- */
+.more{background:var(--panel);border-top:1px solid #1d1f21;border-bottom:1px solid #1d1f21;padding:clamp(3.25rem,8vw,6rem) 0}
+.more-grid{display:grid;gap:3rem}
+.more h2{font-size:clamp(1.75rem,1.35rem + 1.6vw,2.375rem)}
+.more p{margin-top:1rem;max-width:32rem}
+/* Ruled lines, like the lines of a printed form: nothing to press. */
+.forms{list-style:none;padding:0;margin-top:1.4rem;border-top:1px solid var(--rule)}
+.forms li{padding:.75rem 0;border-bottom:1px solid var(--rule);color:var(--ink-1);font-family:var(--cond);font-weight:700;font-size:1.25rem;line-height:1.2;text-transform:uppercase;letter-spacing:.05em}
+@media (min-width:56rem){
+  .more-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:3.5rem}
+}
+
+/* ---------- Close ---------- */
+.close{padding:clamp(3.5rem,9vw,6rem) 0 clamp(3rem,7vw,4.5rem);text-align:center}
+.foot{border-top:1px solid #1d1f21;padding:1.5rem 0 2rem;color:var(--ink-3);font-size:.9375rem;text-align:center}
+
+@media (prefers-contrast:more){
+  :root{--ink-2:#e2e3e3;--ink-3:#c6c8c8;--rule:#6a6e72}
+}
+
+/* The sign comes up out of the dark once, by opacity only: nothing is ever laid over the logo. */
+@media screen and (prefers-reduced-motion:no-preference){
+  .logo{animation:come-up 1.4s cubic-bezier(.25,.6,.3,1) both}
+  .lede,.sub{animation:come-up 1s .5s ease-out both}
+  .status{animation:come-up 1s .8s ease-out both}
+}
+@keyframes come-up{from{opacity:0}to{opacity:1}}
+</style>
+</head>
+<body>
+<main>
+  <section class="hero" aria-label="MineMuster">
+    <div class="wrap">
+      <h1 class="logo">
+        <img src="brand/minemuster-logo-800.webp" srcset="brand/minemuster-logo-800.webp 800w, brand/minemuster-logo.webp 1600w" sizes="(min-width: 51rem) 47.5rem, calc(100vw - 2rem)" width="800" height="371" alt="MineMuster" fetchpriority="high">
+      </h1>
+      <p class="lede">Shift software for mine crews and the people who run them.</p>
+      <p class="sub">The time clock, the equipment checklist, the pre&nbsp;shift&nbsp;exam, maintenance requests and payroll hours, on the phone the crew carries all shift.</p>
+      <div class="status">
+        <p class="soon"><span class="lamp" aria-hidden="true"></span>Coming soon</p>
+        <p class="building">MineMuster is still being built.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="shift" aria-labelledby="shift-title">
+    <div class="wrap shift-grid">
+      <div class="intro">
+        <span class="kicker">One shift</span>
+        <h2 id="shift-title">From the gate to payroll</h2>
+        <p>A crew member&rsquo;s day, the way MineMuster keeps it.</p>
+        <dl class="card" aria-label="An example day on the time sheet">
+          <div class="card-head"><dt>Time sheet</dt><dd>Example day</dd></div>
+          <div><dt>In</dt><dd>5:45 AM</dd></div>
+          <div><dt>Lunch</dt><dd>0.50</dd></div>
+          <div><dt>Out</dt><dd>4:15 PM</dd></div>
+          <div class="card-total"><dt>Hours</dt><dd>10.00</dd></div>
+        </dl>
+      </div>
+      <ol class="day">
+        <li>
+          <p class="when">At the gate</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Clock in</h3>
+            <p>Punch in on the phone. It reads its location once, at the punch, to check you are on site.</p>
+          </div>
+        </li>
+        <li>
+          <p class="when">Before work starts</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Pre shift exam</h3>
+            <p>Examine the work area and sign the exam. A condition you find stays open until the date it was fixed is written down.</p>
+          </div>
+        </li>
+        <li>
+          <p class="when">Before you run it</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Equipment checklist</h3>
+            <p>Go down the operator equipment checklist for the machine. A Bad Order has to say what is wrong.</p>
+          </div>
+        </li>
+        <li>
+          <p class="when">When something is wrong</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Maintenance request</h3>
+            <p>Send the Bad Order to the shop. A supervisor assigns it, and it is closed out with remarks.</p>
+          </div>
+        </li>
+        <li>
+          <p class="when">Midday</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Lunch</h3>
+            <p>One tap starts a 30-minute lunch. It ends by itself, and the phone tells you.</p>
+          </div>
+        </li>
+        <li>
+          <p class="when">End of shift</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Clock out</h3>
+            <p>Punch out. The day is counted to the hundredth of an hour, the way a paper time sheet is figured.</p>
+          </div>
+        </li>
+        <li>
+          <p class="when">End of the pay period</p>
+          <span class="dot" aria-hidden="true"></span>
+          <div class="what">
+            <h3>Hours for payroll</h3>
+            <p>The hours come out as straight time, overtime and double time, figured by the rules of the company&rsquo;s state, before taxes.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="more" aria-label="What it replaces, each company, and who it is for">
+    <div class="wrap more-grid">
+      <div>
+        <h2>It replaces the paper</h2>
+        <p>Four forms move from the clipboard to the phone.</p>
+        <ul class="forms">
+          <li>Time sheet</li>
+          <li>Equipment checklist card</li>
+          <li>Pre shift exam sheets</li>
+          <li>Maintenance request form</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Set up for each company</h2>
+        <p>A company puts in its own name, logo, state and pay periods, and the app follows them. A website dashboard for each company is coming too.</p>
+      </div>
+      <div>
+        <h2>Who it is for</h2>
+        <p>Mine owners and superintendents, safety and HR people, and the crew members who work the shifts.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="close" aria-label="Status">
+    <div class="wrap">
+      <p class="soon"><span class="lamp" aria-hidden="true"></span>Coming soon</p>
+      <p class="building">MineMuster is still being built.</p>
+    </div>
+  </section>
+</main>
+<footer class="foot">
+  <div class="wrap">&copy; 2026 MineMuster</div>
+</footer>
+</body>
+</html>
