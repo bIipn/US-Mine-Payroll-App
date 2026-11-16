@@ -861,6 +861,15 @@ describe('the company', () => {
     expect(s().settings.company).toEqual({ name: 'Example Aggregates Co.', state: 'NV', pay: own.pay });
   });
 
+  it('keeps an MSHA mine ID as its seven digits, and drops one left empty', () => {
+    s().signInDemo('supervisor');
+    expect(s().setCompany({ ...own, mineId: ' 04-00123 ' })).toEqual({ ok: true });
+    expect(s().settings.company.mineId).toBe('0400123');
+    expect(s().setCompany({ ...own, mineId: '  ' })).toEqual({ ok: true });
+    expect('mineId' in s().settings.company).toBe(false);
+    expect(s().setCompany({ ...own, mineId: '12345' })).toMatchObject({ ok: false, error: expect.stringMatching(/seven digits/) });
+  });
+
   it('can be set to have no pay periods at all', () => {
     s().signInDemo('supervisor');
     expect(s().setCompany({ ...own, pay: null })).toEqual({ ok: true });

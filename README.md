@@ -14,9 +14,9 @@ It replaces the paper time sheet, the Operator Equipment Checklist card, the Pre
 
 ![Pre shift exam: the work areas, an area's lines with guarding, electrical and safe access, the 20 conditions, what was found, the exam as the paper sheet, the maintenance request form and adding an area sheet](docs/gallery-pre-shift-exam.png)
 
-![Supervisor screens: crew board, who is on site, time log, corrections, safety log, maintenance requests, roster and the mine boundary](docs/gallery-supervisor.png)
+![Supervisor screens: crew board, who is on site, time log, corrections, safety log, maintenance requests, roster and the company settings](docs/gallery-supervisor.png)
 
-The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_sample.xlsx), [safety log sample](docs/samples/US-Mine-Safety-Log_sample.xlsx)):
+The Excel exports look like this ([payroll sample](docs/samples/Sample-Mining-Co-Payroll_sample.xlsx), [safety log sample](docs/samples/Sample-Mining-Co-Safety-Log_sample.xlsx)). The PDF for an inspector is made from the same records ([sample](docs/samples/Sample-Mining-Co-MSHA-Records_sample.pdf)):
 
 ![Payroll summary sheet in Excel: straight time, overtime, double time, holiday, PTO and sick hours by employee for the pay period](docs/excel-payroll.png)
 
@@ -48,6 +48,7 @@ The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_
 - Maintenance request queue: assign a request, start it, and complete it with the remarks and the time spent. Completing a request that came from an exam puts the date fixed on that exam.
 - Area sheets: type in the sheet for a new work area, one line of the paper to a line.
 - Roster control: only names on the roster can create an account. Paste a whole list at once.
+- **A PDF for an MSHA inspector.** One tap on the safety log makes the records an inspector asks to see, for the day, the last 7 or 30 days or the last 12 months: the equipment defects that affect safety and when each was corrected (30 CFR 56.14100(d)), every pre-use equipment inspection (56.14100(a)), every pre shift exam and every condition it found, with the date it was corrected (56.18002). Every record shows the date and time it was signed, and the file says when it was made and in which time zone. A defect or condition from before the period that is still not corrected is carried into it. A supervisor can add the mine's MSHA mine ID on More → Company to print it at the top.
 - **Excel exports** for payroll (summary, daily detail, paid leave, punch log, flags) and safety (equipment checklists with the 21 lines as columns, Bad Order items, equipment use, pre shift exams, the conditions found, every line of every exam, maintenance requests, time on site).
 
 ## Where this build stands
@@ -56,7 +57,7 @@ This is a working preview. Every flow above runs, on sample data.
 
 | | |
 |---|---|
-| **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export |
+| **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export, the PDF for an MSHA inspector |
 | **Sample data** | 14 made-up employees, 14 made-up units, 3 made-up work areas, about five weeks of punches and two weeks of checklists and exams. Nothing in it is a real US Mine record |
 | **The mine's own sheets** | The equipment checklist and the conditions page are the mine's, line for line. The area sheets in this repository are made-up samples: a build names the real ones in `.env.local`, or a supervisor types them in (see The paper forms) |
 | **Settled with the crew** | The safety items that always red tag a unit: fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls. N/A stays on the pre shift exam. The one spelling the app puts right on the conditions page stays put right. There is a swing shift as well as day and night |
@@ -76,7 +77,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 507 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel
+npm test           # 529 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel, the inspector PDF
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -292,7 +293,7 @@ It is the Vercel project `minemuster`, linked to this repository with `site` as 
 App.tsx                 fonts, storage, navigation
 src/domain/             the rules, with tests: hours, lunch, overtime, pay periods, GPS, the checklist, exams, standards
 src/store/              app state (saved on the device), its migrations and the sample data
-src/services/           GPS, notifications, Excel writer, reports, file sharing
+src/services/           GPS, notifications, Excel and PDF writers, reports, file sharing
 src/components/         buttons, time card, the paper forms, day table, pay estimate, danger tag, site map
 src/screens/            auth, clock, equipment, exam, hours, more, supervisor
 assets/brand/           MineMuster's logo, and in source/ the renders every logo size is made from

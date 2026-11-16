@@ -20,6 +20,8 @@ export interface Company {
   state: string;
   /** Where the crew works, for the sign-in screen: "Fallon, Nevada". */
   place?: string;
+  /** The mine's MSHA mine ID, seven digits, printed on the records for an inspector. */
+  mineId?: string;
   /** None: the top of the clock screen shows its plain colour. */
   logo?: CompanyLogo;
   /** None: hours are shown by the workweek and the month. */
@@ -59,10 +61,16 @@ function readLogo(value: unknown): CompanyLogo | undefined | 'bad' {
   return 'bad';
 }
 
+/** An MSHA mine ID as its seven digits, with any dash or spaces taken out. */
+export function normalMineId(text: string): string {
+  return text.replace(/[\s-]/g, '');
+}
+
 /** What is wrong with a company, or undefined when it is whole. */
 export function checkCompany(company: Company): string | undefined {
   if (!company.name.trim()) return 'Give the company’s name.';
   if (!STATES[company.state]) return 'Choose the state the crew works in.';
+  if (company.mineId && !/^\d{7}$/.test(normalMineId(company.mineId))) return 'An MSHA mine ID is seven digits, like 0400123.';
   if (company.pay) {
     const problem = checkPaySchedule(company.pay);
     if (problem) return problem;
@@ -93,6 +101,11 @@ export function parseCompany(text: string | null | undefined): { company?: Compa
   }
   const company: Company = { name, state, pay };
   if (typeof raw.place === 'string' && raw.place.trim()) company.place = raw.place.trim();
+  if (raw.mineId != null && raw.mineId !== '') {
+    const id = normalMineId(String(raw.mineId));
+    if (!/^\d{7}$/.test(id)) return { error: 'EXPO_PUBLIC_COMPANY has an MSHA mine ID that is not seven digits.' };
+    company.mineId = id;
+  }
   if (logo) company.logo = logo;
   return { company };
 }

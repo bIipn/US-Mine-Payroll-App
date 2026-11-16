@@ -1,4 +1,4 @@
-import { checkCompany, companyOrDefault, parseCompany, SAMPLE_COMPANY, stateName, STATES, type Company } from '../company';
+import { checkCompany, companyOrDefault, normalMineId, parseCompany, SAMPLE_COMPANY, stateName, STATES, type Company } from '../company';
 
 describe('the company a build names', () => {
   const setting = JSON.stringify({
@@ -24,6 +24,11 @@ describe('the company a build names', () => {
   it('is nothing when the setting is empty', () => {
     expect(parseCompany(undefined)).toEqual({});
     expect(parseCompany('  ')).toEqual({});
+  });
+
+  it('reads the MSHA mine ID a build gives', () => {
+    expect(parseCompany('{"name":"A","state":"NV","mineId":"26-01234"}').company?.mineId).toBe('2601234');
+    expect(parseCompany('{"name":"A","state":"NV","mineId":"26"}').error).toMatch(/mine ID/);
   });
 
   it('takes a company with no pay periods and no logo', () => {
@@ -55,6 +60,14 @@ describe('checkCompany', () => {
 
   it('passes a company with a name and a state', () => {
     expect(checkCompany(company)).toBeUndefined();
+  });
+
+  it('takes an MSHA mine ID of seven digits, written with or without a dash or spaces', () => {
+    expect(checkCompany({ ...company, mineId: '0400123' })).toBeUndefined();
+    expect(checkCompany({ ...company, mineId: '04-00123' })).toBeUndefined();
+    expect(checkCompany({ ...company, mineId: '04001' })).toMatch(/seven digits/);
+    expect(checkCompany({ ...company, mineId: 'MINE123' })).toMatch(/seven digits/);
+    expect(normalMineId(' 04-00 123 ')).toBe('0400123');
   });
 
   it('turns back a blank name, an unknown state and a pay schedule that cannot be worked out', () => {

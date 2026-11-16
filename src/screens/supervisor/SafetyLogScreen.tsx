@@ -1,4 +1,4 @@
-import { ClipboardCheck, Factory, FileSpreadsheet } from '../../components/icons';
+import { ClipboardCheck, Factory, FileSpreadsheet, FileText } from '../../components/icons';
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -6,7 +6,8 @@ import { Button, Chips, Divider, EmptyState, Page, Panel, Row, Segmented, Tag, T
 import { examFindings, examResult, shiftLabel } from '../../domain/areaExam';
 import { cardsBetween } from '../../domain/checklistCard';
 import type { ScreenProps } from '../../navigation/types';
-import { exportReport } from '../../services/exportReport';
+import { exportPdf, exportReport } from '../../services/exportReport';
+import { inspectorReport } from '../../services/inspectorReport';
 import { safetyReport } from '../../services/reports';
 import { employeeName, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
@@ -14,7 +15,7 @@ import { addDays, fmtDateTime, fmtRelativeDay, startOfDay } from '../../util/for
 import { useNow } from '../../util/hooks';
 
 type Tab = 'cards' | 'exams';
-type Range = '1' | '7' | '30';
+type Range = '1' | '7' | '30' | '365';
 /** The most rows the list shows at once. */
 const SHOWN = 120;
 
@@ -41,13 +42,23 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
       title="Checklists and exams"
       onBack={navigation.goBack}
       footer={
-        <Button
-          testID="export-safety"
-          label="Export safety log to Excel"
-          icon={FileSpreadsheet}
-          kind="ink"
-          onPress={() => exportReport(() => safetyReport({ ...useStore.getState() }, from, to, Date.now()))}
-        />
+        <>
+          {/* The records an MSHA inspector asks for, as one PDF with the date and time on every record. */}
+          <Button
+            testID="export-inspector-pdf"
+            label="PDF for an MSHA inspector"
+            icon={FileText}
+            kind="outline"
+            onPress={() => exportPdf(() => inspectorReport({ ...useStore.getState() }, from, to, Date.now()))}
+          />
+          <Button
+            testID="export-safety"
+            label="Export safety log to Excel"
+            icon={FileSpreadsheet}
+            kind="ink"
+            onPress={() => exportReport(() => safetyReport({ ...useStore.getState() }, from, to, Date.now()))}
+          />
+        </>
       }
     >
       <Segmented<Tab>
@@ -59,13 +70,16 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
           { value: 'exams', label: `Work areas (${made.length})` },
         ]}
       />
+      {/* An exam record is kept for a year (56.18002(d)), so a year is the longest an inspector needs. */}
       <Chips<Range>
         value={range}
         onChange={setRange}
+        wrap
         options={[
           { value: '1', label: 'Today' },
           { value: '7', label: 'Last 7 days' },
           { value: '30', label: 'Last 30 days' },
+          { value: '365', label: 'Last 12 months' },
         ]}
       />
 

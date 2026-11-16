@@ -36,6 +36,7 @@ interface Draft {
   name: string;
   state: string;
   place: string;
+  mineId: string;
   often: Often;
   firstDay: string;
   paidBy: PaidBy;
@@ -52,6 +53,7 @@ function draftOf(company: Company): Draft {
     name: company.name,
     state: company.state,
     place: company.place ?? '',
+    mineId: company.mineId ?? '',
     often: pay?.frequency ?? 'none',
     firstDay: pay?.firstDay ?? ymd(Date.now()),
     paidBy: pay ? ('dayOfMonth' in pay.payday ? 'dayOfMonth' : 'daysAfter') : 'dayOfMonth',
@@ -107,7 +109,7 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
   const paidBy: PaidBy = byWeek ? 'daysAfter' : draft.paidBy;
 
   const save = () => {
-    const next: Company = { ...company, name: draft.name, state: draft.state, place: draft.place, pay: schedule };
+    const next: Company = { ...company, name: draft.name, state: draft.state, place: draft.place, mineId: draft.mineId.trim(), pay: schedule };
     const problem = checkCompany({ ...next, name: next.name.trim() });
     if (problem) {
       setError(problem);
@@ -169,6 +171,15 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
               value={draft.place}
               onChangeText={(place) => change({ place })}
               autoCapitalize="words"
+            />
+            <Field
+              testID="company-mine-id"
+              label="MSHA mine ID (optional)"
+              hint="Seven digits. Printed on the records for an inspector."
+              value={draft.mineId}
+              onChangeText={(mineId) => change({ mineId })}
+              keyboardType="number-pad"
+              maxLength={9}
             />
             <View style={{ gap: space.sm }}>
               <Txt v="smallStrong">Logo</Txt>

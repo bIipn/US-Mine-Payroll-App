@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, STARTING_COMPANY } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { checkCompany, type Company } from '../domain/company';
+import { checkCompany, normalMineId, type Company } from '../domain/company';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
@@ -922,8 +922,10 @@ export const useStore = create<Store>()(
         setCompany: (company) => {
           if (!get().session) return signedOut;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the company details.' };
-          const next: Company = { ...company, name: clean(company.name), place: company.place && clean(company.place) ? clean(company.place) : undefined };
+          const mineId = company.mineId ? normalMineId(company.mineId) : '';
+          const next: Company = { ...company, name: clean(company.name), place: company.place && clean(company.place) ? clean(company.place) : undefined, mineId };
           if (!next.place) delete next.place;
+          if (!next.mineId) delete next.mineId;
           const problem = checkCompany(next);
           if (problem) return { ok: false, error: problem };
           set({ settings: { ...get().settings, company: next } });
