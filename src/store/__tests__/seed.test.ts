@@ -6,7 +6,7 @@ import { shiftFlags, shiftTotals } from '../../domain/time';
 import { payrollReport, safetyReport } from '../../services/reports';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
 import { findOnRoster, parseRoster, SPARE_LAST_NAMES } from '../../domain/roster';
-import { buildDemoData, SAMPLE_CREW_IDS } from '../seed';
+import { buildBareData, buildDemoData, SAMPLE_CREW_IDS } from '../seed';
 
 // The sample data has to hold together whatever day of the week the demo is opened.
 const DAYS = [9, 10, 11, 12, 13, 14, 15].map((d) => new Date(2026, 10, d, 10, 42).getTime());
@@ -349,5 +349,38 @@ describe('sample data', () => {
     expect(safety.name).toBe('US-Mine-Safety-Log_2026-10-15_to_2026-11-13.xlsx');
     expect(safety.sheets).toBe(8);
     expect(safety.rows).toBeGreaterThan(900);
+  });
+});
+
+describe('a start with nobody made up', () => {
+  const named = parseAreaSheets('North plant\nFeeder\n\nBag house\nFan');
+
+  it('has the fleet and the sheets, and nothing that happened', () => {
+    const data = buildBareData(named);
+    expect(data.areaSheets).toEqual(named);
+    expect(data.equipment.map((e) => e.unit)).toEqual(buildDemoData(DAYS[4]).equipment.map((e) => e.unit));
+    expect([data.employees, data.accounts, data.shifts, data.leave, data.inspections, data.opLogs, data.exams, data.mrfs]).toEqual(Array(8).fill([]));
+    expect(data.payRates).toEqual({});
+    // The first maintenance request made in it is the first there is.
+    expect(data.mrfSeq).toBe(1001);
+  });
+
+  it('has every unit ready, at the reading it had before any sample use', () => {
+    const data = buildBareData(named);
+    expect(data.equipment.every((e) => e.status === 'ready')).toBe(true);
+    // The sample history runs the units, so their readings there have moved on from these.
+    const used = new Map(buildDemoData(DAYS[4]).equipment.map((e) => [e.unit, e.meter]));
+    expect(data.equipment.every((e) => e.meter <= (used.get(e.unit) ?? 0))).toBe(true);
+    expect(data.equipment.some((e) => e.meter < (used.get(e.unit) ?? 0))).toBe(true);
+  });
+
+  it('is on the sample sheets when the build names none', () => {
+    expect(buildBareData().areaSheets).toEqual(SAMPLE_AREA_SHEETS);
+  });
+
+  it('hands out a fleet of its own each time, so one start cannot change another', () => {
+    const first = buildBareData(named);
+    first.equipment[0].meter += 100;
+    expect(buildBareData(named).equipment[0].meter).toBe(first.equipment[0].meter - 100);
   });
 });

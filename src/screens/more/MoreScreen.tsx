@@ -6,12 +6,33 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { DecimalChart } from '../../components/DecimalChart';
 import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
-import { APP_NAME, DEMO_MODE } from '../../config';
+import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { openShiftOf, useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fullName, initials } from '../../util/format';
+
+/**
+ * Starting a preview over. With the sample crew that reloads their sample history. Without
+ * them there is nothing to reload: it erases what people entered and leaves the build as it starts.
+ */
+const RESET = SAMPLE_CREW
+  ? {
+      title: 'Reset the sample data',
+      sub: 'Clears everything on this device and reloads the sample crew.',
+      ask: 'Reset the sample data?',
+      warning: 'Every punch, checklist, exam and request made on this device is erased and the sample crew is loaded again. You will be signed out.',
+      button: 'Reset sample data',
+    }
+  : {
+      title: 'Clear this device',
+      sub: 'Erases every punch, checklist, exam and request made on this device.',
+      ask: 'Clear this device?',
+      warning:
+        'Every punch, checklist, exam, request and account made on this device is erased. The roster, the area sheets and the equipment list go back to how this build starts. You will be signed out.',
+      button: 'Clear this device',
+    };
 
 export function MoreScreen() {
   const navigation = useNavigation();
@@ -97,26 +118,24 @@ export function MoreScreen() {
             <Row
               testID="reset-demo"
               left={<RotateCcw color={color.ink} size={24} />}
-              title="Reset the sample data"
-              sub="Clears everything on this device and reloads the sample crew."
+              title={RESET.title}
+              sub={RESET.sub}
               onPress={() => setConfirmReset(true)}
             />
           </Panel>
         ) : null}
 
         <Button testID="sign-out" label="Sign out" icon={LogOut} kind="outline" onPress={signOut} />
-        <Txt v="small" c={color.silica} center>
-          {APP_NAME}{DEMO_MODE ? ', preview build on sample data' : ''}
+        <Txt v="small" c={color.silica} center testID="build-note">
+          {APP_NAME}{!DEMO_MODE ? '' : SAMPLE_CREW ? ', preview build on sample data' : ', preview build. What you enter stays on this device.'}
         </Txt>
       </ScrollView>
 
       <DecimalChart visible={chart} onClose={() => setChart(false)} />
       <RateSheet visible={rateOpen} onClose={() => setRateOpen(false)} />
-      <Sheet visible={confirmReset} onClose={() => setConfirmReset(false)} title="Reset the sample data?">
-        <Txt v="body" c={color.inkSoft}>
-          Every punch, checklist, exam and request made on this device is erased and the sample crew is loaded again. You will be signed out.
-        </Txt>
-        <Button testID="confirm-reset" label="Reset sample data" kind="red" onPress={() => { setConfirmReset(false); resetDemo(); }} />
+      <Sheet testID="reset-sheet" visible={confirmReset} onClose={() => setConfirmReset(false)} title={RESET.ask}>
+        <Txt v="body" c={color.inkSoft}>{RESET.warning}</Txt>
+        <Button testID="confirm-reset" label={RESET.button} kind="red" onPress={() => { setConfirmReset(false); resetDemo(); }} />
       </Sheet>
     </View>
   );

@@ -1,4 +1,4 @@
-import { findOnRoster, keptApart, parsePersonName, parseRoster, SPARE_LAST_NAMES, withOwner, withRoster } from '../roster';
+import { findOnRoster, keptApart, parsePersonName, parseRoster, SPARE_LAST_NAMES, startsWithSamples, withOwner, withRoster } from '../roster';
 import type { Employee } from '../types';
 
 describe('parsePersonName', () => {
@@ -204,5 +204,30 @@ describe('keptApart', () => {
   it('has more spares than the sample crew could need, no two alike', () => {
     expect(SPARE_LAST_NAMES.length).toBeGreaterThanOrEqual(16);
     expect(new Set(SPARE_LAST_NAMES.map((name) => name.toLowerCase())).size).toBe(SPARE_LAST_NAMES.length);
+  });
+});
+
+describe('startsWithSamples', () => {
+  it('gives a build that names nobody the sample crew, so there is something to look at', () => {
+    expect(startsWithSamples(undefined, 0)).toBe(true);
+    expect(startsWithSamples('', 0)).toBe(true);
+  });
+
+  it('leaves the sample crew out of a build that names its own people', () => {
+    expect(startsWithSamples(undefined, 1)).toBe(false);
+    expect(startsWithSamples('', 89)).toBe(false);
+  });
+
+  it('does what the setting says when there is one', () => {
+    // The samples beside real people, for showing the app with some history in it.
+    expect(startsWithSamples('1', 89)).toBe(true);
+    // An empty start for a build that names nobody.
+    expect(startsWithSamples('0', 0)).toBe(false);
+    expect(startsWithSamples(' 1 ', 3)).toBe(true);
+  });
+
+  it('goes by who is named when the setting says anything else', () => {
+    expect(startsWithSamples('yes', 3)).toBe(false);
+    expect(startsWithSamples('yes', 0)).toBe(true);
   });
 });

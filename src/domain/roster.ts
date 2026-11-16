@@ -139,6 +139,20 @@ export function withRoster(employees: Employee[], named: RosterEntry[]): Employe
 }
 
 /**
+ * Whether a preview starts with the made-up sample crew and the sample history
+ * that belongs to them. A build that names its own people starts without them:
+ * everyone on its roster is real, and nothing made up sits beside them. A build
+ * that names nobody has them, so there is something to look at. The setting
+ * decides it either way: "1" for the samples, "0" for none.
+ */
+export function startsWithSamples(setting: string | null | undefined, named: number): boolean {
+  const said = (setting ?? '').trim();
+  if (said === '1') return true;
+  if (said === '0') return false;
+  return named === 0;
+}
+
+/**
  * Last names for made-up people to fall back on. A build that names someone
  * with one of these passes it over, so none is ever shared with a real person.
  */

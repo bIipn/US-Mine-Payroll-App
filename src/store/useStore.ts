@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER } from '../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
@@ -39,6 +39,7 @@ import { fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
 import {
+  buildBareData,
   buildDemoData,
   defaultSettings,
   DEMO_EMPLOYEE_ID,
@@ -143,14 +144,20 @@ interface Actions {
   /**
    * Load the starting data on first run, and make sure the build's owner is on
    * the roster and the build's own area sheets are there.
+   *
+   * `samples` is whether a preview starts with the made-up sample crew and
+   * their history. Without them it starts with the fleet and the area sheets,
+   * and only the people the build names.
    */
-  ensureSeeded: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[]) => void;
-  resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[]) => void;
+  ensureSeeded: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[], samples?: boolean) => void;
+  resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[], samples?: boolean) => void;
 
   signUp: (input: SignUpInput) => Result;
   signIn: (email: string, password: string) => Result;
   signInWithProvider: (provider: AuthProvider, firstName: string, lastName: string) => Result;
   signInDemo: (role: Role) => Result;
+  /** Preview only: open the app as the person the build is made for, with no account to set up first. */
+  openAsOwner: (owner?: PersonName | null) => Result;
   signOut: () => void;
 
   clockIn: (geo: GeoStamp) => Result<{ shift: Shift }>;
@@ -240,6 +247,9 @@ const initialData = (): Data => ({
   seededAt: null,
 });
 
+/** Whether what this build saves on the device is the sample crew's history, rather than only what people entered. */
+const HOLDS_SAMPLES = DEMO_MODE && SAMPLE_CREW;
+
 export const useStore = create<Store>()(
   persist(
     (set, get) => {
@@ -284,6 +294,16 @@ export const useStore = create<Store>()(
       const startingSheets = (named: AreaSheet[]) => (named.length ? named : SAMPLE_AREA_SHEETS);
       /** The real people a build names, its owner among them: the sample crew starts apart from them. */
       const realPeople = (people: RosterEntry[], owner: PersonName | null): PersonName[] => (owner ? [...people, owner] : people);
+      /**
+       * What a preview starts with. With the samples, the made-up crew and their history.
+       * Without them, the fleet and the area sheets: the people are the build's own, and
+       * nothing has happened yet.
+       */
+      const previewStart = (now: number, owner: PersonName | null, sheets: AreaSheet[], people: RosterEntry[], samples: boolean): SeedData =>
+        samples ? buildDemoData(now, startingSheets(sheets), realPeople(people, owner)) : buildBareData(startingSheets(sheets));
+      /** A made-up address for an account opened without one, until the real sign-in is connected: the name, letters only. */
+      const standInEmail = (person: PersonName) =>
+        `${`${person.firstName} ${person.lastName}`.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '')}@example.com`;
 
       return {
         ...initialData(),
@@ -293,10 +313,10 @@ export const useStore = create<Store>()(
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
         clearToast: () => set({ toast: null }),
 
-        ensureSeeded: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER) => {
+        ensureSeeded: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER, samples = SAMPLE_CREW) => {
           if (get().seededAt == null) {
             const now = Date.now();
-            set({ ...(DEMO_MODE ? buildDemoData(now, startingSheets(sheets), realPeople(people, owner)) : emptyData()), seededAt: now });
+            set({ ...(DEMO_MODE ? previewStart(now, owner, sheets, people, samples) : emptyData()), seededAt: now });
           }
           // The people this build names are always on the roster, its owner among them, and
           // the build's own area sheets are always there, including on a phone whose data
@@ -306,9 +326,9 @@ export const useStore = create<Store>()(
           const named = withSheets(areaSheets, sheets);
           if (roster !== employees || named !== areaSheets) set({ employees: roster, areaSheets: named });
         },
-        resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER) => {
+        resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER, samples = SAMPLE_CREW) => {
           const now = Date.now();
-          const data = buildDemoData(now, startingSheets(sheets), realPeople(people, owner));
+          const data = previewStart(now, owner, sheets, people, samples);
           set({ ...initialData(), ...data, employees: withBuildRoster(data.employees, people, owner), seededAt: now });
         },
 
@@ -364,14 +384,7 @@ export const useStore = create<Store>()(
           const { accounts } = get();
           let account = accounts.find((a) => a.employeeId === employee.id);
           if (!account) {
-            account = {
-              id: uid('acct_'),
-              employeeId: employee.id,
-              // A stand-in until the real sign-in is connected: the name, letters only.
-              email: `${`${employee.firstName} ${employee.lastName}`.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '')}@example.com`,
-              provider,
-              createdAt: Date.now(),
-            };
+            account = { id: uid('acct_'), employeeId: employee.id, email: standInEmail(employee), provider, createdAt: Date.now() };
             set({ accounts: [...accounts, account] });
           }
           startSession(account);
@@ -381,7 +394,22 @@ export const useStore = create<Store>()(
         signInDemo: (role) => {
           const employeeId = role === 'supervisor' ? DEMO_SUPERVISOR_ID : DEMO_EMPLOYEE_ID;
           const account = get().accounts.find((a) => a.employeeId === employeeId);
-          if (!account) return { ok: false, error: 'The demo crew is not loaded. Reset the demo data and try again.' };
+          if (!account) return { ok: false, error: 'This preview has no sample crew to open as. Create an account under your own name.' };
+          startSession(account);
+          return { ok: true };
+        },
+
+        openAsOwner: (owner = ROSTER_OWNER) => {
+          if (!DEMO_MODE) return { ok: false, error: 'Sign in with your own account.' };
+          const { employees, accounts } = get();
+          const person = owner ? employees.find((e) => e.active && sameName(e, owner.firstName, owner.lastName)) : undefined;
+          if (!person) return { ok: false, error: 'Nobody is set up to open this preview as. Create an account under your own name.' };
+          let account = accounts.find((a) => a.employeeId === person.id);
+          if (!account) {
+            // No password goes with it, so the person can still create an account of their own later.
+            account = { id: uid('acct_'), employeeId: person.id, email: standInEmail(person), provider: 'password', createdAt: Date.now() };
+            set({ accounts: [...accounts, account] });
+          }
           startSession(account);
           return { ok: true };
         },
@@ -939,9 +967,11 @@ export const useStore = create<Store>()(
       };
     },
     {
-      name: 'us-mine-crew',
+      // A device that has opened a preview with the sample crew has their sample history saved.
+      // A build without them keeps its own records somewhere else, so it never opens onto that.
+      name: HOLDS_SAMPLES ? 'us-mine-crew' : 'us-mine-crew-records',
       version: STATE_VERSION,
-      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, DEMO_MODE) as unknown as Store,
+      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
       partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt }) => ({
         session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt,

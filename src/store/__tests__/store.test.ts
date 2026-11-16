@@ -170,6 +170,99 @@ describe("a build's own roster", () => {
   });
 });
 
+describe('a build with nobody made up', () => {
+  const people = parseRoster('Ortiz, Sam | Crusher\nQuinn, Riley J | Maintenance | supervisor');
+  const owner = { firstName: 'Sam', lastName: 'Ortiz' };
+  const account = (firstName: string, lastName: string) => ({
+    firstName, lastName, email: `${firstName.replace(/\W/g, '')}@example.com`.toLowerCase(), password: 'haulroad88',
+  });
+  const me = () => s().employees.find((e) => e.id === s().session?.employeeId);
+
+  beforeEach(() => {
+    s().resetDemo(owner, undefined, people, false);
+  });
+
+  it('starts with the people it names and nobody else, and nothing that happened', () => {
+    expect(s().employees.map((e) => `${e.lastName}, ${e.firstName}`).sort()).toEqual(['Ortiz, Sam', 'Quinn, Riley J']);
+    expect([s().accounts, s().shifts, s().leave, s().denied, s().inspections, s().opLogs, s().exams, s().mrfs]).toEqual(Array(8).fill([]));
+    expect(s().payRates).toEqual({});
+    // The fleet and the work areas are there to be used.
+    expect(s().equipment).toHaveLength(14);
+    expect(s().equipment.every((e) => e.status === 'ready')).toBe(true);
+    expect(s().areaSheets.length).toBeGreaterThan(0);
+    expect(s().session).toBeNull();
+  });
+
+  it('starts a phone opening it for the first time the same way', () => {
+    useStore.setState({ seededAt: null });
+    s().ensureSeeded(owner, undefined, people, false);
+    expect(s().employees).toHaveLength(2);
+    expect(s().shifts).toEqual([]);
+    // Opening it again keeps what is there.
+    s().openAsOwner(owner);
+    s().clockIn(onSite);
+    s().ensureSeeded(owner, undefined, people, false);
+    expect(s().shifts).toHaveLength(1);
+  });
+
+  it('has no sample person to open the preview as', () => {
+    expect(s().signInDemo('employee')).toMatchObject({ ok: false });
+    expect(s().signInDemo('supervisor')).toMatchObject({ ok: false });
+    expect(s().session).toBeNull();
+  });
+
+  it('opens as the person the build is made for, with no account to set up first', () => {
+    expect(s().openAsOwner(owner)).toEqual({ ok: true });
+    expect(me()).toMatchObject({ firstName: 'Sam', lastName: 'Ortiz', role: 'supervisor', title: 'Crusher' });
+    s().signOut();
+    expect(s().openAsOwner(owner)).toEqual({ ok: true });
+    expect(s().accounts).toHaveLength(1);
+    // They can still set a password of their own afterwards.
+    s().signOut();
+    expect(s().signUp(account('Sam', 'Ortiz'))).toEqual({ ok: true });
+    expect(s().accounts).toHaveLength(1);
+    expect(s().signIn('sam@example.com', 'haulroad88')).toEqual({ ok: true });
+  });
+
+  it('opens as nobody when the build names no owner, or the owner is off the roster', () => {
+    expect(s().openAsOwner(null)).toMatchObject({ ok: false });
+    expect(s().openAsOwner({ firstName: 'Pat', lastName: 'Nobody' })).toMatchObject({ ok: false });
+    // Another supervisor takes the owner off the roster.
+    s().signUp(account('Riley', 'Quinn'));
+    s().setEmployeeActive(s().employees.find((e) => e.lastName === 'Ortiz')!.id, false);
+    s().signOut();
+    expect(s().openAsOwner(owner)).toMatchObject({ ok: false });
+    expect(s().session).toBeNull();
+  });
+
+  it('is ready to work in: a punch, a checklist, an exam and a request, all under real names', () => {
+    s().openAsOwner(owner);
+    expect(s().clockIn(onSite)).toMatchObject({ ok: true });
+    const l12 = unit('L-12');
+    expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: answers('L-12') })).toMatchObject({ ok: true });
+    const sheet = s().areaSheets[0];
+    expect(s().submitExam({
+      sheetId: sheet.id, shift: 'day', startedAt: Date.now() - 600_000, others: [],
+      rows: Object.fromEntries(sheet.rows.map((r) => [r.id, { answer: 'ok' as const }])),
+      conditions: Object.fromEntries(AREA_CONDITIONS.map((c) => [c.id, { answer: 'ok' as const }])),
+    })).toMatchObject({ ok: true });
+    expect(s().createMrf({ equipmentId: l12.id, location: 'Shop', priority: 'routine', description: 'Wiper blade is worn', items: [], taggedOut: false })).toMatchObject({ ok: true, mrf: { number: 1001 } });
+    const mine = me()!.id;
+    expect(s().shifts.map((x) => x.employeeId)).toEqual([mine]);
+    expect(s().inspections.map((x) => x.employeeId)).toEqual([mine]);
+    expect(s().exams.map((x) => x.employeeId)).toEqual([mine]);
+  });
+
+  it('comes back to the same start when the device is cleared', () => {
+    s().openAsOwner(owner);
+    s().clockIn(onSite);
+    s().resetDemo(owner, undefined, people, false);
+    expect(s().shifts).toEqual([]);
+    expect(s().employees).toHaveLength(2);
+    expect(s().session).toBeNull();
+  });
+});
+
 describe('time clock', () => {
   beforeEach(() => {
     s().signInDemo('employee');

@@ -134,6 +134,30 @@ export function emptyData(): SeedData {
   };
 }
 
+/** The sample fleet as it stands before anyone has run it: every unit ready, at its starting reading. */
+function sampleFleet(): Equipment[] {
+  return FLEET.map(([unit, category, make, model, meter]) => ({
+    id: `eq_${unit}`,
+    unit,
+    category,
+    make,
+    model,
+    status: 'ready',
+    meter,
+    meterUnit: category === 'light_vehicle' ? 'mi' : 'hrs',
+  }));
+}
+
+/**
+ * What a preview with nobody made up in it starts from: the sample fleet, ready
+ * to be checked out, and the work-area sheets. There is nobody on the roster
+ * yet and nothing has happened. The build puts its own people on, and the hours
+ * and records are theirs to make.
+ */
+export function buildBareData(sheets: AreaSheet[] = SAMPLE_AREA_SHEETS): SeedData {
+  return { ...emptyData(), equipment: sampleFleet(), areaSheets: sheets };
+}
+
 /**
  * `sheets` are the work-area sheets the sample exams are made on: the build's
  * own when it names some, otherwise the made-up samples.
@@ -173,16 +197,7 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
     }),
   );
 
-  const equipment: Equipment[] = FLEET.map(([unit, category, make, model, meter]) => ({
-    id: `eq_${unit}`,
-    unit,
-    category,
-    make,
-    model,
-    status: 'ready',
-    meter,
-    meterUnit: category === 'light_vehicle' ? 'mi' : 'hrs',
-  }));
+  const equipment = sampleFleet();
   const byUnit = new Map(equipment.map((e) => [e.unit, e]));
 
   const shifts: Shift[] = [];

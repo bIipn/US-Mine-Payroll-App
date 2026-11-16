@@ -1,5 +1,5 @@
 import { parseAreaSheets } from './domain/areaExam';
-import { parsePersonName, parseRoster } from './domain/roster';
+import { parsePersonName, parseRoster, startsWithSamples } from './domain/roster';
 
 /**
  * App-wide configuration.
@@ -28,13 +28,29 @@ export const ROSTER_OWNER = parsePersonName(process.env.EXPO_PUBLIC_ROSTER_OWNER
  *     Quinn, Riley J | Maintenance | supervisor
  *
  * A build made with these has them all on the roster, so each can create an
- * account under their own name. They come with no hours or records: the sample
- * history stays on the made-up sample crew.
+ * account under their own name. They come with no hours or records: nothing is
+ * made up for a real person.
  *
  * Set EXPO_PUBLIC_ROSTER in `.env.local`, which is not committed. Real people's
  * names do not belong in the code: this repository is public.
  */
 export const ROSTER = parseRoster(process.env.EXPO_PUBLIC_ROSTER);
+
+/**
+ * Whether the preview starts with the made-up sample crew and their sample
+ * hours, checklists, exams and requests.
+ *
+ * A build that names its own roster starts without them: only the mine's own
+ * people are on it, and it opens with nothing in it but the fleet and the area
+ * sheets, ready to be used. A build that names no roster has them, so there is
+ * something to look at.
+ *
+ * EXPO_PUBLIC_SAMPLE_CREW in `.env.local` decides it either way. "1" keeps the
+ * samples beside the real roster, for showing the app with a few weeks of
+ * history in it; the made-up people are then marked "Sample". "0" starts a
+ * build with none.
+ */
+export const SAMPLE_CREW = startsWithSamples(process.env.EXPO_PUBLIC_SAMPLE_CREW, ROSTER.length);
 
 /**
  * The mine's own work-area sheets for the pre shift exam: the name of an area,

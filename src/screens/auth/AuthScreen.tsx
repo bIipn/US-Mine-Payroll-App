@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { LogoPlate, ProviderMark } from '../../components/Brand';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
-import { AREA_SHEETS, DEMO_MODE, ROSTER, SITE_LABEL } from '../../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SITE_LABEL } from '../../config';
 import type { AuthProvider, Role } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
@@ -26,6 +26,7 @@ export function AuthScreen() {
   const signUp = useStore((s) => s.signUp);
   const signInWithProvider = useStore((s) => s.signInWithProvider);
   const signInDemo = useStore((s) => s.signInDemo);
+  const openAsOwner = useStore((s) => s.openAsOwner);
   const showToast = useStore((s) => s.showToast);
 
   const [mode, setMode] = useState<Mode>('signin');
@@ -66,6 +67,11 @@ export function AuthScreen() {
 
   const demo = (role: Role) => {
     const result = signInDemo(role);
+    if (!result.ok) showToast(result.error, 'bo');
+  };
+
+  const openOwner = () => {
+    const result = openAsOwner();
     if (!result.ok) showToast(result.error, 'bo');
   };
 
@@ -187,8 +193,8 @@ export function AuthScreen() {
           </View>
         </View>
 
-        {DEMO_MODE ? (
-          <View style={styles.demo}>
+        {DEMO_MODE && SAMPLE_CREW ? (
+          <View testID="preview-note" style={styles.demo}>
             <Txt v="h3">Look around first</Txt>
             <Txt v="small" c={color.silica}>
               {/* A build made with the mine's own roster or sheets holds those as well as the samples. */}
@@ -215,6 +221,28 @@ export function AuthScreen() {
                 onPress={() => demo('supervisor')}
               />
             </View>
+          </View>
+        ) : null}
+
+        {/* A preview with nobody made up in it: there is no sample person to open it as, only the person it is made for. */}
+        {DEMO_MODE && !SAMPLE_CREW ? (
+          <View testID="preview-note" style={styles.demo}>
+            <Txt v="h3">This is a preview</Txt>
+            <Txt v="small" c={color.silica}>
+              What you enter stays on this device. The equipment list is a made-up example until the mine's own is put in.
+            </Txt>
+            {ROSTER_OWNER ? (
+              <View style={styles.demoRows}>
+                <Row
+                  testID="demo-owner"
+                  left={<ShieldCheck color={color.ink} size={26} />}
+                  title={`Open as ${ROSTER_OWNER.firstName} ${ROSTER_OWNER.lastName}`}
+                  sub="Supervisor. Skips setting up an account, for showing the app."
+                  chevron
+                  onPress={openOwner}
+                />
+              </View>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>

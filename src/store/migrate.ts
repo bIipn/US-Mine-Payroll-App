@@ -23,11 +23,13 @@ type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; r
  * so it stops counting days open. It also reloads a preview's sample data,
  * which moved to sample work areas that are not modelled on anyone's plant.
  *
- * A live build keeps every record. A preview build clears its "sample data
- * loaded" marker instead, so the sample crew is loaded again under the current
- * rules; that also signs the preview out.
+ * A build keeps every record that people entered. A preview that holds the
+ * sample crew (`samples`) clears its "sample data loaded" marker instead, so
+ * the samples are loaded again under the current rules; that also signs the
+ * preview out. A preview with no sample crew is not one of those: what is saved
+ * on the device is people's own punches and records, and it keeps them.
  */
-export function migratePersisted(saved: unknown, fromVersion: number, demo: boolean): Saved {
+export function migratePersisted(saved: unknown, fromVersion: number, samples: boolean): Saved {
   const state: Saved = saved && typeof saved === 'object' ? { ...(saved as Saved) } : {};
   if (fromVersion < 2) {
     state.leave = [];
@@ -53,7 +55,7 @@ export function migratePersisted(saved: unknown, fromVersion: number, demo: bool
       return { ...mrf, completedAt: done.at, completedBy: mrf.completedBy ?? done.by, remarks: mrf.remarks ?? done.note };
     });
   }
-  if (fromVersion < STATE_VERSION && demo && 'seededAt' in state) {
+  if (fromVersion < STATE_VERSION && samples && 'seededAt' in state) {
     state.seededAt = null;
     state.session = null;
   }

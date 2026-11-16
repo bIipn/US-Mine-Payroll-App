@@ -74,14 +74,14 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 399 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
+npm test           # 414 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
 
 The preview file is kept under 2 MB, which is as large as an HTML file can be and still open as a preview in the Claude phone app; a larger one has shown there as code. Its fonts go in as the compressed copies in `scripts/preview-fonts` to keep it that small, and the packer warns when the file gets close.
 
-The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere. While at lunch, "Skip to the end of lunch" shows what happens when the 30 minutes are up without waiting for them.
+The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. (A build that names its own roster has no sample people to open as; it has one shortcut, for the person the build is made for.) The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere. While at lunch, "Skip to the end of lunch" shows what happens when the 30 minutes are up without waiting for them.
 
 ## Signing in under your own name
 
@@ -103,8 +103,18 @@ EXPO_PUBLIC_ROSTER='Ortiz, Sam | Crusher\nQuinn, Riley J | Maintenance | supervi
 
 - A name is read as "Last, First", the way a sign-in sheet lists it. A middle initial, a nickname in quotes and a "Jr" or "III" stay where the mine wrote them.
 - A person signs up with their first and last name. They can leave off the middle initial and the "III", and someone who goes by their nickname can use it. When a name fits more than one person, the app asks for it the way it is on the roster.
-- Everyone a build names starts with no hours and no records. The sample hours, checklists and requests stay with the made-up sample crew, and the Roster screen of such a build marks those people "Sample". A sample person who happens to have the last name of someone the build names starts under a spare one, so the made-up hours are not taken for a real person's.
+- Everyone a build names starts with no hours and no records. Nothing is made up for a real person.
 - The person named in `EXPO_PUBLIC_ROSTER_OWNER` is a supervisor whatever their line says. Everyone else is crew until their line says `supervisor`, or a supervisor changes it on the Roster screen.
+
+**A build that names its roster has nobody made up in it.** The sample crew and their sample hours, checklists, exams and requests are left out. It opens with the mine's own people, the area sheets and the equipment list, and nothing that happened: the records are the crew's to make. The sign-in screen offers one shortcut, "Open as" the person the build is made for, and the More screen can clear the device back to that start. What such a build saves on a device is kept apart from the sample data an earlier preview may have saved there.
+
+To show the app with a few weeks of history in it, keep the samples beside the real roster:
+
+```
+EXPO_PUBLIC_SAMPLE_CREW=1
+```
+
+The made-up people are then marked "Sample" on the Roster screen, and one who happens to have the last name of someone on the real roster starts under a spare one, so the made-up hours are not taken for a real person's. The sample history is never moved onto real people. (`EXPO_PUBLIC_SAMPLE_CREW=0` starts a build that names nobody with none, too.)
 
 `.env.local` is not committed, and that is the point: **this repository is public.** Keep real names, pay figures and other personal details out of the code, out of `src/store/seed.ts`, and out of the screenshots and sample workbooks in `docs/`.
 

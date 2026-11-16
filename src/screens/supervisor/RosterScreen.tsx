@@ -6,7 +6,7 @@ import { Avatar, Button, Divider, EmptyState, Field, Notice, Page, Panel, Row, S
 import type { Employee, Role } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { DEMO_MODE, ROSTER } from '../../config';
+import { DEMO_MODE, ROSTER, SAMPLE_CREW } from '../../config';
 import { SAMPLE_CREW_IDS } from '../../store/seed';
 import { useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
@@ -15,10 +15,10 @@ import { fullName, initials } from '../../util/format';
 type Adding = 'one' | 'list';
 
 /**
- * A preview made with the mine's own roster has real people on it beside the made-up crew the
- * sample hours belong to. The made-up ones say so, so nobody takes them for staff.
+ * A preview that keeps the sample crew beside the mine's own roster has real people on it and
+ * the made-up ones the sample hours belong to. The made-up ones say so, so nobody takes them for staff.
  */
-const MIXED = DEMO_MODE && ROSTER.length > 0;
+const MIXED = DEMO_MODE && SAMPLE_CREW && ROSTER.length > 0;
 const isSample = (e: Employee) => MIXED && SAMPLE_CREW_IDS.has(e.id);
 
 /** The roster decides who can create an account. Nobody off this list gets in. */
