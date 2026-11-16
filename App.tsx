@@ -10,6 +10,8 @@ import React, { useEffect } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { APP_NAME } from './src/config';
+import { rulesFor } from './src/domain/stateRules';
 import { ToastHost } from './src/components/ui';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { syncReminders } from './src/services/reminders';
@@ -38,7 +40,7 @@ export default function App() {
     ensureSeeded();
     // Re-arm any lunch reminders for a shift that was already running.
     const { session, shifts, settings } = useStore.getState();
-    if (session) void syncReminders(openShiftOf(shifts, session.employeeId, Date.now()), settings.lunchReminders);
+    if (session) void syncReminders(openShiftOf(shifts, session.employeeId, Date.now()), settings.lunchReminders, rulesFor(settings.company.state));
   }, [hydrated, ensureSeeded]);
 
   // If the fonts cannot load, carry on with the system font rather than a blank screen.
@@ -50,8 +52,9 @@ export default function App() {
     <SafeAreaProvider>
       <View style={[styles.root, framed && styles.rootFramed]}>
         <View style={[styles.app, framed && styles.appFramed]}>
+          {/* On the web the browser tab says MineMuster, not the name of the screen. */}
           {ready ? (
-            <NavigationContainer theme={navTheme}>
+            <NavigationContainer theme={navTheme} documentTitle={{ formatter: () => APP_NAME }}>
               <RootNavigator />
             </NavigationContainer>
           ) : (

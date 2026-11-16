@@ -26,11 +26,11 @@ let js = fs.readFileSync(path.join(dist, tag[1]), 'utf8');
 // HTML file only up to that size; a larger one it shows as code. A copy is named after the font
 // file as the build names it, hash and all, so it is only ever used for the font it was made from.
 // `scripts/compress-preview-fonts.py` makes the copies.
-const MIME = { ttf: 'font/ttf', png: 'image/png' };
+const MIME = { ttf: 'font/ttf', png: 'image/png', webp: 'image/webp' };
 const COPIES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'preview-fonts');
 let inlined = 0;
 const uncompressed = [];
-js = js.replace(/"(\/assets\/[^"]+\.(ttf|png))"/g, (whole, url, ext) => {
+js = js.replace(/"(\/assets\/[^"]+\.(ttf|png|webp))"/g, (whole, url, ext) => {
   const file = path.join(dist, url);
   if (!fs.existsSync(file)) return whole;
   inlined += 1;
@@ -46,8 +46,10 @@ js = js.replace(/"(\/assets\/[^"]+\.(ttf|png))"/g, (whole, url, ext) => {
 // A literal "</script" inside the bundle would end the inline script early.
 js = js.replace(/<\/script/gi, '<\\/script');
 
+// The browser tab shows the MineMuster mark, packed in like everything else.
+const favicon = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'favicon.png')).toString('base64');
 html = html
-  .replace(/<link rel="icon"[^>]*>/, '')
+  .replace(/<link rel="icon"[^>]*>/, () => `<link rel="icon" type="image/png" href="data:image/png;base64,${favicon}"/>`)
   .replace(/<title>[^<]*<\/title>/, '<title>MineMuster preview</title>')
   .replace(tag[0], () => `<script>${js}</script>`);
 

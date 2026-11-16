@@ -1,10 +1,10 @@
 import React from 'react';
-import { Image, Text, View } from 'react-native';
+import { Image, View } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 
 import type { CompanyLogo } from '../domain/company';
 import type { AuthProvider } from '../domain/types';
-import { color, font } from '../theme/theme';
+import { color } from '../theme/theme';
 import { LOGO_ART } from './logoArt';
 
 /**
@@ -65,13 +65,26 @@ export function CompanyLogoPlate({ logo, name, width, radius = 8 }: {
   );
 }
 
-/** MineMuster's own name, for the sign-in screen of a company with no logo. */
-export function Wordmark() {
+/** The MineMuster lockup, made from its renders by scripts/make-brand-assets.py. Width over height. */
+const MINEMUSTER_LOGO = require('../../assets/brand/minemuster-logo.webp');
+const MINEMUSTER_RATIO = 840 / 390;
+
+/**
+ * MineMuster's own logo: the silver MM over MINE MUSTER. Its black is
+ * transparent and its glow fades out, so it sits on any dark colour; it is
+ * made for the dark sign-in screen and never goes on a light one. Shown where
+ * a company has no logo of its own.
+ */
+export function MineMusterLogo({ width }: { width: number }) {
   return (
-    <View testID="minemuster-wordmark" accessibilityRole="header" accessibilityLabel="MineMuster" style={{ alignSelf: 'flex-start', gap: 6 }}>
-      <Text style={{ fontFamily: font.condBold, fontSize: 52, lineHeight: 54, color: color.white, letterSpacing: 0.5 }}>MineMuster</Text>
-      <View style={{ height: 6, width: 72, backgroundColor: color.yellow, borderRadius: 3 }} />
-    </View>
+    <Image
+      testID="minemuster-logo"
+      accessibilityRole="image"
+      accessibilityLabel="MineMuster"
+      source={MINEMUSTER_LOGO}
+      resizeMode="contain"
+      style={{ width, height: width / MINEMUSTER_RATIO }}
+    />
   );
 }
 

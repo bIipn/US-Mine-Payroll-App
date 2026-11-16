@@ -249,6 +249,7 @@ Only standards whose text has been checked are cited. The summaries in the app a
 | Sample crew and fleet | `src/store/seed.ts` |
 | Colours and type | `src/theme/theme.ts` |
 | Company logo | `logo` in the company setting: an image address, or `us-mine` for the traced artwork in `src/components/logoArt.ts` |
+| MineMuster's logo, app icon, launch screen and favicon | The renders in `assets/brand/source`, then `python3 scripts/make-brand-assets.py` |
 
 The real roster and fleet can also be entered in the app: Crew → Roster → Add people → Paste a list.
 
@@ -265,11 +266,11 @@ EXPO_PUBLIC_COMPANY='{"name": "Example Aggregates Co.", "state": "NV", "place": 
 
 ## The logo
 
-A company's logo sits on a white plate at the top of the Clock screen and on the sign-in screen, in its own colours and proportions. A company with no logo shows none: the Clock screen keeps its plain colour, and the sign-in screen shows the MineMuster name.
+MineMuster's own logo is the silver MM over MINE MUSTER. It is on the sign-in screen of a company with no logo of its own, the app icon (the MM mark on black), the black launch screen and the browser tab. Its two renders are kept in `assets/brand/source`, and `scripts/make-brand-assets.py` makes every size from them; the black in the renders becomes transparent, so the logo sits on any dark colour with its glow intact. It is made for dark backgrounds and is not put on a light one.
 
-U.S. Mine Corp.'s logo is built in as traced artwork (`"logo": "us-mine"` in its private build): the navy lettering over the gold stepped rule. The app icon and the launch screen still carry it, until MineMuster has its own.
+A company's own logo sits on a white plate at the top of the Clock screen and in place of MineMuster's on the sign-in screen, in its own colours and proportions. A company with no logo shows none on the Clock screen, which keeps its plain colour.
 
-The logo in this build was traced from a screenshot the company's artwork was supplied in, so it is sharp at any size but its finest details are only as good as that screenshot. Before a store release, regenerate `src/components/logoArt.ts` and the files in `assets/` from the company's original artwork (an SVG, PDF or large PNG), and have the company sign off on how its logo is used.
+U.S. Mine Corp.'s logo is built in as traced artwork (`"logo": "us-mine"` in its private build): the navy lettering over the gold stepped rule.
 
 ## How the code is laid out
 
