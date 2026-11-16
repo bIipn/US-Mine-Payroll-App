@@ -247,15 +247,16 @@ So the file is built to be mapped, and a ready-made layout for one system can be
 
 ## The clock-in boundary
 
-The boundary is a circle around the pin at 38.33419° N, 120.94551° W, 1,000 m (0.62 mi) out by default, which is about 776 acres.
+The boundary is a circle around a pin on the mine, 1,000 m (0.62 mi) out by default, which is about 776 acres, or a surveyed outline in its place (`polygon`). No mine's location is written into the code:
 
-The Central Valley Water Board permit for the site (Order R5-2025-0042, June 2025) describes the US Mine Ione Plant as about 1.25 miles south of Ione on roughly 3,570 acres, of which about 402 acres have been mined, built on or reclaimed, all south of town and west of Highway 124. A circle the size of the full 3,570 acres centered on the pin would reach the south side of town, so the default covers the working area and stops about 0.8 miles short of downtown.
-
-Supervisors can change the radius in the app (Crew → Mine boundary). To use the true property outline instead, set `polygon` on the site in `src/domain/site.ts`; the parcel numbers from the permit are listed there.
+- **A build names its site with the company,** in `EXPO_PUBLIC_COMPANY`: `"site": {"name": "...", "lat": 0.0, "lng": 0.0, "radiusM": 1000, "town": {"name": "...", "lat": 0.0, "lng": 0.0}}`. The town is optional; when it is there, the boundary screen and the map show how far the boundary stays from it.
+- **A supervisor sets it in the app** on More → Mine boundary: standing on the mine, "Put the pin where I am" moves the pin there, and the buttons size the circle.
+- **The sample company's site is made up:** round numbers in open desert, with a made-up town about a mile and a half off.
+- **Until a site is set,** a clock-in is turned down with a note to ask a supervisor to set the boundary. Clocking out and starting lunch are never blocked by location.
 
 ## Standards
 
-Ione is a surface non-metal mine, so the governing federal standards are MSHA's 30 CFR Part 56. Each safety check also shows the matching federal OSHA rule (29 CFR 1910 / 1926) as a cross-reference. In California, Cal/OSHA's Mining and Tunneling Unit also inspects surface mines under the Title 8 Mine Safety Orders.
+The app's forms are for surface metal and nonmetal mines, so the governing federal standards are MSHA's 30 CFR Part 56. Each safety check also shows the matching federal OSHA rule (29 CFR 1910 / 1926) as a cross-reference. In California, Cal/OSHA's Mining and Tunneling Unit also inspects surface mines under the Title 8 Mine Safety Orders.
 
 - The equipment checklist is the operator's inspection before equipment is placed in operation on the shift, 30 CFR 56.14100.
 - The pre shift exam is the examination of working places, 30 CFR 56.18002. Its record names who made the examination, the date, the areas examined and each condition found, and the date a condition is corrected is added to it. The app's exam record carries each of those.

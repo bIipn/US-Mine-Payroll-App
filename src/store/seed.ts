@@ -2,7 +2,7 @@ import { AREA_CONDITIONS, buildExam, SAMPLE_AREA_SHEETS, shiftAt, withFix, withM
 import { SAMPLE_COMPANY, type Company } from '../domain/company';
 import { destination, toGeoStamp } from '../domain/geofence';
 import { keptApart, type PersonName } from '../domain/roster';
-import { DEFAULT_SITE } from '../domain/site';
+import { SAMPLE_SITE } from '../domain/site';
 import { checklistFor, inspectionResult } from '../domain/templates';
 import { LUNCH_MS, startedLunch } from '../domain/time';
 import type {
@@ -22,6 +22,7 @@ import type {
   Role,
   Settings,
   Shift,
+  SiteConfig,
 } from '../domain/types';
 import { addDays, HOUR, MIN, startOfDay } from '../util/format';
 import { seededRandom } from '../util/hash';
@@ -117,10 +118,10 @@ const INDOORS_NA = ['berms', 'pulleys', 'belt_components', 'estops', 'mobile_equ
 /** An area that is a room or a shed, going by the name on its sheet. */
 const indoors = (sheet: AreaSheet) => /\b(lab|laboratory|office|shed)\b/i.test(sheet.title);
 
-export function defaultSettings(demo: boolean, company: Company = SAMPLE_COMPANY): Settings {
+export function defaultSettings(demo: boolean, company: Company = SAMPLE_COMPANY, site: SiteConfig | null = SAMPLE_SITE): Settings {
   return {
     company,
-    site: DEFAULT_SITE,
+    site,
     workweekStartsOn: 0,
     lunchReminders: true,
     allowSectionAllOk: true,
@@ -174,7 +175,8 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
   // A second stream for the details on the cards and exams, so they never shift the punches.
   const extra = seededRandom(1848);
   const pick = (min: number, max: number) => min + Math.floor(extra() * (max - min + 1));
-  const site = DEFAULT_SITE;
+  // The sample crew's punches were made at the sample site.
+  const site = SAMPLE_SITE;
 
   const onSite = (): GeoStamp =>
     toGeoStamp(site, { ...destination(site.center, between(-420, 420), between(-380, 300)), accuracyM: between(4, 12) }, 'gps');

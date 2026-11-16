@@ -1,7 +1,7 @@
 import * as Location from 'expo-location';
 
 import { destination, type RawFix } from '../domain/geofence';
-import { IONE_TOWN_CENTER } from '../domain/site';
+import { awayFromSite } from '../domain/site';
 import type { DemoLocation, GeoStamp, SiteConfig } from '../domain/types';
 
 export type LocateResult =
@@ -17,14 +17,15 @@ const GPS_TIMEOUT_MS = 15_000;
  * anyone in the background: a position is read when a button is pressed,
  * stamped on that punch, and that is all.
  */
-export async function locate(site: SiteConfig, demo: DemoLocation): Promise<LocateResult> {
-  if (demo === 'at_mine') {
+export async function locate(site: SiteConfig | null, demo: DemoLocation): Promise<LocateResult> {
+  // With no site set there is nowhere for the preview to pretend to be, so the phone's own GPS is read.
+  if (site && demo === 'at_mine') {
     // A spot by the plant, a little off the pin, as a phone would report it.
     const jitter = (Date.now() % 40) - 20;
     return { ok: true, source: 'demo', fix: { ...destination(site.center, 90 + jitter, -60), accuracyM: 6 } };
   }
-  if (demo === 'in_town') {
-    return { ok: true, source: 'demo', fix: { ...IONE_TOWN_CENTER, accuracyM: 8 } };
+  if (site && demo === 'in_town') {
+    return { ok: true, source: 'demo', fix: { ...awayFromSite(site), accuracyM: 8 } };
   }
 
   try {

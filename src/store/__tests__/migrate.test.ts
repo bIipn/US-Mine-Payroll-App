@@ -1,3 +1,4 @@
+import { sha256 } from '../../util/hash';
 import type { Company } from '../../domain/company';
 import { migratePersisted } from '../migrate';
 
@@ -143,6 +144,19 @@ describe('migratePersisted', () => {
     expect(next.seededAt).toBe(1_700_000_000_000);
   });
 
+  it('swaps the location that used to be built in for the site this build starts with', () => {
+    // A made-up pin stands in for the old built-in one, which is known to the app only by its hash.
+    const builtIn = { name: 'Old plant', center: { lat: 10.5, lng: -20.25 }, radiusM: 1250 };
+    const oldPin = sha256('10.5,-20.25');
+    const v7 = { ...v1, settings: { lunchReminders: false, company: COMPANY, site: builtIn }, synced: {} };
+    const own = { name: 'North pit', center: { lat: 40.25, lng: -117.5 }, radiusM: 1000 };
+    expect((migratePersisted(v7, 7, false, COMPANY, own, oldPin).settings as { site: unknown }).site).toEqual(own);
+    expect((migratePersisted(v7, 7, false, COMPANY, null, oldPin).settings as { site: unknown }).site).toBeNull();
+    const moved = { ...builtIn, center: { lat: 40.1, lng: -117.2 } };
+    const kept = { ...v7, settings: { ...v7.settings, site: moved } };
+    expect((migratePersisted(kept, 7, false, COMPANY, own, oldPin).settings as { site: unknown }).site).toBe(moved);
+  });
+
   it('leaves data from the current version alone', () => {
     const v7 = {
       ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'crusher' }],
@@ -150,7 +164,7 @@ describe('migratePersisted', () => {
       settings: { lunchReminders: false, company: COMPANY },
       synced: { 'shift:s1': 'abc' },
     };
-    expect(migratePersisted(v7, 7, true, COMPANY)).toEqual(v7);
+    expect(migratePersisted(v7, 8, true, COMPANY, null)).toEqual(v7);
   });
 
   it('copes with nothing saved', () => {

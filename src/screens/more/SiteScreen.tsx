@@ -1,11 +1,11 @@
-import { LocateFixed, Minus, Plus } from '../../components/icons';
+import { LocateFixed, MapPin, Minus, Plus } from '../../components/icons';
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { SiteMap } from '../../components/SiteMap';
 import { Button, Divider, IconButton, Notice, Page, Panel, Txt } from '../../components/ui';
-import { checkFix, circleAcres, haversineM, type FixCheck, type RawFix } from '../../domain/geofence';
-import { IONE_TOWN_CENTER, MAX_RADIUS_M, MIN_RADIUS_M, PROPERTY_FACTS } from '../../domain/site';
+import { checkFix, circleAcres, MAX_ACCURACY_M, type FixCheck, type RawFix } from '../../domain/geofence';
+import { MAX_RADIUS_M, MIN_RADIUS_M, townGap } from '../../domain/site';
 import type { ScreenProps } from '../../navigation/types';
 import { locate } from '../../services/location';
 import { useMe, useStore } from '../../store/useStore';
@@ -17,16 +17,62 @@ const commas = (n: number) => Math.round(n).toLocaleString('en-US');
 export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
   const me = useMe();
   const settings = useStore((s) => s.settings);
-  const { setRadius } = useStore.getState();
+  const { setRadius, setSitePin, showToast } = useStore.getState();
   const site = settings.site;
+  const supervisor = me?.role === 'supervisor';
 
   const [busy, setBusy] = useState(false);
   const [fix, setFix] = useState<RawFix | null>(null);
   const [check, setCheck] = useState<FixCheck | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
 
-  const townDistance = haversineM(site.center, IONE_TOWN_CENTER);
-  const gap = townDistance - site.radiusM;
+  const away = site ? townGap(site) : undefined;
+
+  /** Move the pin to where the supervisor stands, if the phone can place them well enough. */
+  const pinHere = async () => {
+    setBusy(true);
+    setFailed(null);
+    const result = await locate(site, settings.demoLocation);
+    setBusy(false);
+    if (!result.ok) {
+      setFailed(result.reason === 'denied' ? 'Location is turned off for this app. Turn it on in your phone settings.' : 'The phone could not get a position. Step into the open and try again.');
+      return;
+    }
+    if (result.fix.mocked) {
+      setFailed('The phone reported a simulated location. Turn off any mock-location app and try again.');
+      return;
+    }
+    if (result.fix.accuracyM != null && result.fix.accuracyM > MAX_ACCURACY_M) {
+      setFailed(`Your phone can only place you to within ${fmtDistance(result.fix.accuracyM)}. Step into the open, give it a few seconds and try again.`);
+      return;
+    }
+    const saved = setSitePin({ lat: result.fix.lat, lng: result.fix.lng });
+    if (!saved.ok) {
+      setFailed(saved.error);
+      return;
+    }
+    setFix(null);
+    setCheck(null);
+    showToast('The pin is where you are standing.');
+  };
+
+  if (!site) {
+    return (
+      <Page testID="site-screen" title="Mine boundary" onBack={navigation.goBack}>
+        <Notice
+          tone="warn"
+          title="The mine boundary is not set yet"
+          body={
+            supervisor
+              ? 'No one can clock in until it is. Stand on the mine, near the middle of where the crew works, and put the pin there. The circle starts 1 km out and can be sized after.'
+              : 'No one can clock in until a supervisor sets it. Ask a supervisor to set the pin on the mine.'
+          }
+        />
+        {failed ? <Notice tone="warn" title="No position" body={failed} /> : null}
+        {supervisor ? <Button testID="site-pin-here" label="Put the pin where I am" icon={MapPin} kind="ink" loading={busy} onPress={pinHere} /> : null}
+      </Page>
+    );
+  }
 
   const find = async () => {
     setBusy(true);
@@ -73,13 +119,17 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
             About {commas(circleAcres(site.radiusM))} acres. You have to be inside it to clock in.
           </Txt>
         </View>
-        <Divider inset={space.lg} />
-        <View style={styles.fact}>
-          <Txt v="strong">Town is outside it</Txt>
-          <Txt v="body" c={color.inkSoft}>
-            Downtown Ione is {fmtDistance(townDistance)} from the pin, {fmtDistance(gap)} beyond the boundary. A clock-in from town is turned down.
-          </Txt>
-        </View>
+        {away && away.gapM > 0 ? (
+          <>
+            <Divider inset={space.lg} />
+            <View style={styles.fact} testID="site-town">
+              <Txt v="strong">{away.name} is outside it</Txt>
+              <Txt v="body" c={color.inkSoft}>
+                {away.name} is {fmtDistance(away.distanceM)} from the pin, {fmtDistance(away.gapM)} beyond the boundary. A clock-in from there is turned down.
+              </Txt>
+            </View>
+          </>
+        ) : null}
         <Divider inset={space.lg} />
         <View style={styles.fact}>
           <Txt v="strong">Your location is read only when you punch</Txt>
@@ -89,7 +139,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
         </View>
       </Panel>
 
-      {me?.role === 'supervisor' ? (
+      {supervisor ? (
         <Panel title="Adjust the boundary">
           <View style={styles.stepper}>
             <IconButton testID="radius-minus" icon={Minus} label="Smaller boundary" bg={color.grayTint} onPress={() => setRadius(site.radiusM - 50)} />
@@ -100,19 +150,14 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
             <IconButton testID="radius-plus" icon={Plus} label="Larger boundary" bg={color.grayTint} onPress={() => setRadius(site.radiusM + 50)} />
           </View>
           <Txt v="small" c={color.silica} style={{ marginTop: space.md }}>
-            Between {MIN_RADIUS_M} and {commas(MAX_RADIUS_M)} m, in steps of 50 m. Past about {commas(Math.floor((townDistance - 800) / 50) * 50)} m the circle starts to reach the south side of town.
+            Between {MIN_RADIUS_M} and {commas(MAX_RADIUS_M)} m, in steps of 50 m.
+            {away ? ` Past about ${commas(Math.floor((away.distanceM - 800) / 50) * 50)} m the circle starts to reach ${away.name}.` : ''}
           </Txt>
+          <View style={{ marginTop: space.lg }}>
+            <Button testID="site-pin-here" label="Put the pin where I am" icon={MapPin} kind="outline" loading={busy} onPress={pinHere} />
+          </View>
         </Panel>
       ) : null}
-
-      <Panel title="About the property">
-        <Txt v="body" c={color.inkSoft}>
-          The US Mine Ione Plant sits about {PROPERTY_FACTS.milesSouthOfIone} miles south of Ione on roughly {commas(PROPERTY_FACTS.totalAcres)} acres. About {PROPERTY_FACTS.activeAcres} acres have been mined, built on or reclaimed, all south of town and west of Highway 124.
-        </Txt>
-        <Txt v="small" c={color.silica} style={{ marginTop: space.sm }}>
-          Source: {PROPERTY_FACTS.source}. The boundary here is a circle around the pin sized to cover the working area. It can be swapped for the surveyed property outline (parcels {PROPERTY_FACTS.parcels.join(', ')}).
-        </Txt>
-      </Panel>
     </Page>
   );
 }

@@ -1,9 +1,10 @@
 import type { Company } from '../domain/company';
 import { startedLunch } from '../domain/time';
-import type { Lunch } from '../domain/types';
+import type { Lunch, SiteConfig } from '../domain/types';
+import { sha256 } from '../util/hash';
 
 /** Version of the saved app state. Raise it when the shape of the data changes. */
-export const STATE_VERSION = 7;
+export const STATE_VERSION = 8;
 
 type Saved = Record<string, unknown>;
 type SavedEvent = { at?: number; by?: string; status?: string; note?: string };
@@ -28,6 +29,10 @@ type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; r
  * Version 7 notes which version of each record the company's server has
  * (`synced`). A phone starts with none, so everything it holds is sent once
  * it can reach a server.
+ * Version 8 made the clock-in site a setting, with no mine's location built
+ * in. A saved site still on the pin that used to be built in takes the site
+ * this build starts with (`site`), or none until a supervisor sets it. A site a
+ * supervisor moved is kept.
  *
  * A build keeps every record that people entered. A preview that holds the
  * sample crew (`samples`) clears its "sample data loaded" marker instead, so
@@ -35,7 +40,20 @@ type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; r
  * preview out. A preview with no sample crew is not one of those: what is saved
  * on the device is people's own punches and records, and it keeps them.
  */
-export function migratePersisted(saved: unknown, fromVersion: number, samples: boolean, company: Company): Saved {
+/**
+ * The pin every build had before the site was a setting, as a hash of
+ * "lat,lng", so no mine's location is written here.
+ */
+const OLD_BUILT_IN_PIN = '8d87cf641bd4931e8b096f87c8add6cc9e11c774a996b25810bce875d50d1244';
+
+export function migratePersisted(
+  saved: unknown,
+  fromVersion: number,
+  samples: boolean,
+  company: Company,
+  site: SiteConfig | null = null,
+  oldPin: string = OLD_BUILT_IN_PIN,
+): Saved {
   const state: Saved = saved && typeof saved === 'object' ? { ...(saved as Saved) } : {};
   if (fromVersion < 2) {
     state.leave = [];
@@ -66,6 +84,13 @@ export function migratePersisted(saved: unknown, fromVersion: number, samples: b
   }
   if (fromVersion < 7) {
     state.synced = {};
+  }
+  if (fromVersion < 8 && state.settings && typeof state.settings === 'object') {
+    const saved = (state.settings as { site?: { center?: { lat?: number; lng?: number } } }).site;
+    const pin = saved?.center;
+    if (pin && sha256(`${pin.lat},${pin.lng}`) === oldPin) {
+      state.settings = { ...(state.settings as Saved), site };
+    }
   }
   if (fromVersion < STATE_VERSION && samples && 'seededAt' in state) {
     state.seededAt = null;

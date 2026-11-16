@@ -2,15 +2,16 @@ import React from 'react';
 import { View } from 'react-native';
 import Svg, { Circle, G, Line, Path, Polygon, Rect, Text as SvgText } from 'react-native-svg';
 
-import { haversineM, offsetM } from '../domain/geofence';
-import { IONE_TOWN_CENTER } from '../domain/site';
+import { offsetM } from '../domain/geofence';
+import { townGap } from '../domain/site';
 import type { LatLng, SiteConfig } from '../domain/types';
 import { color, font } from '../theme/theme';
 import { fmtDistance } from '../util/format';
 
 /**
  * A to-scale diagram of the clock-in boundary: the mine pin, the boundary
- * around it, downtown Ione for reference, and (when known) where the phone is.
+ * around it, the nearest town for reference when the site names one, and
+ * (when known) where the phone is.
  * North is up. It is a diagram, not a street map.
  */
 export function SiteMap({ site, you, youInside, height = 300 }: {
@@ -21,14 +22,14 @@ export function SiteMap({ site, you, youInside, height = 300 }: {
 }) {
   const W = 340;
   const H = Math.round((height / 300) * 300);
-  const town = offsetM(site.center, IONE_TOWN_CENTER);
+  const town = site.town ? offsetM(site.center, site.town.center) : undefined;
   const me = you ? offsetM(site.center, you) : undefined;
 
   // Fit the boundary, the town and the phone, with a margin.
   const points = [
     { east: -site.radiusM, north: -site.radiusM },
     { east: site.radiusM, north: site.radiusM },
-    town,
+    ...(town ? [town] : []),
     ...(me ? [me] : []),
   ];
   const minE = Math.min(...points.map((p) => p.east));
@@ -42,8 +43,7 @@ export function SiteMap({ site, you, youInside, height = 300 }: {
   const x = (east: number) => cx + east * scale;
   const y = (north: number) => cy - north * scale;
 
-  const townDistance = haversineM(site.center, IONE_TOWN_CENTER);
-  const gap = townDistance - site.radiusM;
+  const away = townGap(site);
   const half = 804.672; // half a mile, in metres
   const outline = site.polygon?.map((p) => offsetM(site.center, p));
 
@@ -52,14 +52,14 @@ export function SiteMap({ site, you, youInside, height = 300 }: {
   return (
     <View
       accessibilityRole="image"
-      accessibilityLabel={`Diagram of the clock-in boundary, ${fmtDistance(site.radiusM)} around the mine pin. Downtown Ione is ${fmtDistance(townDistance)} away, ${fmtDistance(gap)} outside the boundary.`}
+      accessibilityLabel={`Diagram of the clock-in boundary, ${fmtDistance(site.radiusM)} around the mine pin.${away ? ` ${away.name} is ${fmtDistance(away.distanceM)} away, ${fmtDistance(away.gapM)} outside the boundary.` : ''}`}
       style={{ borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: color.rule, backgroundColor: color.kaolin }}
     >
       <Svg width="100%" height={height} viewBox={`0 0 ${W} ${H}`}>
         <Rect x={0} y={0} width={W} height={H} fill={color.kaolin} />
 
         {/* Mine to town, with the distance */}
-        <Line x1={x(0)} y1={y(0)} x2={x(town.east)} y2={y(town.north)} stroke={color.silicaLight} strokeWidth={1.5} strokeDasharray="5 5" />
+        {town ? <Line x1={x(0)} y1={y(0)} x2={x(town.east)} y2={y(town.north)} stroke={color.silicaLight} strokeWidth={1.5} strokeDasharray="5 5" /> : null}
 
         {/* The boundary */}
         {outline ? (
@@ -82,10 +82,14 @@ export function SiteMap({ site, you, youInside, height = 300 }: {
         </SvgText>
 
         {/* Town */}
-        <Rect x={x(town.east) - 6} y={y(town.north) - 6} width={12} height={12} fill={color.silica} />
-        <SvgText x={x(town.east) - 22} y={y(town.north) + 4} fill={color.inkSoft} textAnchor="end" {...label}>
-          {`Downtown Ione, ${fmtDistance(townDistance)}`}
-        </SvgText>
+        {town && away ? (
+          <G>
+            <Rect x={x(town.east) - 6} y={y(town.north) - 6} width={12} height={12} fill={color.silica} />
+            <SvgText x={x(town.east) - 22} y={y(town.north) + 4} fill={color.inkSoft} textAnchor="end" {...label}>
+              {`${away.name}, ${fmtDistance(away.distanceM)}`}
+            </SvgText>
+          </G>
+        ) : null}
 
         {/* The phone */}
         {me ? (

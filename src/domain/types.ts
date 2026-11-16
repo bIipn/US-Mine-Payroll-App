@@ -366,7 +366,8 @@ export type DemoLocation = 'gps' | 'at_mine' | 'in_town';
 export interface Settings {
   /** Who the crew works for: name, state, logo, pay periods. */
   company: Company;
-  site: SiteConfig;
+  /** The clock-in boundary. None until it is set: then no one can clock in. */
+  site: SiteConfig | null;
   /** 0 = Sunday. */
   workweekStartsOn: number;
   lunchReminders: boolean;

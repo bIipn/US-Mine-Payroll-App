@@ -31,6 +31,16 @@ describe('the company a build names', () => {
     expect(parseCompany('{"name":"A","state":"NV","mineId":"26"}').error).toMatch(/mine ID/);
   });
 
+  it('reads the site a build names with the company: the pin, the circle and a town for reference', () => {
+    const { site } = parseCompany('{"name":"A","state":"NV","site":{"name":"North pit","lat":40.25,"lng":-117.5,"radiusM":1200,"town":{"name":"Elm","lat":40.27,"lng":-117.49}}}');
+    expect(site).toEqual({ name: 'North pit', center: { lat: 40.25, lng: -117.5 }, radiusM: 1200, town: { name: 'Elm', center: { lat: 40.27, lng: -117.49 } } });
+    expect(parseCompany('{"name":"A","state":"NV","site":{"lat":40.25,"lng":-117.5}}').site).toEqual({ name: 'A', center: { lat: 40.25, lng: -117.5 }, radiusM: 1000 });
+    expect(parseCompany('{"name":"A","state":"NV","site":{"lat":40.25,"lng":-117.5,"radiusM":9000}}').site!.radiusM).toBe(2000);
+    expect(parseCompany('{"name":"A","state":"NV","site":{"lat":95,"lng":-117.5}}').error).toMatch(/site/);
+    expect(parseCompany('{"name":"A","state":"NV","site":{"lat":"x","lng":-117.5}}').error).toMatch(/site/);
+    expect(parseCompany('{"name":"A","state":"NV"}').site).toBeUndefined();
+  });
+
   it('keeps time unless the build says the crew uses the safety forms only', () => {
     expect(keepsTime(parseCompany('{"name":"A","state":"NV"}').company!)).toBe(true);
     const safetyOnly = parseCompany('{"name":"A","state":"NV","timeClock":false}').company!;

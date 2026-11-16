@@ -1,14 +1,27 @@
 import { checkFix, circleAcres, destination, haversineM, offsetM, pointInPolygon, toGeoStamp } from '../geofence';
-import { DEFAULT_SITE, IONE_TOWN_CENTER, MINE_CENTER } from '../site';
+import { awayFromSite, SAMPLE_SITE } from '../site';
 
+const MINE_CENTER = SAMPLE_SITE.center;
+const DEFAULT_SITE = SAMPLE_SITE;
 const north = (m: number) => destination(MINE_CENTER, 0, m);
 
-describe('distance', () => {
-  it('puts downtown Ione about 1.45 miles from the mine pin', () => {
-    const metres = haversineM(MINE_CENTER, IONE_TOWN_CENTER);
+describe('the sample site', () => {
+  it('is made up: round numbers, named for the sample company, with a town for reference about 1.5 miles off', () => {
+    expect(SAMPLE_SITE.center).toEqual({ lat: 39.5, lng: -116.5 });
+    expect(SAMPLE_SITE.name).toBe('Sample Mining Co. pit');
+    const metres = haversineM(MINE_CENTER, SAMPLE_SITE.town!.center);
     expect(metres).toBeGreaterThan(2300);
-    expect(metres).toBeLessThan(2380);
+    expect(metres).toBeLessThan(2500);
   });
+
+  it('puts a phone "away from the mine" in the town, or well outside a site with none', () => {
+    expect(awayFromSite(SAMPLE_SITE)).toEqual(SAMPLE_SITE.town!.center);
+    const bare = { name: 'Pit', center: MINE_CENTER, radiusM: 1500 };
+    expect(checkFix(bare, { ...awayFromSite(bare), accuracyM: 5 }).verdict).toBe('outside');
+  });
+});
+
+describe('distance', () => {
   it('round-trips offsets', () => {
     const p = destination(MINE_CENTER, 400, -250);
     const o = offsetM(MINE_CENTER, p);
@@ -24,8 +37,8 @@ describe('checkFix', () => {
     expect(check.verdict).toBe('inside');
     expect(check.marginM).toBeCloseTo(700, 0);
   });
-  it('keeps the town of Ione outside the default boundary', () => {
-    const check = checkFix(DEFAULT_SITE, { ...IONE_TOWN_CENTER, accuracyM: 5 });
+  it('keeps the town outside the sample boundary', () => {
+    const check = checkFix(DEFAULT_SITE, { ...SAMPLE_SITE.town!.center, accuracyM: 5 });
     expect(check.verdict).toBe('outside');
     expect(check.marginM).toBeLessThan(-1300);
   });

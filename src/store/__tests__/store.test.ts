@@ -1,6 +1,6 @@
 import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, type ExamDraft } from '../../domain/areaExam';
 import { toGeoStamp } from '../../domain/geofence';
-import { DEFAULT_SITE } from '../../domain/site';
+import { SAMPLE_SITE } from '../../domain/site';
 import { changesToSend } from '../../domain/sync';
 import { SAMPLE_CREW_IDS } from '../seed';
 import { checklistFor } from '../../domain/templates';
@@ -10,7 +10,7 @@ import { parseRoster } from '../../domain/roster';
 import { openShiftOf, useStore } from '../useStore';
 
 const at = (h: number, m = 0) => new Date(2026, 10, 13, h, m, 0).getTime();
-const onSite = toGeoStamp(DEFAULT_SITE, { ...DEFAULT_SITE.center, accuracyM: 5 }, 'gps');
+const onSite = toGeoStamp(SAMPLE_SITE, { ...SAMPLE_SITE.center, accuracyM: 5 }, 'gps');
 const s = () => useStore.getState();
 const unit = (name: string) => s().equipment.find((e) => e.unit === name)!;
 const answers = (name: string, bad: Record<string, Partial<InspectionAnswer>> = {}): InspectionAnswer[] =>
@@ -835,13 +835,35 @@ describe('area sheets', () => {
 });
 
 describe('settings', () => {
+  it('starts a preview at the made-up sample site', () => {
+    expect(s().settings.site).toEqual(SAMPLE_SITE);
+  });
+
   it('keeps the boundary radius inside sane limits, in 50 m steps', () => {
     s().setRadius(1234);
-    expect(s().settings.site.radiusM).toBe(1250);
+    expect(s().settings.site!.radiusM).toBe(1250);
     s().setRadius(10);
-    expect(s().settings.site.radiusM).toBe(200);
+    expect(s().settings.site!.radiusM).toBe(200);
     s().setRadius(99999);
-    expect(s().settings.site.radiusM).toBe(2000);
+    expect(s().settings.site!.radiusM).toBe(2000);
+  });
+
+  it('lets a supervisor put the pin where they stand, and keeps the circle and the town', () => {
+    s().signInDemo('supervisor');
+    const here = { lat: 39.51, lng: -116.49 };
+    expect(s().setSitePin(here)).toEqual({ ok: true });
+    expect(s().settings.site).toMatchObject({ name: SAMPLE_SITE.name, center: here, radiusM: SAMPLE_SITE.radiusM, town: SAMPLE_SITE.town });
+    s().signInDemo('employee');
+    expect(s().setSitePin({ lat: 1, lng: 1 })).toMatchObject({ ok: false, error: expect.stringMatching(/supervisor/) });
+  });
+
+  it('makes the site from the pin when none is set, named for the company', () => {
+    useStore.setState({ settings: { ...s().settings, site: null } });
+    s().setRadius(1500);
+    expect(s().settings.site).toBeNull();
+    s().signInDemo('supervisor');
+    expect(s().setSitePin({ lat: 39.51, lng: -116.49 })).toEqual({ ok: true });
+    expect(s().settings.site).toEqual({ name: 'Sample Mining Co.', center: { lat: 39.51, lng: -116.49 }, radiusM: 1000 });
   });
 });
 

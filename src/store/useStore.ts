@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, STARTING_COMPANY } from '../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { checkCompany, normalMineId, type Company } from '../domain/company';
 import { markSent, type Change, type Synced } from '../domain/sync';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
-import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
+import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
 import { rulesFor } from '../domain/stateRules';
 import { CA_RULES, LUNCH_MS, lunchEndAt, startedLunch, type TimeRules } from '../domain/time';
@@ -24,6 +24,7 @@ import type {
   GeoStamp,
   Inspection,
   InspectionAnswer,
+  LatLng,
   LeaveType,
   MealNote,
   Mrf,
@@ -36,6 +37,7 @@ import type {
   Settings,
   Shift,
   ShiftEdit,
+  SiteConfig,
 } from '../domain/types';
 import { safeStorage } from '../services/storage';
 import { fmtTime, MIN, startOfDay } from '../util/format';
@@ -202,6 +204,8 @@ interface Actions {
   removeEquipment: (equipmentId: string) => void;
 
   setRadius: (radiusM: number) => void;
+  /** Move the boundary's pin to a point on the mine, such as where the supervisor stands. Makes the site if there is none. */
+  setSitePin: (center: LatLng) => Result;
   setDemoLocation: (mode: DemoLocation) => void;
   setLunchReminders: (on: boolean) => void;
   setAllowSectionAllOk: (on: boolean) => void;
@@ -255,7 +259,7 @@ const initialData = (): Data => ({
   ...emptyData(),
   session: null,
   denied: [],
-  settings: defaultSettings(DEMO_MODE, STARTING_COMPANY),
+  settings: defaultSettings(DEMO_MODE, STARTING_COMPANY, STARTING_SITE),
   seededAt: null,
   synced: {},
 });
@@ -942,8 +946,20 @@ export const useStore = create<Store>()(
         // ---- Settings ---------------------------------------------------------------------
         setRadius: (radiusM) => {
           const { settings } = get();
+          if (!settings.site) return;
           const clamped = Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, Math.round(radiusM / 50) * 50));
           set({ settings: { ...settings, site: { ...settings.site, radiusM: clamped } } });
+        },
+        setSitePin: (center) => {
+          if (!get().session) return signedOut;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can move the mine boundary.' };
+          if (!(Math.abs(center.lat) <= 90 && Math.abs(center.lng) <= 180)) return { ok: false, error: 'That is not a position on the map.' };
+          const { settings } = get();
+          const site: SiteConfig = settings.site
+            ? { ...settings.site, center: { lat: center.lat, lng: center.lng } }
+            : { name: settings.company.name || 'Mine', center: { lat: center.lat, lng: center.lng }, radiusM: DEFAULT_RADIUS_M };
+          set({ settings: { ...settings, site } });
+          return { ok: true };
         },
         setDemoLocation: (demoLocation) => set({ settings: { ...get().settings, demoLocation } }),
         setLunchReminders: (lunchReminders) => set({ settings: { ...get().settings, lunchReminders } }),
@@ -1025,7 +1041,7 @@ export const useStore = create<Store>()(
       // These keys predate the MineMuster name. They stay as they are, so a device keeps what it has saved.
       name: HOLDS_SAMPLES ? 'us-mine-crew' : 'us-mine-crew-records',
       version: STATE_VERSION,
-      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY) as unknown as Store,
+      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY, STARTING_SITE) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
       partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced }) => ({
         session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced,

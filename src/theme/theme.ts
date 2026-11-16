@@ -1,9 +1,8 @@
 /**
  * Visual language for MineMuster.
  *
- * The palette is taken from the mine itself: equipment yellow, the black
- * ilmenite sand and white kaolin clay the Ione plant produces, the red
- * iron-oxide soil of the Ione Formation, and the settling ponds.
+ * The palette is taken from a working pit: equipment yellow, black mineral
+ * sand and white kaolin clay, red iron-oxide soil, and the settling ponds.
  * Type is Barlow, the family drawn from California highway signs and plates;
  * the condensed cut carries numerals, unit numbers and headings.
  */
@@ -19,7 +18,7 @@ export const color = {
   /** Kaolin: page background. */
   kaolin: '#EEF0EC',
   paper: '#FFFFFF',
-  /** Ione red: Bad Order, tag-out, overdue. */
+  /** Oxide red: Bad Order, tag-out, overdue. */
   red: '#B5341F',
   redTint: '#F8E4DF',
   /** Bench green: OK, on site. */

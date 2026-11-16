@@ -16,7 +16,7 @@ import type { GeoStamp, Shift } from '../types';
 
 const at = (h: number, m = 0, day = 9) => new Date(2026, 10, day, h, m, 0).getTime();
 const geo = (inside: boolean, extra: Partial<GeoStamp> = {}): GeoStamp => ({
-  lat: 38.334, lng: -120.945, accuracyM: 8, distanceM: inside ? 60 : 2300, inside, source: 'gps', ...extra,
+  lat: 39.5, lng: -116.5, accuracyM: 8, distanceM: inside ? 60 : 2300, inside, source: 'gps', ...extra,
 });
 
 const shift = (partial: Partial<Shift> = {}): Shift => ({

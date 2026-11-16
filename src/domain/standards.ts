@@ -1,8 +1,8 @@
 /**
  * Safety standards referenced by the checklists and the Bad Order guidance.
  *
- * MSHA: US Mine's Ione operation is a surface non-metal mine, so the governing
- * federal standards are in 30 CFR Part 56 (Safety and Health Standards —
+ * MSHA: the app's forms are for surface metal and nonmetal mines, so the
+ * governing federal standards are in 30 CFR Part 56 (Safety and Health Standards —
  * Surface Metal and Nonmetal Mines). These are what a mine inspector cites.
  * Two of the conditions on the work-area exam fall under other parts of
  * 30 CFR: hazard communication (Part 47) and noise (Part 62).

@@ -24,6 +24,7 @@ export function CrewScreen() {
   const sheets = useStore((s) => s.areaSheets);
   // A company that uses the app for the safety forms only keeps no time: the board is safety alone.
   const time = useStore((s) => keepsTime(s.settings.company));
+  const noSite = useStore((s) => !s.settings.site);
 
   const rules = useRules();
   const hasDeadline = time && rules.meal?.startByMs != null;
@@ -40,7 +41,8 @@ export function CrewScreen() {
   const areas = sheets.filter((s) => s.active);
   // Only the areas still on the list count, so a sheet taken off it cannot push the tally past the total.
   const examinedToday = areas.filter((s) => madeToday.has(s.id)).length;
-  const nothing = alerts.length === 0 && missing.length === 0 && safetyMrfs.length === 0 && conditions.length === 0;
+  const unset = time && noSite;
+  const nothing = !unset && alerts.length === 0 && missing.length === 0 && safetyMrfs.length === 0 && conditions.length === 0;
 
   return (
     <View style={styles.root}>
@@ -65,9 +67,19 @@ export function CrewScreen() {
               </Txt>
             </View>
           ) : null}
+          {unset ? (
+            <Row
+              testID="alert-no-site"
+              left={<MapPin color={color.red} size={28} />}
+              title="The mine boundary is not set"
+              sub="No one can clock in until it is. Put the pin on the mine."
+              right={<Tag label="Set it" tone="bo" solid />}
+              onPress={() => navigation.navigate('Site')}
+            />
+          ) : null}
           {alerts.map((line, i) => (
             <View key={line.employee.id}>
-              {i > 0 ? <Divider inset={space.lg} /> : null}
+              {i > 0 || unset ? <Divider inset={space.lg} /> : null}
               <Row
                 testID={`alert-${line.employee.id}`}
                 left={<Avatar initials={initials(line.employee.firstName, line.employee.lastName)} tone={line.tone} />}
@@ -166,7 +178,7 @@ export function CrewScreen() {
           <Row testID="go-sheets" left={<ListChecks color={color.ink} size={24} />} title="Area sheets" sub={`${areas.length} work ${areas.length === 1 ? 'area' : 'areas'} with a pre shift exam sheet`} chevron onPress={() => navigation.navigate('AreaSheets')} />
           {time ? <Divider inset={space.lg} /> : null}
           {time ? (
-            <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub="The area people can clock in from" chevron onPress={() => navigation.navigate('Site')} />
+            <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub={noSite ? 'Not set: no one can clock in yet' : 'The area people can clock in from'} chevron onPress={() => navigation.navigate('Site')} />
           ) : null}
         </Panel>
       </ScrollView>

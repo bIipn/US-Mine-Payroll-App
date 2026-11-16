@@ -1,6 +1,8 @@
 import { parseAreaSheets } from './domain/areaExam';
 import { companyOrDefault, parseCompany } from './domain/company';
 import { parsePersonName, parseRoster, startsWithSamples } from './domain/roster';
+import { SAMPLE_SITE } from './domain/site';
+import type { SiteConfig } from './domain/types';
 
 /**
  * App-wide configuration.
@@ -81,5 +83,11 @@ export const AREA_SHEETS = parseAreaSheets(process.env.EXPO_PUBLIC_AREA_SHEETS);
 const BUILD_COMPANY = parseCompany(process.env.EXPO_PUBLIC_COMPANY);
 if (BUILD_COMPANY.error) console.warn(BUILD_COMPANY.error);
 export const STARTING_COMPANY = companyOrDefault(BUILD_COMPANY.company, SAMPLE_CREW);
+/**
+ * The clock-in site a fresh install starts with: the one the build names with
+ * its company, else the made-up sample site for a preview with the sample crew,
+ * else none until a supervisor sets the pin on the mine.
+ */
+export const STARTING_SITE: SiteConfig | null = BUILD_COMPANY.site ?? (SAMPLE_CREW ? SAMPLE_SITE : null);
 
 export const APP_NAME = 'MineMuster';

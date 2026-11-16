@@ -1,5 +1,7 @@
 import { checkPaySchedule, type PaySchedule } from './payPeriod';
 import type { PayCodes } from './payrollCsv';
+import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from './site';
+import type { LatLng, SiteConfig } from './types';
 
 /**
  * The company a crew works for: its name, the state whose hours rules apply,
@@ -98,8 +100,38 @@ export function checkCompany(company: Company): string | undefined {
   return undefined;
 }
 
-/** The company named in a build setting (JSON), or what is wrong with it. */
-export function parseCompany(text: string | null | undefined): { company?: Company; error?: string } {
+/** A point as the build writes it, or undefined when it is not a real latitude and longitude. */
+function readPoint(raw: unknown): LatLng | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { lat, lng } = raw as Record<string, unknown>;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return undefined;
+  if (!(Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) return undefined;
+  return { lat, lng };
+}
+
+/** The clock-in site a build names with its company, or 'bad'. */
+function readSite(raw: unknown, companyName: string): SiteConfig | undefined | 'bad' {
+  if (raw === undefined || raw === null) return undefined;
+  const center = readPoint(raw);
+  if (!center) return 'bad';
+  const r = raw as Record<string, unknown>;
+  const radius = typeof r.radiusM === 'number' && Number.isFinite(r.radiusM) ? r.radiusM : DEFAULT_RADIUS_M;
+  const site: SiteConfig = {
+    name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : companyName,
+    center,
+    radiusM: Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, Math.round(radius / 50) * 50)),
+  };
+  if (r.town !== undefined && r.town !== null) {
+    const town = readPoint(r.town);
+    const name = (r.town as Record<string, unknown>).name;
+    if (!town || typeof name !== 'string' || !name.trim()) return 'bad';
+    site.town = { name: name.trim(), center: town };
+  }
+  return site;
+}
+
+/** The company named in a build setting (JSON), with its clock-in site if it names one, or what is wrong with it. */
+export function parseCompany(text: string | null | undefined): { company?: Company; site?: SiteConfig; error?: string } {
   if (!text || !text.trim()) return {};
   let raw: Record<string, unknown>;
   try {
@@ -131,7 +163,9 @@ export function parseCompany(text: string | null | undefined): { company?: Compa
     if (typeof raw.timeClock !== 'boolean') return { error: 'EXPO_PUBLIC_COMPANY has a timeClock that is not true or false.' };
     if (!raw.timeClock) company.timeClock = false;
   }
-  return { company };
+  const site = readSite(raw.site, name);
+  if (site === 'bad') return { error: 'EXPO_PUBLIC_COMPANY has a site without a real lat and lng (or a town without a name, lat and lng).' };
+  return site ? { company, site } : { company };
 }
 
 /**

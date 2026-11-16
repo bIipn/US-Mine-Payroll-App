@@ -43,7 +43,7 @@ type Status = 'off' | 'on' | 'lunch' | 'overdue';
 /** Why a clock-in did not go through. Clock-in is the only punch that needs the person at the mine. */
 type Problem =
   | { kind: Exclude<FixVerdict, 'inside'>; geo: GeoStamp }
-  | { kind: 'denied' | 'unavailable' };
+  | { kind: 'denied' | 'unavailable' | 'no_site' };
 
 const FIELD: Record<Status, { bg: string; fg: string; muted: string; label: string; bar: 'light' | 'dark' }> = {
   off: { bg: color.ink, fg: color.white, muted: color.onDarkMuted, label: 'Off the clock', bar: 'light' },
@@ -100,8 +100,16 @@ export function ClockScreen() {
    */
   const readLocation = async (action: 'clock_in' | 'start_lunch' | 'clock_out'): Promise<GeoStamp | undefined | null> => {
     const mustBeOnSite = action === 'clock_in';
+    const site = settings.site;
+    if (!site) {
+      // With no boundary there is nothing to check a clock-in against, and nothing to measure anything else from.
+      if (!mustBeOnSite) return undefined;
+      haptic.error();
+      setProblem({ kind: 'no_site' });
+      return null;
+    }
     setBusy(action);
-    const result = await locate(settings.site, settings.demoLocation);
+    const result = await locate(site, settings.demoLocation);
     setBusy(null);
     if (!result.ok) {
       if (!mustBeOnSite) return undefined;
@@ -109,8 +117,8 @@ export function ClockScreen() {
       setProblem({ kind: result.reason });
       return null;
     }
-    const check = checkFix(settings.site, result.fix);
-    const geo = toGeoStamp(settings.site, result.fix, result.source);
+    const check = checkFix(site, result.fix);
+    const geo = toGeoStamp(site, result.fix, result.source);
     if (mustBeOnSite && check.verdict !== 'inside') {
       haptic.error();
       actions.logDenied('clock_in', check.verdict === 'outside' ? 'outside' : check.verdict, geo);
@@ -313,13 +321,17 @@ export function ClockScreen() {
       {/* Location problems: say what happened and what to do about it. */}
       <Sheet testID="gps-sheet" visible={problem != null} onClose={() => setProblem(null)} title={problemTitle(problem)}>
         {problem ? <ProblemBody problem={problem} /> : null}
-        {problem && 'geo' in problem ? (
+        {problem && 'geo' in problem && settings.site ? (
           <SiteMap site={settings.site} you={problem.geo} youInside={false} height={240} />
         ) : null}
         {problem?.kind === 'denied' && Platform.OS !== 'web' ? (
           <Button label="Open phone settings" kind="ink" onPress={() => void Linking.openSettings()} />
         ) : null}
-        <Button testID="gps-retry" label="Try again" kind="yellow" onPress={retry} />
+        {problem?.kind === 'no_site' ? (
+          <Button testID="gps-close" label="Close" kind="ink" onPress={() => setProblem(null)} />
+        ) : (
+          <Button testID="gps-retry" label="Try again" kind="yellow" onPress={retry} />
+        )}
       </Sheet>
 
       <Sheet testID="clock-out-sheet" visible={confirmOut} onClose={() => setConfirmOut(false)} title="Clock out now?">
@@ -603,6 +615,7 @@ function problemTitle(problem: Problem | null): string {
     case 'mocked': return 'Simulated location';
     case 'denied': return 'Turn on location to punch';
     case 'unavailable': return "Couldn't get your location";
+    case 'no_site': return 'The mine boundary is not set';
     default: return '';
   }
 }
@@ -611,12 +624,14 @@ function ProblemBody({ problem }: { problem: Problem }) {
   const site = useStore((s) => s.settings.site);
   let text = '';
   if (problem.kind === 'outside') {
-    const outside = Math.max(0, problem.geo.distanceM - site.radiusM);
+    const outside = Math.max(0, problem.geo.distanceM - (site?.radiusM ?? 0));
     text = `Your phone puts you ${fmtDistance(problem.geo.distanceM)} from the mine pin, ${fmtDistance(outside)} outside the clock-in boundary. Clock in once you are on site.`;
   } else if (problem.kind === 'weak_gps') {
     text = `Your phone can only place you to within ${fmtDistance(problem.geo.accuracyM ?? 0)}. Step out into the open, give it a few seconds and try again.`;
   } else if (problem.kind === 'mocked') {
     text = 'The phone reported a simulated location. Turn off any mock-location or GPS-changing app and try again. This attempt was logged.';
+  } else if (problem.kind === 'no_site') {
+    text = 'No one can clock in until a supervisor sets the clock-in boundary: on More, Mine boundary, standing on the mine. Ask a supervisor to set it.';
   } else if (problem.kind === 'denied') {
     text = `${APP_NAME} reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.`;
   } else {
