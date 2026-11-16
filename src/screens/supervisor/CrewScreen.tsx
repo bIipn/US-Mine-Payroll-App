@@ -5,7 +5,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Avatar, Divider, Panel, Row, Stat, Tag, TopBar, Txt, UnitPlate } from '../../components/ui';
 import { openFindings } from '../../domain/areaExam';
-import { employeeName, useStore } from '../../store/useStore';
+import { employeeName, useRules, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtDateLong, fmtRelativeDay, fmtTime, fullName, initials, peopleCount, startOfDay } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -22,7 +22,8 @@ export function CrewScreen() {
   const exams = useStore((s) => s.exams);
   const sheets = useStore((s) => s.areaSheets);
 
-  const crew = useMemo(() => crewNow(employees, shifts, now), [employees, shifts, now]);
+  const rules = useRules();
+  const crew = useMemo(() => crewNow(employees, shifts, now, rules), [employees, shifts, now, rules]);
   const working = crew.filter((c) => c.presence === 'working').length;
   const atLunch = crew.filter((c) => c.presence === 'lunch').length;
   const alerts = crew.filter((c) => c.urgency >= 3);

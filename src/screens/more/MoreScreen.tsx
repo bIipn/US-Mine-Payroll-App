@@ -7,9 +7,10 @@ import { DecimalChart } from '../../components/DecimalChart';
 import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
 import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
+import { deadlineWords } from '../../domain/time';
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
-import { openShiftOf, useMe, useStore } from '../../store/useStore';
+import { openShiftOf, useMe, useRules, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fullName, initials } from '../../util/format';
 
@@ -39,6 +40,7 @@ export function MoreScreen() {
   const me = useMe();
   const account = useStore((s) => s.accounts.find((a) => a.id === s.session?.accountId));
   const settings = useStore((s) => s.settings);
+  const rules = useRules();
   const rate = useStore((s) => (s.session ? s.payRates[s.session.employeeId] : undefined));
   const { setLunchReminders, setAllowSectionAllOk, signOut, resetDemo, showToast } = useStore.getState();
   const [chart, setChart] = useState(false);
@@ -53,7 +55,7 @@ export function MoreScreen() {
       showToast('Notifications are off for this app. Turn them on in your phone settings to get lunch reminders.', 'warn');
     }
     const { shifts } = useStore.getState();
-    void syncReminders(openShiftOf(shifts, me.id, Date.now()), on);
+    void syncReminders(openShiftOf(shifts, me.id, Date.now()), on, rules);
   };
 
   return (
@@ -95,7 +97,11 @@ export function MoreScreen() {
           <Toggle
             testID="toggle-reminders"
             label="Lunch reminders"
-            sub="60, 30 and 15 minutes before your fifth hour ends. You are told when your lunch is over either way."
+            sub={
+              rules.meal?.startByMs != null
+                ? `60, 30 and 15 minutes before ${deadlineWords(rules.meal.startByMs).replace('the ', 'your ')} ends. You are told when your lunch is over either way.`
+                : 'There is no lunch deadline to remind you of where you work. You are told when your lunch is over either way.'
+            }
             value={settings.lunchReminders}
             onChange={toggleReminders}
           />

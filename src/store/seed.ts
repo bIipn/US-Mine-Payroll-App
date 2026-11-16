@@ -4,7 +4,7 @@ import { destination, toGeoStamp } from '../domain/geofence';
 import { keptApart, type PersonName } from '../domain/roster';
 import { DEFAULT_SITE } from '../domain/site';
 import { checklistFor, inspectionResult } from '../domain/templates';
-import { CA_RULES, startedLunch } from '../domain/time';
+import { LUNCH_MS, startedLunch } from '../domain/time';
 import type {
   Account,
   AreaExam,
@@ -312,7 +312,7 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
       // One tap starts lunch; it ends by itself 30 minutes later.
       const lunch = startedLunch(punch(start + 4 * HOUR + between(0, 38) * MIN));
       const paid = saturday ? between(300, 380) : rand() < 0.12 ? between(540, 610) : between(468, 496);
-      let end = start + paid * MIN + CA_RULES.mealMinMs;
+      let end = start + paid * MIN + LUNCH_MS;
 
       const shift: Shift = {
         id: nextId('sh'),

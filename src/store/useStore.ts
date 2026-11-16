@@ -7,7 +7,8 @@ import { checkCompany, type Company } from '../domain/company';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
-import { CA_RULES, lunchEndAt, startedLunch } from '../domain/time';
+import { rulesFor } from '../domain/stateRules';
+import { CA_RULES, LUNCH_MS, lunchEndAt, startedLunch, type TimeRules } from '../domain/time';
 import type {
   Account,
   AreaExam,
@@ -516,7 +517,7 @@ export const useStore = create<Store>()(
             const start = manual(next.lunchStart, firstLunch?.start);
             const end: Punch = manual(next.lunchEnd, firstLunch?.end);
             // An end is only "automatic" while it is still the 30 minutes the app set.
-            const stillAutomatic = end.auto === true && end.at - start.at === CA_RULES.mealMinMs;
+            const stillAutomatic = end.auto === true && end.at - start.at === LUNCH_MS;
             lunches[0] = { start, end: stillAutomatic ? end : { at: end.at, geo: end.geo } };
           }
           const updated: Shift = {
@@ -997,6 +998,11 @@ export const useStore = create<Store>()(
 );
 
 // ---- Lookups used across screens ---------------------------------------------------------
+
+/** The hours rules of the state the company is in. */
+export function useRules(): TimeRules {
+  return rulesFor(useStore((s) => s.settings.company.state));
+}
 
 export function useMe(): Employee | undefined {
   return useStore((s) => s.employees.find((e) => e.id === s.session?.employeeId));

@@ -2,36 +2,95 @@ import { fmtTime, HOUR, MIN, toHundredths } from '../util/format';
 import type { Lunch, Punch, Shift, ShiftFlag } from './types';
 
 /**
- * Timekeeping rules. Defaults follow California law for meal periods
- * (Labor Code §512) and overtime (Labor Code §510 / IWC Wage Order 16).
+ * Timekeeping rules. Overtime and meal periods follow the state the company
+ * is in (`rulesFor` in stateRules.ts). California's are below: Labor Code §512
+ * for meal periods, and §510 / IWC Wage Order 16 for overtime. Where a state
+ * has no rule of its own, federal law (the FLSA) is what applies.
  */
-export interface TimeRules {
-  /** A first meal must start before this much work has passed. */
-  mealDeadlineMs: number;
-  /** Minimum length of an unpaid meal period. */
-  mealMinMs: number;
+
+/** A lunch is 30 minutes, unpaid, in every state: the company's practice, never shorter than a state allows. */
+export const LUNCH_MS = 30 * MIN;
+
+export interface MealRules {
+  /** A meal period is owed on a shift of this much work or more. */
+  owedAfterMs: number;
+  /** The meal must start before this much work has passed, when the law sets a time. */
+  startByMs: number | null;
+  /** The shortest meal period the law accepts. */
+  minMs: number;
   /** Shifts no longer than this may waive the meal by mutual consent. */
-  mealWaiverMaxMs: number;
+  waiverMaxMs: number | null;
   /** Work beyond this needs a second meal period. */
-  secondMealAfterMs: number;
+  secondAfterMs: number | null;
+}
+
+export interface TimeRules {
+  /** Whose rules these are: "California", "federal law (FLSA)". */
+  name: string;
+  /** Null where the law requires no meal period. */
+  meal: MealRules | null;
   /** An open shift older than this is treated as a forgotten clock-out. */
   missingOutAfterMs: number;
-  /** Overtime thresholds, in hundredths of an hour (800 = 8.00 hours). */
-  dailyOvertimeAfter: number;
-  dailyDoubleAfter: number;
+  /** Overtime thresholds, in hundredths of an hour (800 = 8.00 hours). Null where there is none by the day. */
+  dailyOvertimeAfter: number | null;
+  dailyDoubleAfter: number | null;
   weeklyOvertimeAfter: number;
+  /** California's seventh-day rule: the seventh straight day worked in a workweek is all premium time. */
+  seventhDay: boolean;
 }
 
 export const CA_RULES: TimeRules = {
-  mealDeadlineMs: 5 * HOUR,
-  mealMinMs: 30 * MIN,
-  mealWaiverMaxMs: 6 * HOUR,
-  secondMealAfterMs: 10 * HOUR,
+  name: 'California',
+  meal: { owedAfterMs: 5 * HOUR, startByMs: 5 * HOUR, minMs: 30 * MIN, waiverMaxMs: 6 * HOUR, secondAfterMs: 10 * HOUR },
   missingOutAfterMs: 16 * HOUR,
   dailyOvertimeAfter: 800,
   dailyDoubleAfter: 1200,
   weeklyOvertimeAfter: 4000,
+  seventhDay: true,
 };
+
+/** The FLSA alone: time-and-a-half past 40 hours in a workweek, no daily overtime, no meal period required. */
+export const FEDERAL_RULES: TimeRules = {
+  name: 'federal law (FLSA)',
+  meal: null,
+  missingOutAfterMs: 16 * HOUR,
+  dailyOvertimeAfter: null,
+  dailyDoubleAfter: null,
+  weeklyOvertimeAfter: 4000,
+  seventhDay: false,
+};
+
+const hrs = (hundredths: number) => `${hundredths / 100}`;
+const hoursOf = (ms: number) => `${Math.round((ms / HOUR) * 100) / 100}`;
+const ORDINAL_HOURS = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+
+/** "the fifth hour" for 5 hours; "5.5 hours" past a whole number. */
+export function deadlineWords(ms: number): string {
+  const whole = ms / HOUR;
+  return Number.isInteger(whole) && ORDINAL_HOURS[whole] ? `the ${ORDINAL_HOURS[whole]} hour` : `${hoursOf(ms)} hours`;
+}
+
+/** When a meal period is owed under these rules, in one sentence. */
+export function mealSummary(rules: TimeRules): string {
+  const meal = rules.meal;
+  if (!meal) return 'No meal period is required by law. A lunch taken is 30 minutes, unpaid.';
+  const length = `A ${Math.round(meal.minMs / MIN)}-minute meal period`;
+  const second = meal.secondAfterMs != null ? `, and a second is owed past ${hoursOf(meal.secondAfterMs)} hours` : '';
+  if (meal.startByMs != null) return `${length} has to start before the end of ${deadlineWords(meal.startByMs)} of work${second}.`;
+  return `${length} is owed on a shift of ${hoursOf(meal.owedAfterMs)} hours or more${second}.`;
+}
+
+/** How overtime is figured under these rules, in one sentence. */
+export function overtimeSummary(rules: TimeRules): string {
+  const whose = rules.name === FEDERAL_RULES.name ? rules.name : `${rules.name} rules`;
+  const weekly = hrs(rules.weeklyOvertimeAfter);
+  if (rules.dailyOvertimeAfter == null) {
+    return `Overtime follows ${whose}: over ${weekly} hours in a workweek is OT. There is no daily overtime.`;
+  }
+  const double = rules.dailyDoubleAfter != null ? `, over ${hrs(rules.dailyDoubleAfter)} a day is DT` : '';
+  const seventh = rules.seventhDay ? ', with the seventh-day rule' : '';
+  return `Overtime follows ${whose}: over ${hrs(rules.dailyOvertimeAfter)} hours a day or ${weekly} straight-time hours in a workweek is OT${double}${seventh}.`;
+}
 
 /** Punches count to the minute, the way a wall time clock does. */
 export const floorMin = (ms: number) => Math.floor(ms / MIN) * MIN;
@@ -41,16 +100,16 @@ export const floorMin = (ms: number) => Math.floor(ms / MIN) * MIN;
  * ends by itself when the 30-minute meal period is up and the person is back on
  * the clock. The end is written down at the start so the record is complete.
  */
-export function startedLunch(start: Punch, rules: TimeRules = CA_RULES): Lunch {
-  return { start, end: { at: start.at + rules.mealMinMs, auto: true } };
+export function startedLunch(start: Punch): Lunch {
+  return { start, end: { at: start.at + LUNCH_MS, auto: true } };
 }
 
 /**
  * When a lunch is over. A record with no end time still ends when the meal
  * period is up, so a bad record can never leave someone stuck at lunch.
  */
-export function lunchEndAt(lunch: Lunch, rules: TimeRules = CA_RULES): number {
-  return lunch.end?.at ?? lunch.start.at + rules.mealMinMs;
+export function lunchEndAt(lunch: Lunch): number {
+  return lunch.end?.at ?? lunch.start.at + LUNCH_MS;
 }
 
 /**
@@ -58,9 +117,9 @@ export function lunchEndAt(lunch: Lunch, rules: TimeRules = CA_RULES): number {
  * come. Until then there is nothing to show: the end of a lunch is written down
  * when it starts, but it has not happened yet.
  */
-export function backFromLunchAt(lunch: Lunch | undefined, now: number, rules: TimeRules = CA_RULES): number | undefined {
+export function backFromLunchAt(lunch: Lunch | undefined, now: number): number | undefined {
   if (!lunch) return undefined;
-  const end = lunchEndAt(lunch, rules);
+  const end = lunchEndAt(lunch);
   return now >= end ? end : undefined;
 }
 
@@ -128,8 +187,8 @@ export type MealState =
 
 export interface MealStatus {
   state: MealState;
-  /** The moment the fifth hour of work ends. Lunch has to start before this. */
-  deadlineAt: number;
+  /** The moment lunch has to start before, when the state's law sets one (California: the end of the fifth hour). */
+  deadlineAt: number | null;
   /** Time left to start lunch (0 once overdue or taken). */
   remainingMs: number;
   /** While at lunch: time already taken, and time left until it ends by itself. */
@@ -137,19 +196,20 @@ export interface MealStatus {
   lunchRemainingMs: number;
   /** While at lunch: the moment the person goes back on the clock. */
   lunchEndsAt?: number;
-  /** 0–1 share of the five-hour window used up. */
+  /** 0–1 share of the window before the deadline used up. */
   progress: number;
 }
 
-/** Where an open shift stands against the five-hour meal deadline. */
+/** Where an open shift stands against the state's meal deadline, when it has one. */
 export function mealStatus(shift: Shift, now: number, rules: TimeRules = CA_RULES): MealStatus {
-  const deadlineAt = shift.clockIn.at + rules.mealDeadlineMs;
+  const startBy = rules.meal?.startByMs ?? null;
+  const deadlineAt = startBy == null ? null : shift.clockIn.at + startBy;
   const first = shift.lunches[0];
   const current = shift.lunches[shift.lunches.length - 1];
   const base = { deadlineAt, remainingMs: 0, lunchElapsedMs: 0, lunchRemainingMs: 0, progress: 1 };
 
   if (current) {
-    const lunchEndsAt = lunchEndAt(current, rules);
+    const lunchEndsAt = lunchEndAt(current);
     if (now < lunchEndsAt) {
       return {
         ...base,
@@ -162,9 +222,10 @@ export function mealStatus(shift: Shift, now: number, rules: TimeRules = CA_RULE
     }
   }
   if (first) return { ...base, state: 'taken' };
+  if (deadlineAt == null || startBy == null) return { ...base, state: 'not_due', progress: 0 };
 
   const remainingMs = deadlineAt - now;
-  const progress = Math.min(1, Math.max(0, (now - shift.clockIn.at) / rules.mealDeadlineMs));
+  const progress = Math.min(1, Math.max(0, (now - shift.clockIn.at) / startBy));
   let state: MealState = 'not_due';
   if (remainingMs <= 0) state = 'overdue';
   else if (remainingMs <= 30 * MIN) state = 'urgent';
@@ -186,20 +247,21 @@ export function shiftFlags(shift: Shift, now: number, rules: TimeRules = CA_RULE
     return flags;
   }
 
-  if (!first) {
-    const waived = shift.mealNote === 'waived_short_shift' && grossMs <= rules.mealWaiverMaxMs;
-    if (grossMs >= rules.mealDeadlineMs && !waived) flags.push('no_lunch');
-  } else if (floorMin(first.start.at) - startMin >= rules.mealDeadlineMs) {
-    flags.push('late_lunch');
-  }
+  const meal = rules.meal;
+  if (meal) {
+    if (!first) {
+      const waived = shift.mealNote === 'waived_short_shift' && meal.waiverMaxMs != null && grossMs <= meal.waiverMaxMs;
+      if (grossMs >= meal.owedAfterMs && !waived) flags.push('no_lunch');
+    } else if (meal.startByMs != null && floorMin(first.start.at) - startMin >= meal.startByMs) {
+      flags.push('late_lunch');
+    }
 
-  const short = shift.lunches.some(
-    (l) => l.end && floorMin(l.end.at) - floorMin(l.start.at) < rules.mealMinMs,
-  );
-  if (short) flags.push('short_lunch');
+    const short = shift.lunches.some((l) => l.end && floorMin(l.end.at) - floorMin(l.start.at) < meal.minMs);
+    if (short) flags.push('short_lunch');
 
-  if (totals.paidMin * MIN > rules.secondMealAfterMs && shift.lunches.length < 2) {
-    flags.push('second_meal');
+    if (meal.secondAfterMs != null && totals.paidMin * MIN > meal.secondAfterMs && shift.lunches.length < 2) {
+      flags.push('second_meal');
+    }
   }
   if (shift.clockOut?.geo && !shift.clockOut.geo.inside) flags.push('offsite_out');
   if (shift.edits?.length) flags.push('edited');
@@ -223,16 +285,28 @@ export const FLAG_LABEL: Record<ShiftFlag, string> = {
   mock_gps: 'Simulated GPS',
 };
 
-export const FLAG_HELP: Record<ShiftFlag, string> = {
-  late_lunch: 'Lunch started after the end of the fifth hour of work.',
-  no_lunch: 'Worked five hours or more with no lunch on record.',
-  short_lunch: 'A lunch shorter than 30 minutes was recorded.',
-  second_meal: 'More than ten hours worked with only one meal period.',
-  offsite_out: 'The clock-out location was outside the mine boundary.',
-  missing_out: 'The shift was never clocked out. A supervisor needs to set the end time.',
-  edited: 'A supervisor changed one or more punch times.',
-  mock_gps: 'The phone reported a simulated location for a punch.',
-};
+/** What a flag means, by the state's own times. */
+export function flagHelp(flag: ShiftFlag, rules: TimeRules): string {
+  const meal = rules.meal;
+  switch (flag) {
+    case 'late_lunch':
+      return meal?.startByMs != null ? `Lunch started after the end of ${deadlineWords(meal.startByMs)} of work.` : 'Lunch started late.';
+    case 'no_lunch':
+      return `Worked ${hoursOf(meal?.owedAfterMs ?? 0)} hours or more with no lunch on record.`;
+    case 'short_lunch':
+      return `A lunch shorter than ${Math.round((meal?.minMs ?? LUNCH_MS) / MIN)} minutes was recorded.`;
+    case 'second_meal':
+      return `More than ${hoursOf(meal?.secondAfterMs ?? 0)} hours worked with only one meal period.`;
+    case 'offsite_out':
+      return 'The clock-out location was outside the mine boundary.';
+    case 'missing_out':
+      return 'The shift was never clocked out. A supervisor needs to set the end time.';
+    case 'edited':
+      return 'A supervisor changed one or more punch times.';
+    case 'mock_gps':
+      return 'The phone reported a simulated location for a punch.';
+  }
+}
 
 export const MEAL_NOTE_LABEL = {
   forgot_punch: 'Took lunch, forgot to punch',
@@ -249,10 +323,14 @@ export interface LunchReminder {
 
 /**
  * Reminder schedule for a shift with no lunch yet: one hour, 30 minutes and
- * 15 minutes before the fifth hour ends, then once more when it does.
+ * 15 minutes before the state's meal deadline, then once more when it passes.
+ * None where the state sets no time a meal must start by.
  */
 export function lunchReminders(clockInAt: number, rules: TimeRules = CA_RULES): LunchReminder[] {
-  const deadline = clockInAt + rules.mealDeadlineMs;
+  const startBy = rules.meal?.startByMs;
+  if (startBy == null) return [];
+  const deadline = clockInAt + startBy;
+  const ends = deadlineWords(startBy);
   return [
     {
       id: 'lunch-60',
@@ -264,19 +342,19 @@ export function lunchReminders(clockInAt: number, rules: TimeRules = CA_RULES): 
       id: 'lunch-30',
       at: deadline - 30 * MIN,
       title: '30 minutes to start lunch',
-      body: 'Wrap up and start your lunch before your fifth hour ends.',
+      body: `Wrap up and start your lunch before ${ends.replace('the ', 'your ')} ends.`,
     },
     {
       id: 'lunch-15',
       at: deadline - 15 * MIN,
       title: 'Start lunch now',
-      body: '15 minutes left before your fifth hour ends. Tap Start lunch.',
+      body: `15 minutes left before ${ends.replace('the ', 'your ')} ends. Tap Start lunch.`,
     },
     {
       id: 'lunch-0',
       at: deadline,
       title: 'Lunch is overdue',
-      body: 'Your fifth hour has ended with no lunch on record. Start lunch and tell your supervisor.',
+      body: `${ends.replace('the ', 'Your ')} has ended with no lunch on record. Start lunch and tell your supervisor.`,
     },
   ];
 }
@@ -311,8 +389,8 @@ export function reminderPlan(
   const nothing = { schedule: [], cancel: [...DEADLINE_IDS, LUNCH_OVER_ID] };
   if (!shift || shift.clockOut) return nothing;
   const current = shift.lunches[shift.lunches.length - 1];
-  if (current && now < lunchEndAt(current, rules)) {
-    return { schedule: [lunchOverReminder(lunchEndAt(current, rules))], cancel: DEADLINE_IDS };
+  if (current && now < lunchEndAt(current)) {
+    return { schedule: [lunchOverReminder(lunchEndAt(current))], cancel: DEADLINE_IDS };
   }
   if (current || !remindersOn) return nothing;
   return { schedule: lunchReminders(shift.clockIn.at, rules), cancel: [LUNCH_OVER_ID] };

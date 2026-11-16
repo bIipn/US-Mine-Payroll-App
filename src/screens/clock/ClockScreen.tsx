@@ -13,13 +13,13 @@ import { APP_NAME, DEMO_MODE } from '../../config';
 import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
 import { monthOf, nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
-import { CA_RULES, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals } from '../../domain/time';
+import { deadlineWords, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals, type TimeRules } from '../../domain/time';
 import type { DemoLocation, GeoStamp, MealNote, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
 import { requestNotificationPermission, scheduleLocal } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
-import { openLogs, openShiftOf, staleShiftOf, useMe, useStore } from '../../store/useStore';
+import { openLogs, openShiftOf, staleShiftOf, useMe, useRules, useStore } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
 import {
   addDays,
@@ -59,6 +59,7 @@ export function ClockScreen() {
   const me = useMe();
   const shifts = useStore((s) => s.shifts);
   const settings = useStore((s) => s.settings);
+  const rules = useRules();
   const company = settings.company;
   const equipment = useStore((s) => s.equipment);
   const opLogs = useStore((s) => s.opLogs);
@@ -80,13 +81,15 @@ export function ClockScreen() {
   const cardShift = shift ?? lastToday;
 
   const totals = shift ? shiftTotals(shift, now) : undefined;
-  const meal = shift ? mealStatus(shift, now) : undefined;
+  const meal = shift ? mealStatus(shift, now, rules) : undefined;
   const status: Status = !shift ? 'off' : meal?.state === 'at_lunch' ? 'lunch' : meal?.state === 'overdue' ? 'overdue' : 'on';
   const field = FIELD[status];
   const clock = clockParts(now);
   const myUnits = [...openLogs(opLogs).values()].filter((log) => log.employeeId === me.id);
-  const needsMealNote = !!shift && shift.lunches.length === 0 && now - shift.clockIn.at >= CA_RULES.mealDeadlineMs;
-  const canWaive = !!shift && now - shift.clockIn.at <= CA_RULES.mealWaiverMaxMs;
+  // A clock-out with no lunch asks why only where the state owes a meal on a shift that long.
+  const owed = rules.meal;
+  const needsMealNote = !!shift && !!owed && shift.lunches.length === 0 && now - shift.clockIn.at >= owed.owedAfterMs;
+  const canWaive = !!shift && owed?.waiverMaxMs != null && now - shift.clockIn.at <= owed.waiverMaxMs;
 
   /**
    * Read the phone's position for a punch. Returns null when the punch must not
@@ -134,7 +137,7 @@ export function ClockScreen() {
    */
   const armNotices = async (current: Shift | undefined) => {
     if (current) setNotifyOk(await requestNotificationPermission());
-    await syncReminders(current, settings.lunchReminders);
+    await syncReminders(current, settings.lunchReminders, rules);
   };
 
   const clockIn = async () => {
@@ -234,7 +237,7 @@ export function ClockScreen() {
 
           {(status === 'on' || status === 'overdue') && shift && meal ? (
             <>
-              {shift.lunches.length === 0 ? <LunchDeadline shift={shift} now={now} /> : null}
+              {shift.lunches.length === 0 && meal.deadlineAt != null ? <LunchDeadline shift={shift} now={now} rules={rules} /> : null}
               {shift.lunches.length === 0 ? (
                 <Button testID="start-lunch" label="Start lunch" icon={Utensils} size="xl" kind={status === 'overdue' ? 'red' : 'ink'} loading={busy === 'start_lunch'} onPress={startLunch} />
               ) : null}
@@ -440,6 +443,7 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
   const leave = useStore((s) => s.leave);
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
   const pay = useStore((s) => s.settings.company.pay);
+  const rules = useRules();
   // The figures move by the minute, so there is no need to redo them every second.
   const minute = Math.floor(now / MIN);
   const line = useMemo(() => {
@@ -451,7 +455,7 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
         start,
         end,
         at,
-        { weekStartsOn: startsOn },
+        { weekStartsOn: startsOn, rules },
       ).total;
     if (pay) {
       const current = payPeriodOf(at, pay);
@@ -460,7 +464,7 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
     const week = startOfWeek(at, startsOn);
     const month = monthOf(at);
     return { label: 'This week', hours: total(week, addDays(week, 7)), month: total(month.start, month.end) };
-  }, [shifts, leave, employeeId, startsOn, minute, pay]);
+  }, [shifts, leave, employeeId, startsOn, minute, pay, rules]);
 
   const said =
     line.payday != null
@@ -497,22 +501,25 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
   );
 }
 
-/** How long is left to start lunch before the fifth hour of work ends. */
-function LunchDeadline({ shift, now }: { shift: Shift; now: number }) {
-  const meal = mealStatus(shift, now);
+/** How long is left to start lunch before the state's meal deadline (California: the end of the fifth hour). */
+function LunchDeadline({ shift, now, rules }: { shift: Shift; now: number; rules: TimeRules }) {
+  const meal = mealStatus(shift, now, rules);
+  const deadlineAt = meal.deadlineAt ?? now;
+  // "your fifth hour", from the state's own deadline.
+  const hour = deadlineWords(rules.meal?.startByMs ?? 0).replace(/^the /, 'your ');
   const tone: Tone = meal.state === 'overdue' ? 'bo' : meal.state === 'urgent' ? 'bo' : meal.state === 'soon' ? 'warn' : 'ok';
   const headline =
     meal.state === 'overdue'
-      ? `Your fifth hour ended at ${fmtTime(meal.deadlineAt)}`
+      ? `${hour.charAt(0).toUpperCase()}${hour.slice(1)} ended at ${fmtTime(deadlineAt)}`
       : meal.state === 'urgent'
         ? 'Start lunch now'
         : meal.state === 'soon'
           ? 'Lunch within the hour'
-          : `Start lunch before ${fmtTime(meal.deadlineAt)}`;
+          : `Start lunch before ${fmtTime(deadlineAt)}`;
   const detail =
     meal.state === 'overdue'
       ? 'Start your lunch and tell your supervisor. This shift is flagged for payroll.'
-      : `Your 30-minute unpaid lunch has to start before your fifth hour ends at ${fmtTime(meal.deadlineAt)}.`;
+      : `Your 30-minute unpaid lunch has to start before ${hour} ends at ${fmtTime(deadlineAt)}.`;
   return (
     <View testID={`lunch-${meal.state}`} style={styles.deadline}>
       <View style={styles.deadlineHead}>
@@ -617,6 +624,7 @@ function ProblemBody({ problem }: { problem: Problem }) {
 function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRemainingMs?: number }) {
   const demoLocation = useStore((s) => s.settings.demoLocation);
   const lunchReminders = useStore((s) => s.settings.lunchReminders);
+  const rules = useRules();
   const { setDemoLocation, demoRewindShift, showToast } = useStore.getState();
   return (
     <View style={styles.demo}>
@@ -649,7 +657,7 @@ function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRe
             const lunch = moved?.lunches[moved.lunches.length - 1];
             if (!moved || !lunch) return;
             // Send the real notice as well, a few seconds from now, so it can be seen in a demo.
-            void syncReminders(moved, lunchReminders).then(() =>
+            void syncReminders(moved, lunchReminders, rules).then(() =>
               scheduleLocal([{ ...lunchOverReminder(lunchEndAt(lunch)), at: Date.now() + 3000 }]),
             );
           }}
@@ -665,7 +673,7 @@ function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRe
           onPress={() => {
             const moved = demoRewindShift(60);
             if (moved) {
-              void syncReminders(moved, lunchReminders);
+              void syncReminders(moved, lunchReminders, rules);
               showToast('Clock-in moved back 1 hour', 'info');
             }
           }}

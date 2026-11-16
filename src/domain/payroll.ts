@@ -65,11 +65,15 @@ const emptyTotals = (): PayrollTotals => ({
 /**
  * One employee's workweek.
  *
- * Hours land on the day the shift started. Overtime follows California rules:
- *   - over 8 hours in a day is time-and-a-half, over 12 is double time
- *   - on the seventh straight day worked in the workweek, the first 8 hours are
- *     time-and-a-half and anything past 8 is double time
- *   - straight-time hours past 40 in the week become time-and-a-half
+ * Hours land on the day the shift started. Overtime follows the state's rules
+ * (California's by default):
+ *   - past the daily threshold is time-and-a-half, past the daily double-time
+ *     threshold is double time, where the state has them (California: 8 and 12)
+ *   - with California's seventh-day rule, on the seventh straight day worked in
+ *     the workweek the first 8 hours are time-and-a-half and anything past 8 is
+ *     double time
+ *   - straight-time hours past the weekly threshold (40) become time-and-a-half,
+ *     so hours already paid as daily overtime are not counted again
  * A shift that was never clocked out is left out of the totals and counted in
  * `needsFix` until a supervisor sets its end time.
  */
@@ -125,14 +129,16 @@ export function computeWeek(
     let reg: number;
     let ot: number;
     let dt: number;
-    if (i === 6 && workedAllSeven) {
+    const otAt = rules.dailyOvertimeAfter ?? Infinity;
+    const dtAt = rules.dailyDoubleAfter ?? Infinity;
+    if (rules.seventhDay && rules.dailyOvertimeAfter != null && i === 6 && workedAllSeven) {
       reg = 0;
-      ot = Math.min(worked, rules.dailyOvertimeAfter);
-      dt = Math.max(0, worked - rules.dailyOvertimeAfter);
+      ot = Math.min(worked, otAt);
+      dt = Math.max(0, worked - otAt);
     } else {
-      reg = Math.min(worked, rules.dailyOvertimeAfter);
-      ot = Math.min(Math.max(0, worked - rules.dailyOvertimeAfter), rules.dailyDoubleAfter - rules.dailyOvertimeAfter);
-      dt = Math.max(0, worked - rules.dailyDoubleAfter);
+      reg = Math.min(worked, otAt);
+      ot = Math.max(0, Math.min(worked, dtAt) - otAt);
+      dt = Math.max(0, worked - dtAt);
     }
     const overWeekly = Math.max(0, straightSoFar + reg - rules.weeklyOvertimeAfter);
     reg -= overWeekly;

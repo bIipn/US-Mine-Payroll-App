@@ -1,4 +1,4 @@
-import { mealStatus, shiftFlags, shiftTotals, type MealState } from '../../domain/time';
+import { CA_RULES, mealStatus, shiftFlags, shiftTotals, type MealState, type TimeRules } from '../../domain/time';
 import type { Employee, Shift } from '../../domain/types';
 import type { Tone } from '../../theme/theme';
 import { fmtDur, fmtTime } from '../../util/format';
@@ -20,17 +20,17 @@ export interface CrewLine {
 }
 
 /** Where each active person stands right now. */
-export function crewNow(employees: Employee[], shifts: Shift[], now: number): CrewLine[] {
+export function crewNow(employees: Employee[], shifts: Shift[], now: number, rules: TimeRules = CA_RULES): CrewLine[] {
   const open = new Map<string, Shift>();
   for (const shift of shifts) {
-    if (!shift.clockOut && !shiftFlags(shift, now).includes('missing_out')) open.set(shift.employeeId, shift);
+    if (!shift.clockOut && !shiftFlags(shift, now, rules).includes('missing_out')) open.set(shift.employeeId, shift);
   }
   return employees
     .filter((e) => e.active)
     .map((employee): CrewLine => {
       const shift = open.get(employee.id);
       if (!shift) return { employee, presence: 'off', label: 'Off', tone: 'neutral', urgency: 0, paid: 0 };
-      const meal = mealStatus(shift, now);
+      const meal = mealStatus(shift, now, rules);
       const paid = shiftTotals(shift, now).paid;
       const base = { employee, shift, meal: meal.state, paid };
       switch (meal.state) {

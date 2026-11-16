@@ -3,7 +3,8 @@ import { cardsBetween } from '../domain/checklistCard';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { standard } from '../domain/standards';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, findItem, isHazard, onTheCard } from '../domain/templates';
-import { backFromLunchAt, FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
+import { rulesFor } from '../domain/stateRules';
+import { backFromLunchAt, FLAG_LABEL, flagHelp, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
 import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Settings, Shift } from '../domain/types';
 import { addDays, DAY, fmtDateTime, fmtDayShort, fmtWeekday, HOUR, startOfDay, ymd } from '../util/format';
 import { buildWorkbook, type CellInput, type Sheet } from './xlsx';
@@ -80,7 +81,8 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
   const lastDay = addDays(periodEnd, -1);
   const people = data.employees.filter((e) => e.active).sort(byName);
   const employeeOf = new Map(data.employees.map((e) => [e.id, e]));
-  const rows = computePayroll(people, data.shifts, data.leave, periodStart, periodEnd, now, { weekStartsOn: data.settings?.workweekStartsOn ?? 0 });
+  const rules = rulesFor(data.settings?.company.state ?? 'CA');
+  const rows = computePayroll(people, data.shifts, data.leave, periodStart, periodEnd, now, { weekStartsOn: data.settings?.workweekStartsOn ?? 0, rules });
   const totals = sumPayroll(rows);
   const period = `${fmtDayShort(periodStart)} to ${fmtDayShort(lastDay)}, ${new Date(lastDay).getFullYear()}`;
   const paid = range.payDate
@@ -209,9 +211,9 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
       { header: 'What it means', width: 62 }, { header: 'Employee note', width: 30 },
     ],
     rows: inPeriod.flatMap((shift) =>
-      shiftFlags(shift, now).map((flag): CellInput[] => [
+      shiftFlags(shift, now, rules).map((flag): CellInput[] => [
         nameOf(employeeOf.get(shift.employeeId)), date(shift.clockIn.at),
-        { v: FLAG_LABEL[flag], s: flag === 'missing_out' ? 'bad' : 'warn' }, { v: FLAG_HELP[flag], s: 'wrap' },
+        { v: FLAG_LABEL[flag], s: flag === 'missing_out' ? 'bad' : 'warn' }, { v: flagHelp(flag, rules), s: 'wrap' },
         shift.mealNote ? MEAL_NOTE_LABEL[shift.mealNote] : '',
       ]),
     ),

@@ -4,7 +4,7 @@ import { View } from 'react-native';
 
 import { Avatar, Divider, EmptyState, Page, Panel, Row, Segmented, Tag } from '../../components/ui';
 import type { ScreenProps } from '../../navigation/types';
-import { openLogs, useStore } from '../../store/useStore';
+import { openLogs, useRules, useStore } from '../../store/useStore';
 import { space } from '../../theme/theme';
 import { fmtHrs, fmtTime, fullName, initials } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -20,7 +20,8 @@ export function OnSiteScreen({ navigation }: ScreenProps<'OnSite'>) {
   const opLogs = useStore((s) => s.opLogs);
   const [filter, setFilter] = useState<Filter>('here');
 
-  const crew = useMemo(() => crewNow(employees, shifts, now), [employees, shifts, now]);
+  const rules = useRules();
+  const crew = useMemo(() => crewNow(employees, shifts, now, rules), [employees, shifts, now, rules]);
   const inUse = useMemo(() => openLogs(opLogs), [opLogs]);
   const unitFor = (employeeId: string) => {
     const log = [...inUse.values()].find((l) => l.employeeId === employeeId);

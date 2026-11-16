@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { View } from 'react-native';
 
 import { Divider, Notice, Page, Panel, Segmented, Txt } from '../../components/ui';
-import { JURISDICTION_NOTE, STANDARDS, type Agency } from '../../domain/standards';
+import { jurisdictionNote, STANDARDS, type Agency } from '../../domain/standards';
 import type { ScreenProps } from '../../navigation/types';
+import { useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 
 /** Every standard the checklists point to, in plain language. */
 export function StandardsScreen({ navigation }: ScreenProps<'Standards'>) {
+  const state = useStore((s) => s.settings.company.state);
   const [agency, setAgency] = useState<Agency>('MSHA');
   const list = Object.entries(STANDARDS).filter(([, std]) => std.agency === agency);
   return (
@@ -21,7 +23,7 @@ export function StandardsScreen({ navigation }: ScreenProps<'Standards'>) {
           { value: 'OSHA', label: 'OSHA, 29 CFR' },
         ]}
       />
-      <Notice tone="info" title={agency === 'MSHA' ? 'MSHA governs at the mine' : 'OSHA rules are the cross-reference'} body={JURISDICTION_NOTE} />
+      <Notice tone="info" title={agency === 'MSHA' ? 'MSHA governs at the mine' : 'OSHA rules are the cross-reference'} body={jurisdictionNote(state)} />
       <Panel flush>
         {list.map(([key, std], i) => (
           <View key={key}>

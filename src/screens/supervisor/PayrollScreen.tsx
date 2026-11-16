@@ -7,11 +7,12 @@ import { paydayLine, workweekLine } from '../../components/PeriodSheet';
 import { Button, IconButton, Page, Segmented, Stat, Tag, Txt } from '../../components/ui';
 import { useSpans } from '../../components/useSpans';
 import { computePayroll, sumPayroll } from '../../domain/payroll';
+import { overtimeSummary } from '../../domain/time';
 import { isCurrentSpan, spanLabel, stepSpan, SPAN_NAME, type SpanKind } from '../../domain/spans';
 import type { ScreenProps } from '../../navigation/types';
 import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
-import { useStore } from '../../store/useStore';
+import { useRules, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtHrs, listName, peopleCount } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -27,6 +28,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
   const shifts = useStore((s) => s.shifts);
   const leave = useStore((s) => s.leave);
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
+  const rules = useRules();
   const { views, view, setView, span, setSpan, options } = useSpans(now);
   const { start, end } = span;
   const isCurrent = isCurrentSpan(span, now, options);
@@ -36,8 +38,8 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
     const people = employees
       .filter((e) => e.active)
       .sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName));
-    return computePayroll(people, shifts, leave, start, end, now, { weekStartsOn: startsOn });
-  }, [employees, shifts, leave, start, end, now, startsOn]);
+    return computePayroll(people, shifts, leave, start, end, now, { weekStartsOn: startsOn, rules });
+  }, [employees, shifts, leave, start, end, now, startsOn, rules]);
   const totals = useMemo(() => sumPayroll(rows), [rows]);
   const paidLeave = totals.total - totals.paid;
 
@@ -154,7 +156,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
       </View>
 
       <Txt v="small" c={color.silica}>
-        ST is straight time, OT is time-and-a-half, DT is double time. Overtime follows California rules: over 8 hours a day or 40 straight-time hours in a workweek is OT, over 12 a day is DT, with the seventh-day rule. It is figured by the workweek, then added up for the days in the {which}. Hours are before taxes. Lunch flags are for review and are never paid or docked automatically.
+        ST is straight time, OT is time-and-a-half, DT is double time. {overtimeSummary(rules)} It is figured by the workweek, then added up for the days in the {which}. Hours are before taxes. Lunch flags are for review and are never paid or docked automatically.
       </Txt>
     </Page>
   );

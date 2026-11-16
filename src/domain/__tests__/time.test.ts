@@ -2,6 +2,7 @@ import { fmtHM, fmtHrs, HOUR, MIN, minuteDecimal, toHundredths } from '../../uti
 import {
   backFromLunchAt,
   CA_RULES,
+  LUNCH_MS,
   lunchEndAt,
   lunchOverReminder,
   lunchReminders,
@@ -219,7 +220,7 @@ describe('lunchReminders', () => {
     const reminders = lunchReminders(at(6));
     expect(reminders.map((r) => r.at)).toEqual([at(10), at(10, 30), at(10, 45), at(11)]);
     expect(reminders.map((r) => r.id)).toEqual(['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0']);
-    expect(CA_RULES.mealMinMs).toBe(30 * MIN);
+    expect(LUNCH_MS).toBe(30 * MIN);
   });
 
   it('asks the person to start lunch, not to clock out for it', () => {

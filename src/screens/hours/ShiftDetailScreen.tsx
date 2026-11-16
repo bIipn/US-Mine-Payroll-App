@@ -5,11 +5,11 @@ import { StyleSheet, View } from 'react-native';
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Divider, Field, Notice, Page, Panel, Sheet, Tag, Txt } from '../../components/ui';
 import { flagTone } from '../../components/WeekSheet';
-import { backFromLunchAt, FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
+import { backFromLunchAt, FLAG_LABEL, flagHelp, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
 import type { Punch, ShiftEdit } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { employeeName, useMe, useStore } from '../../store/useStore';
+import { employeeName, useMe, useRules, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDate, fmtDateTime, fmtDistance, fmtDur, fmtHM, fmtHrs, fmtTime, MIN, startOfDay } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -32,6 +32,7 @@ function where(punch?: Punch): string {
 
 export function ShiftDetailScreen({ navigation, route }: ScreenProps<'ShiftDetail'>) {
   const now = useNow(30_000);
+  const rules = useRules();
   const me = useMe();
   const shift = useStore((s) => s.shifts.find((x) => x.id === route.params.shiftId));
   const employees = useStore((s) => s.employees);
@@ -44,7 +45,7 @@ export function ShiftDetailScreen({ navigation, route }: ScreenProps<'ShiftDetai
   if (!shift) return null;
 
   const totals = shiftTotals(shift, now);
-  const flags = shiftFlags(shift, now);
+  const flags = shiftFlags(shift, now, rules);
   const missing = flags.includes('missing_out');
   const day = startOfDay(shift.clockIn.at);
   const canEdit = me?.role === 'supervisor';
@@ -158,7 +159,7 @@ export function ShiftDetailScreen({ navigation, route }: ScreenProps<'ShiftDetai
               {i > 0 ? <Divider inset={space.lg} /> : null}
               <View style={styles.flag}>
                 <Tag label={FLAG_LABEL[flag]} tone={flagTone(flag)} />
-                <Txt v="body" c={color.inkSoft}>{FLAG_HELP[flag]}</Txt>
+                <Txt v="body" c={color.inkSoft}>{flagHelp(flag, rules)}</Txt>
               </View>
             </View>
           ))}

@@ -8,7 +8,7 @@ import { backFromLunchAt, FLAG_LABEL, shiftFlags, shiftTotals } from '../../doma
 import type { ScreenProps } from '../../navigation/types';
 import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
-import { employeeName, useStore } from '../../store/useStore';
+import { employeeName, useRules, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { addDays, fmtDate, fmtDistance, fmtHrs, fmtRelativeDay, fmtTime, listName, startOfDay, startOfWeek } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -16,6 +16,7 @@ import { useNow } from '../../util/hooks';
 /** Everyone's punches for one day: arrived, lunch, back, left. */
 export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
   const now = useNow(30_000);
+  const rules = useRules();
   const employees = useStore((s) => s.employees);
   const shifts = useStore((s) => s.shifts);
   const denied = useStore((s) => s.denied);
@@ -80,7 +81,7 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
             <Txt v="cap" c={color.silica} style={styles.paid}>Paid</Txt>
           </View>
           {list.map((shift) => {
-            const flags = shiftFlags(shift, now);
+            const flags = shiftFlags(shift, now, rules);
             const missing = flags.includes('missing_out');
             const totals = shiftTotals(shift, now);
             const lunch = shift.lunches[0];

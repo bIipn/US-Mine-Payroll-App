@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { JURISDICTION_NOTE, shortCite, standard, type GuidanceStep } from '../domain/standards';
+import { jurisdictionNote, shortCite, standard, type GuidanceStep } from '../domain/standards';
 import { haptic } from '../services/haptics';
+import { useStore } from '../store/useStore';
 import { color, font, radius, space } from '../theme/theme';
 import { Sheet, Txt } from './ui';
 
@@ -13,6 +14,7 @@ import { Sheet, Txt } from './ui';
  */
 export function StandardRefs({ cfr, osha, refs, onDark }: { cfr?: string; osha?: string; refs?: string[]; onDark?: boolean }) {
   const [open, setOpen] = useState(false);
+  const state = useStore((s) => s.settings.company.state);
   const keys = [cfr, osha, ...(refs ?? [])].filter((k): k is string => !!k && !!standard(k));
   if (keys.length === 0) return null;
   return (
@@ -47,7 +49,7 @@ export function StandardRefs({ cfr, osha, refs, onDark }: { cfr?: string; osha?:
             </View>
           );
         })}
-        <Txt v="small" c={color.silica}>{JURISDICTION_NOTE}</Txt>
+        <Txt v="small" c={color.silica}>{jurisdictionNote(state)}</Txt>
         <Txt v="small" c={color.silica}>Plain-language summary for the field. Read the regulation itself for the exact wording.</Txt>
       </Sheet>
     </>

@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { isCurrentSpan, spanLabel, stepSpan, SPAN_NAME, type Span } from '../domain/spans';
 import { computeRange } from '../domain/payroll';
-import { useStore } from '../store/useStore';
+import { useRules, useStore } from '../store/useStore';
 import { color, radius, space } from '../theme/theme';
 import { fmtDate, fmtHrs, fullName } from '../util/format';
 import { DayTable, LEAVE_LABEL, LEAVE_TYPES } from './DayTable';
@@ -48,6 +48,7 @@ export function PeriodSheet({ employeeId, span, onSpan, now, own, canAddLeave }:
   const employee = useStore((s) => s.employees.find((e) => e.id === employeeId));
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
   const pay = useStore((s) => s.settings.company.pay);
+  const rules = useRules();
   const options = { pay, weekStartsOn: startsOn };
   const [chart, setChart] = useState(false);
   const [addingLeave, setAddingLeave] = useState(false);
@@ -60,9 +61,9 @@ export function PeriodSheet({ employeeId, span, onSpan, now, own, canAddLeave }:
         span.start,
         span.end,
         now,
-        { weekStartsOn: startsOn },
+        { weekStartsOn: startsOn, rules },
       ),
-    [shifts, leave, employeeId, span.start, span.end, now, startsOn],
+    [shifts, leave, employeeId, span.start, span.end, now, startsOn, rules],
   );
 
   const isCurrent = isCurrentSpan(span, now, options);
@@ -116,7 +117,7 @@ export function PeriodSheet({ employeeId, span, onSpan, now, own, canAddLeave }:
       <DayTable days={range.days} leave={range.leave} footLabel={SPAN_NAME[span.kind]} lunch={range.lunch} worked={range.paid} now={now} />
 
       <Txt v="small" c={color.silica}>
-        Overtime is figured by the day and by the workweek, {workweekLine(startsOn)}, then added up for the days in the {which}. Hours are before taxes.
+        Overtime is figured {rules.dailyOvertimeAfter != null ? 'by the day and ' : ''}by the workweek, {workweekLine(startsOn)}, then added up for the days in the {which}. Hours are before taxes.
       </Txt>
       <Button label="How minutes become decimals" kind="quiet" size="md" onPress={() => setChart(true)} testID="open-chart" />
 

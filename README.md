@@ -179,7 +179,18 @@ Lunch ends by itself 30 minutes after it starts, so it comes off as 0.50. A seco
 
 A lunch cannot be cut short or stretched from the phone, and there is no clock-out while it is running. There is no punch at the end of lunch, so no location is read then: the app does not check that someone is back at the mine when their lunch ends. Supervisors can still correct lunch times, with a reason, from the shift record.
 
-Overtime follows California rules: over 8 hours in a day or 40 straight-time hours in a week is time-and-a-half, over 12 in a day is double time, and the seventh-day rule applies. The lunch deadline follows California Labor Code §512: the first meal starts before the end of the fifth hour. Flags are for a supervisor to review. Nothing is paid or docked automatically.
+## Rules by state
+
+Overtime and meal periods follow the state the company is in, set on More → Company, which shows the rules in two plain sentences. A lunch is 30 minutes and unpaid in every state; what changes is when one is owed and how overtime is figured.
+
+| | Federal law (any state with no rules of its own) | California |
+|---|---|---|
+| Overtime | Over 40 hours in a workweek | Over 8 hours a day or 40 straight-time hours a week; double time over 12 a day; the seventh-day rule |
+| Meal period | None required | 30 minutes, started before the end of the fifth hour; a second past 10 hours |
+| On the clock screen | Start lunch, no countdown, no reminders | A countdown to the end of the fifth hour and reminders before it |
+| Lunch flags | None | Late lunch, no lunch, short lunch, second meal due |
+
+States with daily overtime or meal laws of their own are added to `src/domain/stateRules.ts` once each one is checked against the state's own statute or agency; until then a state works under federal law. Flags are for a supervisor to review. Nothing is paid or docked automatically. The summaries are plain language, not legal advice.
 
 ## Pay periods and paydays
 
@@ -232,7 +243,7 @@ Only standards whose text has been checked are cited. The summaries in the app a
 | Roster | In the app (Crew → Roster), or `EXPO_PUBLIC_ROSTER` in `.env.local` |
 | Standards and the steps after a Bad Order | `src/domain/standards.ts` |
 | Company name, state, place, logo and pay periods | In the app (More → Company), or `EXPO_PUBLIC_COMPANY` in `.env.local` |
-| Lunch and overtime rules | `CA_RULES` in `src/domain/time.ts` |
+| Lunch and overtime rules for each state | `src/domain/stateRules.ts`, built from `CA_RULES` and `FEDERAL_RULES` in `src/domain/time.ts` |
 | How pay periods and paydays are worked out, and bank holidays | `src/domain/payPeriod.ts` |
 | Boundary | `src/domain/site.ts`, or in the app |
 | Sample crew and fleet | `src/store/seed.ts` |

@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { computeRange } from '../domain/payroll';
-import { useStore } from '../store/useStore';
+import { useRules, useStore } from '../store/useStore';
 import { color, radius, space } from '../theme/theme';
 import { addDays, fmtHrs, fmtRange, startOfWeek } from '../util/format';
 import { DayTable, LEAVE_LABEL, LEAVE_TYPES } from './DayTable';
@@ -25,6 +25,7 @@ export function WeekSheet({ employeeId, weekStart, onWeek, now }: {
   const shifts = useStore((s) => s.shifts);
   const leave = useStore((s) => s.leave);
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
+  const rules = useRules();
   const [chart, setChart] = useState(false);
 
   const week = useMemo(
@@ -35,9 +36,9 @@ export function WeekSheet({ employeeId, weekStart, onWeek, now }: {
         weekStart,
         addDays(weekStart, 7),
         now,
-        { weekStartsOn: startsOn },
+        { weekStartsOn: startsOn, rules },
       ),
-    [shifts, leave, employeeId, weekStart, now, startsOn],
+    [shifts, leave, employeeId, weekStart, now, startsOn, rules],
   );
   const thisWeek = startOfWeek(now, startsOn);
   const isCurrent = weekStart >= thisWeek;

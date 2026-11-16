@@ -285,10 +285,15 @@ export function shortCite(key: string): string {
   return std ? `${std.agency} § ${key}` : key;
 }
 
-export const JURISDICTION_NOTE =
-  'MSHA has jurisdiction at the mine, so the 30 CFR Part 56 standard is the one an inspector cites. ' +
-  'The OSHA rule beside it is the matching federal standard, shown for cross-reference. ' +
-  "In California, Cal/OSHA's Mining and Tunneling Unit also inspects surface mines each year under the Title 8 Mine Safety Orders.";
+/** Who inspects the mine, for the standards screens. A mine in California is also inspected by Cal/OSHA. */
+export function jurisdictionNote(state: string): string {
+  const federal =
+    'MSHA has jurisdiction at the mine, so the 30 CFR Part 56 standard is the one an inspector cites. ' +
+    'The OSHA rule beside it is the matching federal standard, shown for cross-reference.';
+  return state === 'CA'
+    ? `${federal} In California, Cal/OSHA's Mining and Tunneling Unit also inspects surface mines each year under the Title 8 Mine Safety Orders.`
+    : federal;
+}
 
 export interface GuidanceStep {
   title: string;

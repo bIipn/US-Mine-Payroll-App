@@ -6,6 +6,8 @@ import { Check } from '../../components/icons';
 import { Button, Chips, Divider, Field, Panel, Page, Row, Sheet, Txt } from '../../components/ui';
 import { checkCompany, stateName, STATES, type Company } from '../../domain/company';
 import { checkPaySchedule, describePaySchedule, nextPayday, type IfBankClosed, type PayFrequency, type PaySchedule } from '../../domain/payPeriod';
+import { rulesFor } from '../../domain/stateRules';
+import { mealSummary, overtimeSummary } from '../../domain/time';
 import type { ScreenProps } from '../../navigation/types';
 import { useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
@@ -147,6 +149,13 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
                 chevron
                 onPress={() => setPicking(true)}
               />
+              {draft.state ? (
+                <View style={styles.preview} testID="company-rules">
+                  <Txt v="small">{overtimeSummary(rulesFor(draft.state))}</Txt>
+                  <Txt v="small">{mealSummary(rulesFor(draft.state))}</Txt>
+                  <Txt v="small" c={color.silica}>A summary in plain language, not legal advice.</Txt>
+                </View>
+              ) : null}
             </View>
             <Field
               testID="company-place"
