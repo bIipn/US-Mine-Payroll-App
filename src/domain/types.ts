@@ -11,6 +11,8 @@ export interface Employee {
   role: Role;
   title?: string;
   active: boolean;
+  /** The person's number in the company's payroll system (ADP's "File #", for one). Set by a supervisor for the payroll file. */
+  payrollId?: string;
 }
 
 export type AuthProvider = 'password' | 'apple' | 'google' | 'microsoft';
@@ -355,6 +357,8 @@ export interface SiteConfig {
   radiusM: number;
   /** Optional surveyed boundary. When present it replaces the circle. */
   polygon?: LatLng[];
+  /** The nearest town, to show how far the boundary stays from it. Optional. */
+  town?: { name: string; center: LatLng };
 }
 
 export type DemoLocation = 'gps' | 'at_mine' | 'in_town';

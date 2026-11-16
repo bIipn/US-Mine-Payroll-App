@@ -4,6 +4,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, STARTING_COMPANY } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { checkCompany, normalMineId, type Company } from '../domain/company';
+import { markSent, type Change, type Synced } from '../domain/sync';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
@@ -64,6 +65,8 @@ interface Data extends SeedData {
   denied: DeniedPunch[];
   settings: Settings;
   seededAt: number | null;
+  /** The version of each record the company's server has confirmed (`src/domain/sync.ts`). */
+  synced: Synced;
 }
 
 export interface SignUpInput {
@@ -193,6 +196,8 @@ interface Actions {
   addEmployeesBulk: (text: string) => { added: number; skipped: number };
   setEmployeeActive: (employeeId: string, active: boolean) => void;
   setEmployeeRole: (employeeId: string, role: Role) => void;
+  /** A person's number in the company's payroll system, for the payroll hours file. Empty takes it off. */
+  setPayrollId: (employeeId: string, payrollId: string) => Result;
   addEquipment: (input: { unit: string; category: EquipmentCategory; make: string; model: string; meter: number }) => Result;
   removeEquipment: (equipmentId: string) => void;
 
@@ -207,6 +212,9 @@ interface Actions {
   removeLeave: (leaveId: string) => void;
   /** The signed-in person's own hourly rate for their pay estimate. `null` clears it. */
   setMyRate: (cents: number | null) => Result;
+
+  /** Note the versions of records the company's server took. */
+  markSynced: (accepted: readonly Pick<Change, 'key' | 'rev'>[]) => void;
 }
 
 export type Store = Data & Actions;
@@ -249,10 +257,11 @@ const initialData = (): Data => ({
   denied: [],
   settings: defaultSettings(DEMO_MODE, STARTING_COMPANY),
   seededAt: null,
+  synced: {},
 });
 
 /** Whether what this build saves on the device is the sample crew's history, rather than only what people entered. */
-const HOLDS_SAMPLES = DEMO_MODE && SAMPLE_CREW;
+export const HOLDS_SAMPLES = DEMO_MODE && SAMPLE_CREW;
 
 export const useStore = create<Store>()(
   persist(
@@ -893,6 +902,26 @@ export const useStore = create<Store>()(
         setEmployeeRole: (employeeId, role) =>
           set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, role } : e)) }),
 
+        setPayrollId: (employeeId, payrollId) => {
+          if (!get().session) return signedOut;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can set payroll IDs.' };
+          const id = payrollId.trim();
+          if (id && !/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,19}$/.test(id)) {
+            return { ok: false, error: 'A payroll ID is up to 20 letters and numbers. A dash, dot, slash or space between them is fine.' };
+          }
+          const { employees } = get();
+          const taken = id && employees.find((e) => e.id !== employeeId && e.payrollId?.toLowerCase() === id.toLowerCase());
+          if (taken) return { ok: false, error: `${taken.firstName} ${taken.lastName} already has payroll ID ${id}.` };
+          set({
+            employees: employees.map((e) => {
+              if (e.id !== employeeId) return e;
+              const { payrollId: _old, ...rest } = e;
+              return id ? { ...rest, payrollId: id } : rest;
+            }),
+          });
+          return { ok: true };
+        },
+
         addEquipment: ({ unit, category, make, model, meter }) => {
           const name = clean(unit).toUpperCase();
           if (!name) return { ok: false, error: 'Enter a unit number.' };
@@ -926,10 +955,18 @@ export const useStore = create<Store>()(
           const next: Company = { ...company, name: clean(company.name), place: company.place && clean(company.place) ? clean(company.place) : undefined, mineId };
           if (!next.place) delete next.place;
           if (!next.mineId) delete next.mineId;
+          if (next.timeClock !== false) delete next.timeClock;
+          if (!next.payCodes) delete next.payCodes;
           const problem = checkCompany(next);
           if (problem) return { ok: false, error: problem };
           set({ settings: { ...get().settings, company: next } });
           return { ok: true };
+        },
+
+        // ---- The company's server ---------------------------------------------------------
+        markSynced: (accepted) => {
+          const synced = markSent(get().synced, accepted);
+          if (synced !== get().synced) set({ synced });
         },
 
         // ---- Paid leave and the pay estimate ----------------------------------------------
@@ -990,8 +1027,8 @@ export const useStore = create<Store>()(
       version: STATE_VERSION,
       migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
-      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt }) => ({
-        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt,
+      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced }) => ({
+        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();

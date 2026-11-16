@@ -75,11 +75,16 @@ export function sha256(text: string): string {
   return Array.from(h, (x) => x.toString(16).padStart(8, '0')).join('');
 }
 
-/** Short unique id: time-ordered with a random tail. */
+/**
+ * Unique id: time-ordered, with twelve random characters after the time
+ * (about 62 bits), so records made at the same moment on different phones
+ * never take the same id when they reach the company's server.
+ */
 export function uid(prefix = ''): string {
   const time = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `${prefix}${time}${rand}`;
+  let rand = '';
+  while (rand.length < 12) rand += Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+  return `${prefix}${time}${rand.slice(0, 12)}`;
 }
 
 /** Deterministic pseudo-random numbers, so sample data looks the same every time. */

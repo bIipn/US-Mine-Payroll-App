@@ -1,6 +1,7 @@
 import { AREA_CONDITIONS, examCounts, examFindings, examResult, rowAnswer, shiftLabel } from '../domain/areaExam';
 import { cardsBetween } from '../domain/checklistCard';
 import { computePayroll, sumPayroll } from '../domain/payroll';
+import { DEFAULT_PAY_CODES, payrollCsv, toCsv, type PayrollCsvLayout } from '../domain/payrollCsv';
 import { standard } from '../domain/standards';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, findItem, isHazard, onTheCard } from '../domain/templates';
 import { rulesFor } from '../domain/stateRules';
@@ -69,6 +70,32 @@ export interface ReportRange {
 }
 
 const LEAVE_LABEL = { holiday: 'Holiday', pto: 'PTO', sick: 'Sick' } as const;
+
+export interface CsvFile {
+  name: string;
+  bytes: Uint8Array;
+  /** Lines of hours, not counting the headings. */
+  lines: number;
+}
+
+/**
+ * The payroll hours file for a pay period (or any run of days): a CSV for the
+ * import of the company's payroll system, made from the same payroll as the
+ * Excel export. See `src/domain/payrollCsv.ts`.
+ */
+export function payrollHoursFile(data: ReportData, range: ReportRange, layout: PayrollCsvLayout, now: number): CsvFile {
+  const start = startOfDay(range.start);
+  const end = startOfDay(range.end);
+  const people = data.employees.filter((e) => e.active).sort(byName);
+  const rules = rulesFor(data.settings?.company.state ?? 'CA');
+  const rows = computePayroll(people, data.shifts, data.leave, start, end, now, { weekStartsOn: data.settings?.workweekStartsOn ?? 0, rules });
+  const lines = payrollCsv(rows, data.settings?.company.payCodes ?? DEFAULT_PAY_CODES, layout, { start, end });
+  return {
+    name: `${filePrefix(data)}Payroll-Hours_${ymd(start)}_to_${ymd(addDays(end, -1))}.csv`,
+    bytes: new TextEncoder().encode(toCsv(lines)),
+    lines: lines.length - 1,
+  };
+}
 
 /**
  * Payroll for a pay period (or any run of days): summary, daily detail, paid

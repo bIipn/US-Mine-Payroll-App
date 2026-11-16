@@ -135,16 +135,25 @@ describe('migratePersisted', () => {
     expect((migratePersisted(v6, 5, false, COMPANY).settings as { company: Company }).company).toBe(own);
   });
 
+  it('starts a phone with nothing sent to a server yet, and keeps every record to send', () => {
+    const v6 = { ...v1, leave: [], payRates: {}, exams: [], areaSheets: [], settings: { lunchReminders: false, company: COMPANY } };
+    const next = migratePersisted(v6, 6, false, COMPANY);
+    expect(next.synced).toEqual({});
+    expect(next.shifts).toEqual([{ id: 's1' }]);
+    expect(next.seededAt).toBe(1_700_000_000_000);
+  });
+
   it('leaves data from the current version alone', () => {
-    const v6 = {
+    const v7 = {
       ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'crusher' }],
       mrfs: [{ id: 'm1', status: 'completed', history: [{ at: 5000, by: 'e6', status: 'completed', note: 'Done' }] }],
       settings: { lunchReminders: false, company: COMPANY },
+      synced: { 'shift:s1': 'abc' },
     };
-    expect(migratePersisted(v6, 6, true, COMPANY)).toEqual(v6);
+    expect(migratePersisted(v7, 7, true, COMPANY)).toEqual(v7);
   });
 
   it('copes with nothing saved', () => {
-    expect(migratePersisted(undefined, 1, false, COMPANY)).toEqual({ leave: [], payRates: {}, exams: [], areaSheets: [] });
+    expect(migratePersisted(undefined, 1, false, COMPANY)).toEqual({ leave: [], payRates: {}, exams: [], areaSheets: [], synced: {} });
   });
 });

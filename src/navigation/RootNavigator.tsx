@@ -5,6 +5,7 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { keepsTime } from '../domain/company';
 import { AuthScreen } from '../screens/auth/AuthScreen';
 import { ClockScreen } from '../screens/clock/ClockScreen';
 import { ChecklistCardScreen } from '../screens/equipment/ChecklistCardScreen';
@@ -88,11 +89,13 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
 
 function MainTabs() {
   const me = useMe();
+  // A company that uses the app for the safety forms only has no clock and no hours, so its first tab is the checklists.
+  const time = useStore((s) => keepsTime(s.settings.company));
   return (
     <Tabs.Navigator screenOptions={{ headerShown: false }} tabBar={(props) => <TabBar {...props} />}>
-      <Tabs.Screen name="Clock" component={ClockScreen} />
+      {time ? <Tabs.Screen name="Clock" component={ClockScreen} /> : null}
       <Tabs.Screen name="Equipment" component={EquipmentScreen} />
-      <Tabs.Screen name="Hours" component={HoursScreen} />
+      {time ? <Tabs.Screen name="Hours" component={HoursScreen} /> : null}
       {me?.role === 'supervisor' ? <Tabs.Screen name="Crew" component={CrewScreen} /> : null}
       <Tabs.Screen name="More" component={MoreScreen} />
     </Tabs.Navigator>

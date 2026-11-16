@@ -26,6 +26,7 @@ The Excel exports look like this ([payroll sample](docs/samples/Sample-Mining-Co
 
 **For everyone on the crew**
 
+- **Works with no signal.** Quarries, pits and underground mines often have none. Clocking in, the equipment checklist, lunch, the pre shift exam and maintenance requests all work without it: a record is saved on the phone the moment it is signed. A strip across the top says when the phone has no signal, and the More screen says where the records stand. GPS needs no cell signal, only a view of the sky.
 - **Clock in and out with a GPS check.** A clock-in only goes through from inside the mine boundary. The location is read at the moment of the punch and never in the background.
 - **Lunch is one tap.** Tap Start lunch and that is it. Thirty minutes later the app puts you back on the clock by itself and sends a notification that lunch is over. Nobody clocks back in. Lunch is unpaid and comes off the day as 0.50.
 - **Lunch reminders, where the state sets a lunch deadline.** In California the app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes. In a state with no deadline there is no countdown; see [Rules by state](#rules-by-state).
@@ -49,6 +50,8 @@ The Excel exports look like this ([payroll sample](docs/samples/Sample-Mining-Co
 - Area sheets: type in the sheet for a new work area, one line of the paper to a line.
 - Roster control: only names on the roster can create an account. Paste a whole list at once.
 - **A PDF for an MSHA inspector.** One tap on the safety log makes the records an inspector asks to see, for the day, the last 7 or 30 days or the last 12 months: the equipment defects that affect safety and when each was corrected (30 CFR 56.14100(d)), every pre-use equipment inspection (56.14100(a)), every pre shift exam and every condition it found, with the date it was corrected (56.18002). Every record shows the date and time it was signed, and the file says when it was made and in which time zone. A defect or condition from before the period that is still not corrected is carried into it. A supervisor can add the mine's MSHA mine ID on More → Company to print it at the top.
+- **A payroll hours file** for the import of the company's payroll system: a plain CSV with each person's payroll ID, an earning code and the hours, before taxes, as totals for the period or one line a day. A supervisor sets the company's own earning codes on More → Company and each person's payroll ID (ADP's File #, for one) on the roster. It is made from the same payroll as the Excel export, so the two agree to the hundredth. QuickBooks Online's import maps columns from the first row, and Sage 100 and Sage 300 CRE let the company set the layout. ADP Workforce Now wants its own paydata layout, so a ready-made ADP file, like any vendor's, waits on that system's own import template (see Payroll systems below).
+- **Time tracking is optional.** A company can turn off the time clock on More → Company and use the app for the safety forms only: the equipment checklist, pre shift exams, maintenance requests and the PDF for an inspector. The Clock and My hours tabs, payroll, corrections, lunch reminders and the hourly rate go away, and the app opens on the checklists.
 - **Excel exports** for payroll (summary, daily detail, paid leave, punch log, flags) and safety (equipment checklists with the 21 lines as columns, Bad Order items, equipment use, pre shift exams, the conditions found, every line of every exam, maintenance requests, time on site).
 
 ## Where this build stands
@@ -57,13 +60,13 @@ This is a working preview. Every flow above runs, on sample data.
 
 | | |
 |---|---|
-| **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export, the PDF for an MSHA inspector |
+| **Runs today** | Time clock, GPS boundary check, lunch rules and reminders, the equipment checklist and the daily card, Bad Order steps, pre shift exams and their open conditions, maintenance requests, area sheets, pay periods and payroll math, paid leave, pay estimate, corrections, roster, Excel export, the payroll hours file, the PDF for an MSHA inspector, the safety forms without the time clock, working with no signal |
 | **Sample data** | 14 made-up employees, 14 made-up units, 3 made-up work areas, about five weeks of punches and two weeks of checklists and exams. Nothing in it is a real US Mine record |
 | **The mine's own sheets** | The equipment checklist and the conditions page are the mine's, line for line. The area sheets in this repository are made-up samples: a build names the real ones in `.env.local`, or a supervisor types them in (see The paper forms) |
 | **Settled with the crew** | The safety items that always red tag a unit: fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls. N/A stays on the pre shift exam. The one spelling the app puts right on the conditions page stays put right. There is a swing shift as well as day and night |
 | **To confirm with the mine** | The hours each shift runs (see Pre Shift Exam under The paper forms for what the app assumes until then). What "DROPS" on the card stands for (it is shown as printed). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks). What the "Lead Check" blank on some area sheets is for and who fills it in (it is not built yet) |
 | **To confirm with payroll** | Which way a pay date moves when the 5th or 20th is a weekend or bank holiday (the app moves it to the banking day before), and which holidays are paid |
-| **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet |
+| **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet. The app already works out what a company server would need from each phone: every record it does not have yet, by a version of each record, sent in batches whenever there is signal and tried again until it gets through. The hourly rate, accounts, passwords and the sample crew's records are never sent. What it sends to is the server step |
 | **Keep the paper for now** | The standard asks for exam records to be kept for a year and shown to MSHA on request. Until the shared backend holds them, a record made in this preview lives on one device, so it does not replace the paper yet |
 | **Not connected yet** | The shared cloud database and real Apple, Google and Microsoft sign-in. The buttons and the account screens are built; they need the backend behind them |
 | **Not yet tried on a phone** | The iPhone and Android bundles build cleanly, and the app has been driven end to end in a browser. It has not been installed on a physical phone yet |
@@ -77,7 +80,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 529 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel, the inspector PDF
+npm test           # 570 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel, the inspector PDF, what is sent to the server, the payroll hours file
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -223,6 +226,25 @@ A supervisor sets them on More → Company. The sample company pays twice a mont
 - **Hours come in the pay stub's lines:** ST (straight time), OT (1.5 times), DT (2 times), and holiday, PTO and sick hours. Paid leave is paid at straight time and never counts toward overtime.
 - **The pay estimate** is hours times the rate the person entered, line by line, each line rounded to the cent: ST at the rate, OT at 1.5 times, DT at 2 times, leave at the rate. It is gross pay before taxes and deductions. The pay stub is the official figure.
 
+## Payroll systems
+
+The payroll hours file is plain CSV, one line for each person and kind of hours:
+
+| Employee ID | Last name | First name | Period start | Period end | Earning code | Hours |
+|---|---|---|---|---|---|---|
+| 004417 | Torres | Miguel | 2026-11-01 | 2026-11-15 | REG | 80.00 |
+| 004417 | Torres | Miguel | 2026-11-01 | 2026-11-15 | OT | 9.50 |
+
+With one line a day, a Date column takes the place of the two period columns. Dates are written `YYYY-MM-DD` and hours as decimals with two places. A field a spreadsheet would read as a formula is written with an apostrophe in front.
+
+What the vendors' own pages say, as far as it could be checked (their help sites could not be opened from where this was built, so each point is from search excerpts of the vendor's own pages and is to be checked against the company's own account before relying on it):
+
+- **QuickBooks Online** imports Time Activities from a CSV and maps the columns from the first row. QuickBooks Online Payroll has no documented file import of hours; Intuit points to QuickBooks Time. QuickBooks Desktop's IIF format is no longer supported by Intuit.
+- **ADP Workforce Now** takes a paydata file as a CSV whose first three columns are Co Code, Batch ID and File #, followed by hours by earning code. The rest of the layout is in the client's own ADP import guide.
+- **Sage 100 Payroll** imports hours through a Visual Integrator job the company builds to match its file, and **Sage 300 CRE** imports time in the column order the company sets up. **Sage 50** imports time tickets with durations as hours and minutes.
+
+So the file is built to be mapped, and a ready-made layout for one system can be added once that system's own import template is in hand.
+
 ## The clock-in boundary
 
 The boundary is a circle around the pin at 38.33419° N, 120.94551° W, 1,000 m (0.62 mi) out by default, which is about 776 acres.
@@ -271,7 +293,7 @@ EXPO_PUBLIC_COMPANY='{"name": "Example Aggregates Co.", "state": "NV", "place": 
   "pay": {"frequency": "biweekly", "firstDay": "2026-11-01", "payday": {"daysAfter": 6}, "ifBankClosed": "before"}}'
 ```
 
-`frequency` is `weekly`, `biweekly`, `semimonthly` or `monthly`; `payday` is `{"daysAfter": n}` or `{"dayOfMonth": [20, 5]}` (one day for each half of a twice-a-month schedule); `ifBankClosed` is `before`, `after` or `stay`. Leave out `pay` for no pay periods. A build that names no company starts with the made-up Sample Mining Co. when it has the sample crew, and with nothing filled in when it does not.
+`frequency` is `weekly`, `biweekly`, `semimonthly` or `monthly`; `payday` is `{"daysAfter": n}` or `{"dayOfMonth": [20, 5]}` (one day for each half of a twice-a-month schedule); `ifBankClosed` is `before`, `after` or `stay`. Leave out `pay` for no pay periods. `"mineId": "0400123"` prints the MSHA mine ID on the PDF for an inspector, and `"timeClock": false` starts the company on the safety forms only. A build that names no company starts with the made-up Sample Mining Co. when it has the sample crew, and with nothing filled in when it does not.
 
 ## The logo
 

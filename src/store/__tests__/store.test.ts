@@ -1,6 +1,8 @@
 import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, type ExamDraft } from '../../domain/areaExam';
 import { toGeoStamp } from '../../domain/geofence';
 import { DEFAULT_SITE } from '../../domain/site';
+import { changesToSend } from '../../domain/sync';
+import { SAMPLE_CREW_IDS } from '../seed';
 import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
 import type { InspectionAnswer } from '../../domain/types';
@@ -870,6 +872,24 @@ describe('the company', () => {
     expect(s().setCompany({ ...own, mineId: '12345' })).toMatchObject({ ok: false, error: expect.stringMatching(/seven digits/) });
   });
 
+  it('keeps the company’s own earning codes, and drops codes left at the defaults', () => {
+    s().signInDemo('supervisor');
+    const codes = { regular: 'E01', overtime: 'E02', double: 'E03', holiday: 'E04', pto: 'E05', sick: 'E06' };
+    expect(s().setCompany({ ...own, payCodes: codes })).toEqual({ ok: true });
+    expect(s().settings.company.payCodes).toEqual(codes);
+    expect(s().setCompany({ ...own, payCodes: undefined })).toEqual({ ok: true });
+    expect('payCodes' in s().settings.company).toBe(false);
+    expect(s().setCompany({ ...own, payCodes: { ...codes, sick: 'E01' } })).toMatchObject({ ok: false });
+  });
+
+  it('can be set to the safety forms only, and back to keeping time', () => {
+    s().signInDemo('supervisor');
+    expect(s().setCompany({ ...own, timeClock: false })).toEqual({ ok: true });
+    expect(s().settings.company.timeClock).toBe(false);
+    expect(s().setCompany({ ...own, timeClock: undefined })).toEqual({ ok: true });
+    expect('timeClock' in s().settings.company).toBe(false);
+  });
+
   it('can be set to have no pay periods at all', () => {
     s().signInDemo('supervisor');
     expect(s().setCompany({ ...own, pay: null })).toEqual({ ok: true });
@@ -883,6 +903,47 @@ describe('the company', () => {
     expect(s().setCompany({ ...own, state: '' })).toMatchObject({ ok: false, error: expect.stringMatching(/state/) });
     expect(s().setCompany({ ...own, pay: { ...own.pay, firstDay: undefined } })).toMatchObject({ ok: false });
     expect(s().settings.company.name).toBe('Sample Mining Co.');
+  });
+});
+
+describe('payroll IDs', () => {
+  it('lets a supervisor give a person their number in the payroll system, tidied, and take it off again', () => {
+    s().signInDemo('supervisor');
+    const person = s().employees[2];
+    expect(s().setPayrollId(person.id, '  00-1234 ')).toEqual({ ok: true });
+    expect(s().employees.find((e) => e.id === person.id)!.payrollId).toBe('00-1234');
+    expect(s().setPayrollId(person.id, '')).toEqual({ ok: true });
+    expect('payrollId' in s().employees.find((e) => e.id === person.id)!).toBe(false);
+  });
+
+  it('turns back an ID with characters a payroll import would choke on, a long one, one already taken, and anyone else', () => {
+    s().signInDemo('supervisor');
+    const [a, b] = s().employees.slice(2, 4);
+    expect(s().setPayrollId(a.id, 'A1,"2"')).toMatchObject({ ok: false });
+    expect(s().setPayrollId(a.id, '1'.repeat(21))).toMatchObject({ ok: false });
+    expect(s().setPayrollId(a.id, '777')).toEqual({ ok: true });
+    expect(s().setPayrollId(b.id, '777')).toMatchObject({ ok: false, error: expect.stringMatching(/already/) });
+    s().signInDemo('employee');
+    expect(s().setPayrollId(b.id, '778')).toMatchObject({ ok: false, error: expect.stringMatching(/supervisor/) });
+  });
+});
+
+describe('what the company’s server has', () => {
+  it('starts with nothing sent, notes what the server took, and keeps waiting on what changed after', () => {
+    s().signInDemo('employee');
+    expect(s().synced).toEqual({});
+    const before = changesToSend(s(), s().synced, new Set());
+    expect(before.length).toBeGreaterThan(0);
+    s().markSynced(before);
+    expect(changesToSend(s(), s().synced, new Set())).toEqual([]);
+    expect(s().clockIn(onSite).ok).toBe(true);
+    expect(changesToSend(s(), s().synced, new Set()).map((c) => c.kind)).toEqual(['shift']);
+  });
+
+  it('forgets what was sent when the phone is reset', () => {
+    s().markSynced(changesToSend(s(), {}, SAMPLE_CREW_IDS));
+    s().resetDemo(null, [], [], true);
+    expect(s().synced).toEqual({});
   });
 });
 

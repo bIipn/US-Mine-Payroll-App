@@ -5,6 +5,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Avatar, Divider, Panel, Row, Stat, Tag, TopBar, Txt, UnitPlate } from '../../components/ui';
 import { openFindings } from '../../domain/areaExam';
+import { keepsTime } from '../../domain/company';
 import { employeeName, useRules, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtDateLong, fmtRelativeDay, fmtTime, fullName, initials, peopleCount, startOfDay } from '../../util/format';
@@ -21,14 +22,16 @@ export function CrewScreen() {
   const mrfs = useStore((s) => s.mrfs);
   const exams = useStore((s) => s.exams);
   const sheets = useStore((s) => s.areaSheets);
+  // A company that uses the app for the safety forms only keeps no time: the board is safety alone.
+  const time = useStore((s) => keepsTime(s.settings.company));
 
   const rules = useRules();
-  const hasDeadline = rules.meal?.startByMs != null;
+  const hasDeadline = time && rules.meal?.startByMs != null;
   const crew = useMemo(() => crewNow(employees, shifts, now, rules), [employees, shifts, now, rules]);
   const working = crew.filter((c) => c.presence === 'working').length;
   const atLunch = crew.filter((c) => c.presence === 'lunch').length;
-  const alerts = crew.filter((c) => c.urgency >= 3);
-  const missing = missingClockOuts(shifts, now);
+  const alerts = time ? crew.filter((c) => c.urgency >= 3) : [];
+  const missing = time ? missingClockOuts(shifts, now) : [];
   const openMrfs = mrfs.filter((m) => m.status !== 'completed');
   const safetyMrfs = openMrfs.filter((m) => m.taggedOut);
   const outOfService = equipment.filter((e) => e.status === 'out_of_service').length;
@@ -44,17 +47,22 @@ export function CrewScreen() {
       <TopBar title="Crew" sub={fmtDateLong(now)} />
       <ScrollView testID="crew-screen" contentContainerStyle={styles.content}>
         <View style={styles.stats}>
-          <Stat value={String(working)} label="Working" />
-          <Stat value={String(atLunch)} label="At lunch" />
+          {time ? <Stat value={String(working)} label="Working" /> : null}
+          {time ? <Stat value={String(atLunch)} label="At lunch" /> : null}
           {/* Only where the state sets a time a lunch must start by is there a lunch to be due. */}
           {hasDeadline ? <Stat value={String(alerts.length)} label="Lunch due" tone={alerts.length ? 'bo' : undefined} /> : null}
           <Stat value={String(outOfService)} label="Units down" tone={outOfService ? 'bo' : undefined} />
+          {time ? null : <Stat value={`${examinedToday}/${areas.length}`} label="Areas examined" />}
         </View>
 
         <Panel title="Needs you now" flush>
           {nothing ? (
             <View style={{ padding: space.lg }}>
-              <Txt v="body" c={color.silica}>{`Nothing is waiting on you. ${hasDeadline ? 'Lunch deadlines, missing' : 'Missing'} clock-outs, red-tagged units and open work-area conditions show up here.`}</Txt>
+              <Txt v="body" c={color.silica}>
+                {time
+                  ? `Nothing is waiting on you. ${hasDeadline ? 'Lunch deadlines, missing' : 'Missing'} clock-outs, red-tagged units and open work-area conditions show up here.`
+                  : 'Nothing is waiting on you. Red-tagged units and open work-area conditions show up here.'}
+              </Txt>
             </View>
           ) : null}
           {alerts.map((line, i) => (
@@ -119,13 +127,15 @@ export function CrewScreen() {
           ) : null}
         </Panel>
 
-        <Panel title="Time and payroll" flush>
-          <Row testID="go-onsite" left={<UserCheck color={color.ink} size={24} />} title="Who is on site" sub={`${working + atLunch} of ${crew.length} here now`} chevron onPress={() => navigation.navigate('OnSite')} />
-          <Divider inset={space.lg} />
-          <Row testID="go-timelogs" left={<CalendarClock color={color.ink} size={24} />} title="Time log" sub="Arrivals, lunches and departures by day" chevron onPress={() => navigation.navigate('TimeLogs')} />
-          <Divider inset={space.lg} />
-          <Row testID="go-payroll" left={<FileSpreadsheet color={color.ink} size={24} />} title="Payroll" sub="Hours by employee, ready for Excel" chevron onPress={() => navigation.navigate('Payroll')} />
-        </Panel>
+        {time ? (
+          <Panel title="Time and payroll" flush>
+            <Row testID="go-onsite" left={<UserCheck color={color.ink} size={24} />} title="Who is on site" sub={`${working + atLunch} of ${crew.length} here now`} chevron onPress={() => navigation.navigate('OnSite')} />
+            <Divider inset={space.lg} />
+            <Row testID="go-timelogs" left={<CalendarClock color={color.ink} size={24} />} title="Time log" sub="Arrivals, lunches and departures by day" chevron onPress={() => navigation.navigate('TimeLogs')} />
+            <Divider inset={space.lg} />
+            <Row testID="go-payroll" left={<FileSpreadsheet color={color.ink} size={24} />} title="Payroll" sub="Hours by employee, ready for Excel" chevron onPress={() => navigation.navigate('Payroll')} />
+          </Panel>
+        ) : null}
 
         <Panel title="Safety and equipment" flush>
           <Row
@@ -154,8 +164,10 @@ export function CrewScreen() {
           <Row testID="go-roster" left={<Users color={color.ink} size={24} />} title="Roster" sub={`${peopleCount(employees.filter((e) => e.active).length)} can sign in`} chevron onPress={() => navigation.navigate('Roster')} />
           <Divider inset={space.lg} />
           <Row testID="go-sheets" left={<ListChecks color={color.ink} size={24} />} title="Area sheets" sub={`${areas.length} work ${areas.length === 1 ? 'area' : 'areas'} with a pre shift exam sheet`} chevron onPress={() => navigation.navigate('AreaSheets')} />
-          <Divider inset={space.lg} />
-          <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub="The area people can clock in from" chevron onPress={() => navigation.navigate('Site')} />
+          {time ? <Divider inset={space.lg} /> : null}
+          {time ? (
+            <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub="The area people can clock in from" chevron onPress={() => navigation.navigate('Site')} />
+          ) : null}
         </Panel>
       </ScrollView>
     </View>

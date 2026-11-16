@@ -1,4 +1,4 @@
-import { checkCompany, companyOrDefault, normalMineId, parseCompany, SAMPLE_COMPANY, stateName, STATES, type Company } from '../company';
+import { checkCompany, companyOrDefault, keepsTime, normalMineId, parseCompany, SAMPLE_COMPANY, stateName, STATES, type Company } from '../company';
 
 describe('the company a build names', () => {
   const setting = JSON.stringify({
@@ -31,6 +31,14 @@ describe('the company a build names', () => {
     expect(parseCompany('{"name":"A","state":"NV","mineId":"26"}').error).toMatch(/mine ID/);
   });
 
+  it('keeps time unless the build says the crew uses the safety forms only', () => {
+    expect(keepsTime(parseCompany('{"name":"A","state":"NV"}').company!)).toBe(true);
+    const safetyOnly = parseCompany('{"name":"A","state":"NV","timeClock":false}').company!;
+    expect(safetyOnly.timeClock).toBe(false);
+    expect(keepsTime(safetyOnly)).toBe(false);
+    expect(parseCompany('{"name":"A","state":"NV","timeClock":"no"}').error).toMatch(/timeClock/);
+  });
+
   it('takes a company with no pay periods and no logo', () => {
     expect(parseCompany('{"name":"Example Aggregates Co.","state":"TX"}')).toEqual({
       company: { name: 'Example Aggregates Co.', state: 'TX', pay: null },
@@ -60,6 +68,14 @@ describe('checkCompany', () => {
 
   it('passes a company with a name and a state', () => {
     expect(checkCompany(company)).toBeUndefined();
+  });
+
+  it('takes the company’s own earning codes for the payroll file, one for each kind of hours', () => {
+    const codes = { regular: 'R', overtime: 'O', double: 'D', holiday: 'HOL', pto: 'VAC', sick: 'SICK 1' };
+    expect(checkCompany({ ...company, payCodes: codes })).toBeUndefined();
+    expect(checkCompany({ ...company, payCodes: { ...codes, pto: ' ' } })).toMatch(/earning code/);
+    expect(checkCompany({ ...company, payCodes: { ...codes, pto: 'A,B' } })).toMatch(/earning code/);
+    expect(checkCompany({ ...company, payCodes: { ...codes, pto: 'R' } })).toMatch(/same code/);
   });
 
   it('takes an MSHA mine ID of seven digits, written with or without a dash or spaces', () => {

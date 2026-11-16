@@ -262,7 +262,7 @@ export function Row({ left, title, sub, below, right, onPress, chevron, testID, 
       {chevron ? <ChevronRight color={color.silicaLight} size={22} /> : null}
     </>
   );
-  if (!onPress) return <View style={styles.row}>{body}</View>;
+  if (!onPress) return <View testID={testID} style={styles.row}>{body}</View>;
   return (
     <Pressable
       testID={testID}

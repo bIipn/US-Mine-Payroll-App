@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { Banknote, BookOpen, Building2, ClipboardList, LogOut, MapPin, RotateCcw, Scale } from '../../components/icons';
+import { Banknote, BookOpen, Building2, ClipboardList, CloudCheck, CloudUpload, LogOut, MapPin, RotateCcw, Scale, WifiOff } from '../../components/icons';
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -7,12 +7,15 @@ import { DecimalChart } from '../../components/DecimalChart';
 import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
 import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
+import { keepsTime } from '../../domain/company';
+import { syncWords } from '../../domain/sync';
 import { deadlineWords } from '../../domain/time';
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
+import { useSyncStatus } from '../../services/sync';
 import { openShiftOf, useMe, useRules, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
-import { fmtMoney, fullName, initials } from '../../util/format';
+import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
 
 /**
  * Starting a preview over. With the sample crew that reloads their sample history. Without
@@ -46,8 +49,13 @@ export function MoreScreen() {
   const [chart, setChart] = useState(false);
   const [rateOpen, setRateOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const sync = useSyncStatus();
+  // A company that uses the app for the safety forms only has no clock, hours, rate or lunch reminders here.
+  const time = keepsTime(settings.company);
 
   if (!me) return null;
+  const records = syncWords(sync, fmtTime);
+  const RecordsIcon = !sync.online ? WifiOff : records.done ? CloudCheck : CloudUpload;
 
   const toggleReminders = async (on: boolean) => {
     setLunchReminders(on);
@@ -75,37 +83,51 @@ export function MoreScreen() {
         </Panel>
 
         <Panel flush>
-          <Row testID="more-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary and GPS" sub="Where you can clock in from" chevron onPress={() => navigation.navigate('Site')} />
-          <Divider inset={space.lg} />
+          {time ? (
+            <>
+              <Row testID="more-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary and GPS" sub="Where you can clock in from" chevron onPress={() => navigation.navigate('Site')} />
+              <Divider inset={space.lg} />
+            </>
+          ) : null}
           <Row testID="more-records" left={<ClipboardList color={color.ink} size={24} />} title="My checklists, exams and requests" sub="Everything you have signed or sent" chevron onPress={() => navigation.navigate('MyRecords')} />
           <Divider inset={space.lg} />
           <Row testID="more-standards" left={<BookOpen color={color.ink} size={24} />} title="Safety standards" sub="The MSHA and OSHA rules behind each line" chevron onPress={() => navigation.navigate('Standards')} />
-          <Divider inset={space.lg} />
-          <Row testID="more-chart" left={<Scale color={color.ink} size={24} />} title="Minutes as decimals" sub="The timesheet conversion chart" chevron onPress={() => setChart(true)} />
-          <Divider inset={space.lg} />
-          <Row
-            testID="more-rate"
-            left={<Banknote color={color.ink} size={24} />}
-            title="My hourly rate"
-            sub={rate ? `${fmtMoney(rate)} an hour, used to estimate your pay` : 'Add it to see what each check should come to'}
-            chevron
-            onPress={() => setRateOpen(true)}
-          />
+          {time ? (
+            <>
+              <Divider inset={space.lg} />
+              <Row testID="more-chart" left={<Scale color={color.ink} size={24} />} title="Minutes as decimals" sub="The timesheet conversion chart" chevron onPress={() => setChart(true)} />
+              <Divider inset={space.lg} />
+              <Row
+                testID="more-rate"
+                left={<Banknote color={color.ink} size={24} />}
+                title="My hourly rate"
+                sub={rate ? `${fmtMoney(rate)} an hour, used to estimate your pay` : 'Add it to see what each check should come to'}
+                chevron
+                onPress={() => setRateOpen(true)}
+              />
+            </>
+          ) : null}
         </Panel>
 
-        <Panel title="Reminders" flush>
-          <Toggle
-            testID="toggle-reminders"
-            label="Lunch reminders"
-            sub={
-              rules.meal?.startByMs != null
-                ? `60, 30 and 15 minutes before ${deadlineWords(rules.meal.startByMs).replace('the ', 'your ')} ends. You are told when your lunch is over either way.`
-                : 'There is no lunch deadline to remind you of where you work. You are told when your lunch is over either way.'
-            }
-            value={settings.lunchReminders}
-            onChange={toggleReminders}
-          />
+        <Panel title="Records on this phone" flush>
+          <Row testID="more-sync" left={<RecordsIcon color={color.ink} size={24} />} title={records.title} sub={records.sub} />
         </Panel>
+
+        {time ? (
+          <Panel title="Reminders" flush>
+            <Toggle
+              testID="toggle-reminders"
+              label="Lunch reminders"
+              sub={
+                rules.meal?.startByMs != null
+                  ? `60, 30 and 15 minutes before ${deadlineWords(rules.meal.startByMs).replace('the ', 'your ')} ends. You are told when your lunch is over either way.`
+                  : 'There is no lunch deadline to remind you of where you work. You are told when your lunch is over either way.'
+              }
+              value={settings.lunchReminders}
+              onChange={toggleReminders}
+            />
+          </Panel>
+        ) : null}
 
         {me.role === 'supervisor' ? (
           <Panel title="Company" flush>
@@ -113,7 +135,13 @@ export function MoreScreen() {
               testID="more-company"
               left={<Building2 color={color.ink} size={24} />}
               title={settings.company.name || 'Company details'}
-              sub={settings.company.name ? 'Name, state and pay periods' : 'Give the company’s name, state and pay periods'}
+              sub={
+                !settings.company.name
+                  ? 'Give the company’s name, state and pay periods'
+                  : time
+                    ? 'Name, state and pay periods'
+                    : 'Name, state and the safety forms only'
+              }
               chevron
               onPress={() => navigation.navigate('Company')}
             />
@@ -154,6 +182,11 @@ export function MoreScreen() {
       <RateSheet visible={rateOpen} onClose={() => setRateOpen(false)} />
       <Sheet testID="reset-sheet" visible={confirmReset} onClose={() => setConfirmReset(false)} title={RESET.ask}>
         <Txt v="body" c={color.inkSoft}>{RESET.warning}</Txt>
+        {sync.server && sync.waiting > 0 ? (
+          <Txt v="strong" c={color.red} testID="reset-unsent">
+            {sync.waiting} {sync.waiting === 1 ? 'record has' : 'records have'} not reached the company’s server yet and would be lost.
+          </Txt>
+        ) : null}
         <Button testID="confirm-reset" label={RESET.button} kind="red" onPress={() => { setConfirmReset(false); resetDemo(); }} />
       </Sheet>
     </View>

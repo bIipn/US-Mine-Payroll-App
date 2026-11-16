@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { View } from 'react-native';
 
 import { Avatar, Button, Divider, EmptyState, Field, Notice, Page, Panel, Row, Segmented, Sheet, Tag, Toggle, Txt } from '../../components/ui';
+import { keepsTime } from '../../domain/company';
 import type { Employee, Role } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -27,6 +28,7 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
   const employees = useStore((s) => s.employees);
   const accounts = useStore((s) => s.accounts);
   const { addEmployee, addEmployeesBulk, setEmployeeActive, setEmployeeRole, showToast } = useStore.getState();
+  const time = useStore((s) => keepsTime(s.settings.company));
 
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
@@ -184,6 +186,7 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
                     setEmployeeRole(open.id, on ? 'supervisor' : 'employee');
                   }}
                 />
+                {time ? <PayrollIdField key={open.id} person={open} /> : null}
                 <Button
                   testID="person-remove"
                   label="Remove from roster"
@@ -212,5 +215,38 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
         ) : null}
       </Sheet>
     </Page>
+  );
+}
+
+/** The person's number in the company's payroll system, for the payroll hours file. */
+function PayrollIdField({ person }: { person: Employee }) {
+  const [value, setValue] = useState(person.payrollId ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const changed = value.trim() !== (person.payrollId ?? '');
+  const save = () => {
+    const result = useStore.getState().setPayrollId(person.id, value);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    useStore.getState().showToast(value.trim() ? `Payroll ID saved for ${fullName(person)}` : `Payroll ID taken off ${fullName(person)}`);
+  };
+  return (
+    <View style={{ gap: space.sm }}>
+      <Field
+        testID="person-payroll-id"
+        label="Payroll ID (optional)"
+        hint="Their number in your payroll system, such as ADP's File #. It goes on the payroll hours file."
+        value={value}
+        onChangeText={(text) => {
+          setValue(text);
+          setError(null);
+        }}
+        error={error}
+        autoCapitalize="characters"
+        autoCorrect={false}
+      />
+      {changed ? <Button testID="person-payroll-id-save" label="Save payroll ID" kind="ink" size="md" onPress={save} /> : null}
+    </View>
   );
 }

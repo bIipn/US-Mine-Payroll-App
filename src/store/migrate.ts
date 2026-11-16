@@ -3,7 +3,7 @@ import { startedLunch } from '../domain/time';
 import type { Lunch } from '../domain/types';
 
 /** Version of the saved app state. Raise it when the shape of the data changes. */
-export const STATE_VERSION = 6;
+export const STATE_VERSION = 7;
 
 type Saved = Record<string, unknown>;
 type SavedEvent = { at?: number; by?: string; status?: string; note?: string };
@@ -25,6 +25,9 @@ type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; r
  * which moved to sample work areas that are not modelled on anyone's plant.
  * Version 6 made the company a setting: its name, state, logo and pay periods.
  * Saved settings get the company this build starts with (`company`).
+ * Version 7 notes which version of each record the company's server has
+ * (`synced`). A phone starts with none, so everything it holds is sent once
+ * it can reach a server.
  *
  * A build keeps every record that people entered. A preview that holds the
  * sample crew (`samples`) clears its "sample data loaded" marker instead, so
@@ -60,6 +63,9 @@ export function migratePersisted(saved: unknown, fromVersion: number, samples: b
   }
   if (fromVersion < 6 && state.settings && typeof state.settings === 'object' && !('company' in state.settings)) {
     state.settings = { ...(state.settings as Saved), company };
+  }
+  if (fromVersion < 7) {
+    state.synced = {};
   }
   if (fromVersion < STATE_VERSION && samples && 'seededAt' in state) {
     state.seededAt = null;

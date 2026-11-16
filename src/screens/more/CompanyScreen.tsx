@@ -3,8 +3,9 @@ import { StyleSheet, View } from 'react-native';
 
 import { CompanyLogoPlate } from '../../components/Brand';
 import { Check } from '../../components/icons';
-import { Button, Chips, Divider, Field, Panel, Page, Row, Sheet, Txt } from '../../components/ui';
-import { checkCompany, stateName, STATES, type Company } from '../../domain/company';
+import { Button, Chips, Divider, Field, Panel, Page, Row, Sheet, Toggle, Txt } from '../../components/ui';
+import { checkCompany, keepsTime, stateName, STATES, type Company } from '../../domain/company';
+import { DEFAULT_PAY_CODES, type PayCodes } from '../../domain/payrollCsv';
 import { checkPaySchedule, describePaySchedule, nextPayday, type IfBankClosed, type PayFrequency, type PaySchedule } from '../../domain/payPeriod';
 import { rulesFor } from '../../domain/stateRules';
 import { mealSummary, overtimeSummary } from '../../domain/time';
@@ -37,6 +38,10 @@ interface Draft {
   state: string;
   place: string;
   mineId: string;
+  /** Whether the crew keeps time in the app as well as the safety forms. */
+  timeClock: boolean;
+  /** The earning code for each kind of hours on the payroll hours file. */
+  codes: PayCodes;
   often: Often;
   firstDay: string;
   paidBy: PaidBy;
@@ -54,6 +59,8 @@ function draftOf(company: Company): Draft {
     state: company.state,
     place: company.place ?? '',
     mineId: company.mineId ?? '',
+    timeClock: keepsTime(company),
+    codes: company.payCodes ?? DEFAULT_PAY_CODES,
     often: pay?.frequency ?? 'none',
     firstDay: pay?.firstDay ?? ymd(Date.now()),
     paidBy: pay ? ('dayOfMonth' in pay.payday ? 'dayOfMonth' : 'daysAfter') : 'dayOfMonth',
@@ -108,8 +115,19 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
   const byWeek = draft.often === 'weekly' || draft.often === 'biweekly';
   const paidBy: PaidBy = byWeek ? 'daysAfter' : draft.paidBy;
 
+  const codes = Object.fromEntries(Object.entries(draft.codes).map(([k, v]) => [k, v.trim().toUpperCase()])) as unknown as PayCodes;
   const save = () => {
-    const next: Company = { ...company, name: draft.name, state: draft.state, place: draft.place, mineId: draft.mineId.trim(), pay: schedule };
+    // With no time clock the pay periods are not shown, so what was saved stays as it was for when it is turned back on.
+    const next: Company = {
+      ...company,
+      name: draft.name,
+      state: draft.state,
+      place: draft.place,
+      mineId: draft.mineId.trim(),
+      pay: draft.timeClock ? schedule : company.pay,
+      timeClock: draft.timeClock ? undefined : false,
+      payCodes: sameCodes(codes, DEFAULT_PAY_CODES) ? undefined : codes,
+    };
     const problem = checkCompany({ ...next, name: next.name.trim() });
     if (problem) {
       setError(problem);
@@ -122,7 +140,9 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
     }
     // The lunch reminders already waiting on this phone follow the state, so bring them in line with the new one.
     const { shifts, session, settings } = useStore.getState();
-    if (session) void syncReminders(openShiftOf(shifts, session.employeeId, Date.now()), settings.lunchReminders, rulesFor(next.state));
+    // With no time clock there is no lunch to remind anyone of.
+    const shift = keepsTime(next) ? openShiftOf(shifts, session?.employeeId ?? '', Date.now()) : undefined;
+    if (session) void syncReminders(shift, settings.lunchReminders, rulesFor(next.state));
     showToast('Company details saved.');
     navigation.goBack();
   };
@@ -194,100 +214,143 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
           </View>
         </Panel>
 
-        <Panel title="Pay periods">
-          <View style={{ gap: space.lg }}>
-            <Txt v="small" c={color.silica}>
-              With pay periods, everyone sees the hours for each one and the next payday. Without, hours are shown by the workweek and the month. Every figure is before taxes.
-            </Txt>
-            <Chips<Often> wrap testID="company-often" options={OFTEN} value={draft.often} onChange={(often) => change({ often })} />
-
-            {byWeek ? (
-              <Field
-                testID="company-first-day"
-                label="First day of any one pay period"
-                hint="As year-month-day, like 2026-11-01. Every period runs from that weekday."
-                value={draft.firstDay}
-                onChangeText={(firstDay) => change({ firstDay })}
-                keyboardType="numbers-and-punctuation"
-                autoCapitalize="none"
-              />
-            ) : null}
-
-            {draft.often === 'semimonthly' || draft.often === 'monthly' ? (
-              <Chips<PaidBy>
-                wrap
-                testID="company-paid-by"
-                options={[
-                  { value: 'dayOfMonth', label: 'On a day of the month' },
-                  { value: 'daysAfter', label: 'Days after it ends' },
-                ]}
-                value={draft.paidBy}
-                onChange={(next) => change({ paidBy: next })}
-              />
-            ) : null}
-
-            {draft.often !== 'none' && paidBy === 'daysAfter' ? (
-              <Field
-                testID="company-days-after"
-                label="Paid how many days after the last day"
-                hint="0 pays on the last day of the period."
-                value={draft.daysAfter}
-                onChangeText={(daysAfter) => change({ daysAfter })}
-                keyboardType="number-pad"
-              />
-            ) : null}
-
-            {draft.often === 'semimonthly' && paidBy === 'dayOfMonth' ? (
-              <View style={styles.pair}>
-                <View style={{ flex: 1 }}>
-                  <Field
-                    testID="company-first-half"
-                    label="1st–15th paid on the"
-                    value={draft.firstHalf}
-                    onChangeText={(firstHalf) => change({ firstHalf })}
-                    keyboardType="number-pad"
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Field
-                    testID="company-second-half"
-                    label="16th–end paid on the"
-                    value={draft.secondHalf}
-                    onChangeText={(secondHalf) => change({ secondHalf })}
-                    keyboardType="number-pad"
-                  />
-                </View>
-              </View>
-            ) : null}
-
-            {draft.often === 'monthly' && paidBy === 'dayOfMonth' ? (
-              <Field
-                testID="company-first-half"
-                label="Paid on this day of the month"
-                hint="A day past the end of a short month means its last day."
-                value={draft.firstHalf}
-                onChangeText={(firstHalf) => change({ firstHalf })}
-                keyboardType="number-pad"
-              />
-            ) : null}
-
-            {draft.often !== 'none' ? (
-              <View style={{ gap: 6 }}>
-                <Txt v="smallStrong">A pay date the bank is closed</Txt>
-                <Chips<IfBankClosed> wrap testID="company-bank" options={BANK} value={draft.ifBankClosed} onChange={(ifBankClosed) => change({ ifBankClosed })} />
-              </View>
-            ) : null}
-
-            {preview ? (
-              <View style={styles.preview} testID="company-pay-preview">
-                <Txt v="body">{preview.said}</Txt>
-                <Txt v="small" c={color.silica}>Next payday {fmtDate(preview.next)}.</Txt>
-              </View>
-            ) : scheduleProblem ? (
-              <Txt v="small" c={color.red}>{scheduleProblem}</Txt>
-            ) : null}
-          </View>
+        <Panel title="What the crew uses" flush>
+          <Toggle
+            testID="company-time-clock"
+            label="Time clock and hours"
+            sub={
+              draft.timeClock
+                ? 'The crew clocks in and out, and supervisors see hours and payroll. Turn off to use the safety forms only.'
+                : 'Safety forms only: equipment checklists, pre shift exams and maintenance requests. No clock, hours or payroll.'
+            }
+            value={draft.timeClock}
+            onChange={(timeClock) => change({ timeClock })}
+          />
         </Panel>
+
+        {draft.timeClock ? (
+          <Panel title="Pay periods">
+            <View style={{ gap: space.lg }}>
+              <Txt v="small" c={color.silica}>
+                With pay periods, everyone sees the hours for each one and the next payday. Without, hours are shown by the workweek and the month. Every figure is before taxes.
+              </Txt>
+              <Chips<Often> wrap testID="company-often" options={OFTEN} value={draft.often} onChange={(often) => change({ often })} />
+
+              {byWeek ? (
+                <Field
+                  testID="company-first-day"
+                  label="First day of any one pay period"
+                  hint="As year-month-day, like 2026-11-01. Every period runs from that weekday."
+                  value={draft.firstDay}
+                  onChangeText={(firstDay) => change({ firstDay })}
+                  keyboardType="numbers-and-punctuation"
+                  autoCapitalize="none"
+                />
+              ) : null}
+
+              {draft.often === 'semimonthly' || draft.often === 'monthly' ? (
+                <Chips<PaidBy>
+                  wrap
+                  testID="company-paid-by"
+                  options={[
+                    { value: 'dayOfMonth', label: 'On a day of the month' },
+                    { value: 'daysAfter', label: 'Days after it ends' },
+                  ]}
+                  value={draft.paidBy}
+                  onChange={(next) => change({ paidBy: next })}
+                />
+              ) : null}
+
+              {draft.often !== 'none' && paidBy === 'daysAfter' ? (
+                <Field
+                  testID="company-days-after"
+                  label="Paid how many days after the last day"
+                  hint="0 pays on the last day of the period."
+                  value={draft.daysAfter}
+                  onChangeText={(daysAfter) => change({ daysAfter })}
+                  keyboardType="number-pad"
+                />
+              ) : null}
+
+              {draft.often === 'semimonthly' && paidBy === 'dayOfMonth' ? (
+                <View style={styles.pair}>
+                  <View style={{ flex: 1 }}>
+                    <Field
+                      testID="company-first-half"
+                      label="1st–15th paid on the"
+                      value={draft.firstHalf}
+                      onChangeText={(firstHalf) => change({ firstHalf })}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Field
+                      testID="company-second-half"
+                      label="16th–end paid on the"
+                      value={draft.secondHalf}
+                      onChangeText={(secondHalf) => change({ secondHalf })}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                </View>
+              ) : null}
+
+              {draft.often === 'monthly' && paidBy === 'dayOfMonth' ? (
+                <Field
+                  testID="company-first-half"
+                  label="Paid on this day of the month"
+                  hint="A day past the end of a short month means its last day."
+                  value={draft.firstHalf}
+                  onChangeText={(firstHalf) => change({ firstHalf })}
+                  keyboardType="number-pad"
+                />
+              ) : null}
+
+              {draft.often !== 'none' ? (
+                <View style={{ gap: 6 }}>
+                  <Txt v="smallStrong">A pay date the bank is closed</Txt>
+                  <Chips<IfBankClosed> wrap testID="company-bank" options={BANK} value={draft.ifBankClosed} onChange={(ifBankClosed) => change({ ifBankClosed })} />
+                </View>
+              ) : null}
+
+              {preview ? (
+                <View style={styles.preview} testID="company-pay-preview">
+                  <Txt v="body">{preview.said}</Txt>
+                  <Txt v="small" c={color.silica}>Next payday {fmtDate(preview.next)}.</Txt>
+                </View>
+              ) : scheduleProblem ? (
+                <Txt v="small" c={color.red}>{scheduleProblem}</Txt>
+              ) : null}
+            </View>
+          </Panel>
+        ) : null}
+
+        {draft.timeClock ? (
+          <Panel title="Earning codes">
+            <View style={{ gap: space.lg }}>
+              <Txt v="small" c={color.silica}>
+                The code your payroll system uses for each kind of hours. They go on the payroll hours file, one line for each.
+              </Txt>
+              {CODE_ROWS.map((pair) => (
+                <View key={pair[0].key} style={styles.pair}>
+                  {pair.map(({ key, label }) => (
+                    <View key={key} style={{ flex: 1 }}>
+                      <Field
+                        testID={`company-code-${key}`}
+                        label={label}
+                        value={draft.codes[key]}
+                        onChangeText={(text) => change({ codes: { ...draft.codes, [key]: text.toUpperCase() } })}
+                        autoCapitalize="characters"
+                        autoCorrect={false}
+                        maxLength={12}
+                      />
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+          </Panel>
+        ) : null}
 
         {error ? (
           <Txt v="body" c={color.red} testID="company-error">
@@ -317,6 +380,15 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
     </Page>
   );
 }
+
+/** The six kinds of hours, two to a row. */
+const CODE_ROWS: { key: keyof PayCodes; label: string }[][] = [
+  [{ key: 'regular', label: 'Straight time' }, { key: 'overtime', label: 'Overtime' }],
+  [{ key: 'double', label: 'Double time' }, { key: 'holiday', label: 'Holiday' }],
+  [{ key: 'pto', label: 'PTO' }, { key: 'sick', label: 'Sick' }],
+];
+
+const sameCodes = (a: PayCodes, b: PayCodes) => (Object.keys(b) as (keyof PayCodes)[]).every((k) => a[k] === b[k]);
 
 const styles = StyleSheet.create({
   pair: { flexDirection: 'row', alignItems: 'flex-end', gap: space.md },

@@ -1,4 +1,5 @@
 import { checkPaySchedule, type PaySchedule } from './payPeriod';
+import type { PayCodes } from './payrollCsv';
 
 /**
  * The company a crew works for: its name, the state whose hours rules apply,
@@ -26,6 +27,18 @@ export interface Company {
   logo?: CompanyLogo;
   /** None: hours are shown by the workweek and the month. */
   pay: PaySchedule | null;
+  /**
+   * `false`: the crew uses the safety forms only, with no time clock, hours or
+   * payroll. Left out, the company keeps time as well.
+   */
+  timeClock?: false;
+  /** The earning code the company's payroll system uses for each kind of hours. None: REG, OT, DT, HOL, PTO, SICK. */
+  payCodes?: PayCodes;
+}
+
+/** Whether the company keeps time in the app, or uses it for the safety forms only. */
+export function keepsTime(company: Company): boolean {
+  return company.timeClock !== false;
 }
 
 export const STATES: Record<string, string> = {
@@ -75,6 +88,13 @@ export function checkCompany(company: Company): string | undefined {
     const problem = checkPaySchedule(company.pay);
     if (problem) return problem;
   }
+  if (company.payCodes) {
+    const codes = Object.values(company.payCodes).map((c) => c.trim());
+    if (codes.some((c) => !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,11}$/.test(c))) {
+      return 'An earning code is up to 12 letters and numbers, the way the payroll system writes it.';
+    }
+    if (new Set(codes.map((c) => c.toUpperCase())).size !== codes.length) return 'Two kinds of hours have the same code. Give each its own.';
+  }
   return undefined;
 }
 
@@ -107,6 +127,10 @@ export function parseCompany(text: string | null | undefined): { company?: Compa
     company.mineId = id;
   }
   if (logo) company.logo = logo;
+  if (raw.timeClock !== undefined && raw.timeClock !== null) {
+    if (typeof raw.timeClock !== 'boolean') return { error: 'EXPO_PUBLIC_COMPANY has a timeClock that is not true or false.' };
+    if (!raw.timeClock) company.timeClock = false;
+  }
   return { company };
 }
 

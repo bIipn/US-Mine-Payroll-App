@@ -1,17 +1,17 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { LEAVE_LABEL, LEAVE_TYPES } from '../../components/DayTable';
-import { ChevronLeft, ChevronRight, FileSpreadsheet } from '../../components/icons';
+import { ChevronLeft, ChevronRight, FileSpreadsheet, FileText } from '../../components/icons';
 import { paydayLine, workweekLine } from '../../components/PeriodSheet';
-import { Button, IconButton, Page, Segmented, Stat, Tag, Txt } from '../../components/ui';
+import { Button, IconButton, Page, Segmented, Sheet, Stat, Tag, Txt } from '../../components/ui';
 import { useSpans } from '../../components/useSpans';
 import { computePayroll, sumPayroll } from '../../domain/payroll';
 import { overtimeSummary } from '../../domain/time';
 import { isCurrentSpan, spanLabel, stepSpan, SPAN_NAME, type SpanKind } from '../../domain/spans';
 import type { ScreenProps } from '../../navigation/types';
-import { exportReport } from '../../services/exportReport';
-import { payrollReport } from '../../services/reports';
+import { exportCsv, exportReport } from '../../services/exportReport';
+import { payrollHoursFile, payrollReport } from '../../services/reports';
 import { useRules, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtHrs, listName, peopleCount } from '../../util/format';
@@ -41,6 +41,12 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
     return computePayroll(people, shifts, leave, start, end, now, { weekStartsOn: startsOn, rules });
   }, [employees, shifts, leave, start, end, now, startsOn, rules]);
   const totals = useMemo(() => sumPayroll(rows), [rows]);
+  const [fileOpen, setFileOpen] = useState(false);
+  const missingIds = rows.filter((r) => r.total > 0 && !r.employee.payrollId).length;
+  const hoursFile = (layout: 'day' | 'period') => {
+    setFileOpen(false);
+    void exportCsv(() => payrollHoursFile({ ...useStore.getState() }, { start, end }, layout, Date.now()));
+  };
   const paidLeave = totals.total - totals.paid;
 
   const step = (direction: 1 | -1) => {
@@ -55,17 +61,20 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
       sub="Hours as decimals, lunch already taken off"
       onBack={navigation.goBack}
       footer={
-        <Button
-          testID="export-payroll"
-          label="Export to Excel"
-          icon={FileSpreadsheet}
-          kind="yellow"
-          onPress={() =>
-            exportReport(() =>
-              payrollReport({ ...useStore.getState() }, { start, end, payDate: span.payDate }, Date.now()),
-            )
-          }
-        />
+        <>
+          <Button testID="export-hours-file" label="Payroll hours file" icon={FileText} kind="outline" onPress={() => setFileOpen(true)} />
+          <Button
+            testID="export-payroll"
+            label="Export to Excel"
+            icon={FileSpreadsheet}
+            kind="yellow"
+            onPress={() =>
+              exportReport(() =>
+                payrollReport({ ...useStore.getState() }, { start, end, payDate: span.payDate }, Date.now()),
+              )
+            }
+          />
+        </>
       }
     >
       <Segmented<SpanKind>
@@ -158,6 +167,18 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
       <Txt v="small" c={color.silica}>
         ST is straight time, OT is time-and-a-half, DT is double time. {overtimeSummary(rules)} It is figured by the workweek, then added up for the days in the {which}. Hours are before taxes. Lunch flags are for review and are never paid or docked automatically.
       </Txt>
+      <Sheet testID="hours-file-sheet" visible={fileOpen} onClose={() => setFileOpen(false)} title="Payroll hours file">
+        <Txt v="body" c={color.inkSoft}>
+          A CSV of the hours in this {which} for your payroll system's import: each person's payroll ID, an earning code and the hours, before taxes. Set the codes on More, Company, and each person's payroll ID on the roster.
+        </Txt>
+        {missingIds ? (
+          <Txt v="strong" c={color.red} testID="hours-file-missing-ids">
+            {peopleCount(missingIds)} with hours {missingIds === 1 ? 'has' : 'have'} no payroll ID yet. Their lines go out with that column blank.
+          </Txt>
+        ) : null}
+        <Button testID="hours-file-period" label="Totals for the period" kind="ink" onPress={() => hoursFile('period')} />
+        <Button testID="hours-file-day" label="One line a day" kind="outline" onPress={() => hoursFile('day')} />
+      </Sheet>
     </Page>
   );
 }

@@ -5,7 +5,7 @@ import { payPeriodOf as periodOf } from '../../domain/payPeriod';
 import { checklistFor } from '../../domain/templates';
 import { buildDemoData } from '../../store/seed';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
-import { payrollReport, safetyReport } from '../reports';
+import { payrollHoursFile, payrollReport, safetyReport } from '../reports';
 
 const now = new Date(2026, 10, 13, 10, 42).getTime();
 
@@ -219,6 +219,41 @@ describe('safety report', () => {
   });
 });
 
+describe('the payroll hours file', () => {
+  const data = { ...buildDemoData(now), settings: SETTINGS };
+  const period = payPeriodOf(now);
+  const range = { start: period.start, end: period.end };
+  const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+  it('is a CSV named for the company and the period', () => {
+    const file = payrollHoursFile(data, range, 'period', now);
+    expect(file.name).toBe('Sample-Mining-Co-Payroll-Hours_2026-11-01_to_2026-11-15.csv');
+    expect(text(file.bytes).split('\r\n')[0]).toBe('Employee ID,Last name,First name,Period start,Period end,Earning code,Hours');
+    expect(file.lines).toBeGreaterThan(5);
+  });
+
+  it('agrees with the Excel payroll to the hundredth', () => {
+    const lines = text(payrollHoursFile(data, range, 'day', now).bytes).trim().split('\r\n').slice(1).map((l) => l.split(','));
+    const fromFile = lines.filter((l) => l.at(-2) === 'REG').reduce((n, l) => n + Math.round(Number(l.at(-1)) * 100), 0);
+    const book = payrollReport(data, range, now);
+    const summary = table(book.bytes, 1);
+    const fromExcel = Math.round(Number(summary.at(-1)!['ST hours']) * 100);
+    expect(fromFile).toBe(fromExcel);
+  });
+
+  it('uses the company’s own earning codes and each person’s payroll ID', () => {
+    const own = {
+      ...data,
+      employees: data.employees.map((e, i) => (i === 0 ? { ...e, payrollId: 'X-0001' } : e)),
+      settings: { ...SETTINGS, company: { ...SAMPLE_COMPANY, payCodes: { regular: 'E01', overtime: 'E02', double: 'E03', holiday: 'E04', pto: 'E05', sick: 'E06' } } },
+    };
+    const csv = text(payrollHoursFile(own, range, 'period', now).bytes);
+    expect(csv).toContain(',E01,');
+    expect(csv).not.toContain(',REG,');
+    expect(csv).toMatch(/^X-0001,/m);
+  });
+});
+
 describe('an hourly rate', () => {
   it('never goes in an export, whoever makes it', () => {
     // A rate nothing else in the sample data comes to: $912.34 an hour, kept as cents.
@@ -229,6 +264,10 @@ describe('an hourly rate', () => {
       payrollReport(data, { start: period.start, end: period.end, payDate: period.payDate }, now).bytes,
       safetyReport(data, addDays(to, -30), to, now).bytes,
     ];
+    for (const layout of ['day', 'period'] as const) {
+      const csv = new TextDecoder().decode(payrollHoursFile(data, { start: period.start, end: period.end }, layout, now).bytes);
+      expect(csv).not.toMatch(/912\.34|91234/);
+    }
     for (const bytes of books) {
       const everything = Object.values(unzipSync(bytes)).map((file) => strFromU8(file)).join('\n');
       expect(everything).not.toMatch(/912\.34|91234/);
