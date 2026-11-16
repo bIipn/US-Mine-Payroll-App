@@ -6,11 +6,20 @@ import { Avatar, Button, Divider, EmptyState, Field, Notice, Page, Panel, Row, S
 import type { Employee, Role } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
+import { DEMO_MODE, ROSTER } from '../../config';
+import { SAMPLE_CREW_IDS } from '../../store/seed';
 import { useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fullName, initials } from '../../util/format';
 
 type Adding = 'one' | 'list';
+
+/**
+ * A preview made with the mine's own roster has real people on it beside the made-up crew the
+ * sample hours belong to. The made-up ones say so, so nobody takes them for staff.
+ */
+const MIXED = DEMO_MODE && ROSTER.length > 0;
+const isSample = (e: Employee) => MIXED && SAMPLE_CREW_IDS.has(e.id);
 
 /** The roster decides who can create an account. Nobody off this list gets in. */
 export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
@@ -79,6 +88,11 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
       footer={<Button testID="roster-add" label="Add people" icon={UserPlus} kind="yellow" onPress={() => { reset(); setAdding(true); }} />}
     >
       <Notice tone="info" title="Only people on this list can sign up" body="A new account has to match a first and last name here. Remove someone and their sign-in stops working; their hours and records are kept." />
+      {MIXED ? (
+        <View testID="roster-sample-note">
+          <Notice tone="neutral" title="People marked Sample are made up" body="The sample hours, checklists and requests in this preview belong to them. Nothing is made up for a real person." />
+        </View>
+      ) : null}
       <Field testID="roster-search" label="Find a person" value={query} onChangeText={setQuery} placeholder="Name or job title" autoCorrect={false} right={<Search color={color.silica} size={22} />} />
 
       {active.length === 0 ? (
@@ -93,6 +107,7 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
                 left={<Avatar initials={initials(e.firstName, e.lastName)} tone={e.role === 'supervisor' ? 'ink' : 'neutral'} />}
                 title={`${e.lastName}, ${e.firstName}`}
                 sub={[e.title, e.role === 'supervisor' ? 'Supervisor' : null].filter(Boolean).join(', ') || undefined}
+                below={isSample(e) ? <Tag label="Sample" tone="neutral" /> : undefined}
                 right={<Tag label={signedUp(e) ? 'Has account' : 'Not signed up'} tone={signedUp(e) ? 'ok' : 'neutral'} />}
                 onPress={() => setOpenId(e.id)}
               />

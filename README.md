@@ -58,7 +58,7 @@ This is a working preview. Every flow above runs, on sample data.
 | **Sample data** | 14 made-up employees, 14 made-up units, 3 made-up work areas, about five weeks of punches and two weeks of checklists and exams. Nothing in it is a real US Mine record |
 | **The mine's own sheets** | The equipment checklist and the conditions page are the mine's, line for line. The area sheets in this repository are made-up samples: a build names the real ones in `.env.local`, or a supervisor types them in (see The paper forms) |
 | **Settled with the crew** | The safety items that always red tag a unit: fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls. N/A stays on the pre shift exam. The one spelling the app puts right on the conditions page stays put right. There is a swing shift as well as day and night |
-| **To confirm with the mine** | The hours each shift runs (see Pre Shift Exam under The paper forms for what the app assumes until then). What "DROPS" on the card stands for (it is shown as printed). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks) |
+| **To confirm with the mine** | The hours each shift runs (see Pre Shift Exam under The paper forms for what the app assumes until then). What "DROPS" on the card stands for (it is shown as printed). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks). What the "Lead Check" blank on some area sheets is for and who fills it in (it is not built yet) |
 | **To confirm with payroll** | Which way a pay date moves when the 5th or 20th is a weekend or bank holiday (the app moves it to the banking day before), and which holidays are paid |
 | **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet |
 | **Keep the paper for now** | The standard asks for exam records to be kept for a year and shown to MSHA on request. Until the shared backend holds them, a record made in this preview lives on one device, so it does not replace the paper yet |
@@ -74,10 +74,12 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 339 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
+npm test           # 399 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
+
+The preview file is kept under 2 MB, which is as large as an HTML file can be and still open as a preview in the Claude phone app; a larger one has shown there as code. Its fonts go in as the compressed copies in `scripts/preview-fonts` to keep it that small, and the packer warns when the file gets close.
 
 The sign-in screen has two shortcuts, "Open as an employee" and "Open as a supervisor", that skip account setup. The Clock screen has preview controls for pretending the phone is at the mine or in town, so the GPS check can be shown from anywhere. While at lunch, "Skip to the end of lunch" shows what happens when the 30 minutes are up without waiting for them.
 
@@ -90,6 +92,19 @@ EXPO_PUBLIC_ROSTER_OWNER=First Last
 ```
 
 That person is always on the roster as a supervisor. They create an account with their own name, email and password like anyone else, start with no hours, and can add the rest of the crew from Crew → Roster. In a live build this is also how the first supervisor gets in.
+
+### The whole roster
+
+A build can name everyone at the mine as well, each with their job title, so every person can create an account under their own name. In `.env.local`, one person to a line: the name, then the job title, then `supervisor` for a supervisor, with a bar between them. `\n` ends a line. Put the value in single quotes, so a nickname can keep its double quotes:
+
+```
+EXPO_PUBLIC_ROSTER='Ortiz, Sam | Crusher\nQuinn, Riley J | Maintenance | supervisor\nVance III, Lee "Buck" | Electrician'
+```
+
+- A name is read as "Last, First", the way a sign-in sheet lists it. A middle initial, a nickname in quotes and a "Jr" or "III" stay where the mine wrote them.
+- A person signs up with their first and last name. They can leave off the middle initial and the "III", and someone who goes by their nickname can use it. When a name fits more than one person, the app asks for it the way it is on the roster.
+- Everyone a build names starts with no hours and no records. The sample hours, checklists and requests stay with the made-up sample crew, and the Roster screen of such a build marks those people "Sample". A sample person who happens to have the last name of someone the build names starts under a spare one, so the made-up hours are not taken for a real person's.
+- The person named in `EXPO_PUBLIC_ROSTER_OWNER` is a supervisor whatever their line says. Everyone else is crew until their line says `supervisor`, or a supervisor changes it on the Roster screen.
 
 `.env.local` is not committed, and that is the point: **this repository is public.** Keep real names, pay figures and other personal details out of the code, out of `src/store/seed.ts`, and out of the screenshots and sample workbooks in `docs/`.
 
@@ -109,7 +124,7 @@ That is the legend at the foot of the card, word for word, and it is what the ap
 
 The unit goes on the person's card for the day with its equipment hours at the start. Ending use adds the hours at the end and any gallons added. The card screen lays the day out as the paper does: up to four numbered columns against the lines, the comments, and the legend. A fifth unit starts a second card.
 
-**Pre Shift Exam.** The examination of a work area before work starts in it on the shift. Page one is the area's own sheet: each line is checked for guarding, electrical and safe access. Page two is the same for every area: 20 conditions, each OK or Bad Order. The paper has only those two; the app adds N/A, so a line that does not apply can still be answered. On the phone a line is one tap for OK or N/A; a Bad Order asks which column it is in and what was found. A Bad Order stays open on the area, and on the supervisor's board, until its date fixed is recorded. That happens one of two ways: the examiner or a supervisor marks it fixed, or the maintenance request it was sent on is completed.
+**Pre Shift Exam.** The examination of a work area before work starts in it on the shift. Page one is the area's own sheet: each line is checked for guarding, electrical and safe access. Page two is the same for every area: 20 conditions, each OK or Bad Order. The paper has only those two; the app adds N/A, so a line that does not apply can still be answered. On the phone a line is one tap for OK or N/A; a Bad Order asks which column it is in and what was found. Some sheets have a single OK/BO column in place of the three: a Bad Order on one of those asks only what was found, and the record is shown with the one column. A Bad Order stays open on the area, and on the supervisor's board, until its date fixed is recorded. That happens one of two ways: the examiner or a supervisor marks it fixed, or the maintenance request it was sent on is completed.
 
 A few things the phone does that the paper leaves to the person:
 
@@ -125,14 +140,14 @@ A few things the phone does that the paper leaves to the person:
 
 Every work area has its own sheet. The three in this repository are made-up samples, because the real sheets list the plant's own equipment and the repository is public. There are two ways to put the real ones in:
 
-- **In the app:** Crew → Area sheets → Add an area sheet. Type the name of the area, then one line of the paper sheet on each line. An area can start with no lines of its own and still get the conditions page.
-- **For a build:** name them in `.env.local`. The name of an area, then each line of its sheet, with a blank line before the next area. `\n` ends a line:
+- **In the app:** Crew → Area sheets → Add an area sheet. Type the name of the area, then one line of the paper sheet on each line. An area can start with no lines of its own and still get the conditions page. Turn on "One OK/BO column" for a sheet that marks each line once.
+- **For a build:** name them in `.env.local`. The name of an area, then each line of its sheet, with a blank line before the next area. `\n` ends a line, and `[OK/BO]` after the name of an area gives its sheet the one column:
 
 ```
-EXPO_PUBLIC_AREA_SHEETS="North plant\nFeed bin\nConveyor 4\nJaw crusher\n\nCore shed\nCore saw\nCore racks"
+EXPO_PUBLIC_AREA_SHEETS="North plant\nFeed bin\nConveyor 4\nJaw crusher\n\nCore shed [OK/BO]\nCore saw\nCore racks"
 ```
 
-A signed exam keeps the lines it was made on, so changing a sheet later never changes a record.
+A signed exam keeps the lines and the columns it was made on, so changing a sheet later never changes a record.
 
 ## How the hours are figured
 
@@ -192,6 +207,7 @@ Only standards whose text has been checked are cited. The summaries in the app a
 | Equipment checklist lines, and which are safety items | `src/domain/templates.ts` |
 | Pre shift exam columns and the 20 conditions | `src/domain/areaExam.ts` |
 | Area sheets | In the app (Crew → Area sheets), or `EXPO_PUBLIC_AREA_SHEETS` in `.env.local` |
+| Roster | In the app (Crew → Roster), or `EXPO_PUBLIC_ROSTER` in `.env.local` |
 | Standards and the steps after a Bad Order | `src/domain/standards.ts` |
 | Lunch and overtime rules | `CA_RULES` in `src/domain/time.ts` |
 | Pay periods, paydays and bank holidays | `src/domain/payPeriod.ts` |

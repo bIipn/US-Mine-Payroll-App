@@ -1,5 +1,6 @@
 import { AREA_CONDITIONS, buildExam, SAMPLE_AREA_SHEETS, shiftAt, withFix, withMrf, type ExamDraft } from '../domain/areaExam';
 import { destination, toGeoStamp } from '../domain/geofence';
+import { keptApart, type PersonName } from '../domain/roster';
 import { DEFAULT_SITE } from '../domain/site';
 import { checklistFor, inspectionResult } from '../domain/templates';
 import { CA_RULES, startedLunch } from '../domain/time';
@@ -77,6 +78,9 @@ const CREW: CrewRow[] = [
   ['e14', 'Eddie', 'Vasquez', 'supervisor', 'Maintenance Lead', 'PU-34'],
 ];
 
+/** The made-up people the sample hours and records belong to. */
+export const SAMPLE_CREW_IDS: ReadonlySet<string> = new Set(CREW.map(([id]) => id));
+
 type FleetRow = [unit: string, category: EquipmentCategory, make: string, model: string, meter: number];
 
 const FLEET: FleetRow[] = [
@@ -133,8 +137,12 @@ export function emptyData(): SeedData {
 /**
  * `sheets` are the work-area sheets the sample exams are made on: the build's
  * own when it names some, otherwise the made-up samples.
+ *
+ * `named` are the real people the build puts on its roster. A sample person with
+ * the last name of one of them starts under a spare one, so nobody takes the
+ * made-up hours for theirs.
  */
-export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHEETS): SeedData {
+export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHEETS, named: PersonName[] = []): SeedData {
   const rand = seededRandom(5626);
   const between = (min: number, max: number) => min + Math.floor(rand() * (max - min + 1));
   // A second stream for the details on the cards and exams, so they never shift the punches.
@@ -148,17 +156,18 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
     toGeoStamp(site, { ...destination(site.center, 1090, 2020), accuracyM: 9 }, 'gps');
   const punch = (at: number): Punch => ({ at, geo: onSite() });
 
-  const employees: Employee[] = CREW.map(([id, firstName, lastName, role, title]) => ({
-    id, firstName, lastName, role, title, active: true,
-  }));
+  const employees: Employee[] = keptApart(
+    CREW.map(([id, firstName, lastName, role, title]): Employee => ({ id, firstName, lastName, role, title, active: true })),
+    named,
+  );
   const unitOf = new Map(CREW.filter((c) => c[5]).map((c) => [c[0], c[5] as string]));
 
   const providers = ['password', 'google', 'microsoft', 'apple'] as const;
-  const accounts: Account[] = CREW.filter(([id]) => !['e11', 'e12', 'e09'].includes(id)).map(
-    ([id, first, last], i) => ({
+  const accounts: Account[] = employees.filter(({ id }) => !['e11', 'e12', 'e09'].includes(id)).map(
+    ({ id, firstName, lastName }, i) => ({
       id: `acct_${id}`,
       employeeId: id,
-      email: `${first}.${last}@example.com`.toLowerCase(),
+      email: `${firstName}.${lastName}@example.com`.toLowerCase(),
       provider: providers[i % providers.length],
       createdAt: now - between(20, 60) * 24 * HOUR,
     }),
@@ -456,7 +465,8 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
   }
 
   // ---- Pre shift exams ------------------------------------------------------------------------
-  // Each sheet has its examiner, who goes round the area a few minutes after clocking in.
+  // Each sheet has its examiner, who goes round the area a few minutes after clocking in. With
+  // more sheets than examiners, an examiner goes round theirs one after another.
   // The first sheet is left unexamined today, so whoever opens the preview has one to do.
   const today0 = startOfDay(now);
   const clear = (sheet: AreaSheet, startedAt: number, clockedInAt: number): ExamDraft => ({
@@ -472,14 +482,20 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
   });
   const firstExamDay = workdays[Math.max(0, workdays.length - PREOP_WORKDAYS)] ?? today0;
   let exams: AreaExam[] = [];
+  /** When the examiner on a shift signed the last area they went round. */
+  const lastSigned = new Map<string, number>();
   sheets.forEach((sheet, index) => {
     const examiner = EXAMINERS[index % EXAMINERS.length];
     const leftForToday = index === 0 && sheets.length > 1;
     for (const shift of shifts) {
       if (shift.employeeId !== examiner || shift.clockIn.at < firstExamDay) continue;
       if (leftForToday && shift.clockIn.at >= today0) continue;
-      const submittedAt = shift.clockIn.at + pick(14, 26) * MIN;
-      const built = buildExam(sheet, clear(sheet, submittedAt - pick(6, 11) * MIN, shift.clockIn.at), {
+      const submittedAt = (lastSigned.get(shift.id) ?? shift.clockIn.at) + pick(14, 26) * MIN;
+      const startedAt = submittedAt - pick(6, 11) * MIN;
+      lastSigned.set(shift.id, submittedAt);
+      // An area they have not got round to yet is still to do.
+      if (submittedAt > now) continue;
+      const built = buildExam(sheet, clear(sheet, startedAt, shift.clockIn.at), {
         id: nextId('exam'), employeeId: examiner, submittedAt,
       });
       if (built.ok) exams.push(built.exam);
@@ -491,7 +507,13 @@ export function buildDemoData(now: number, sheets: AreaSheet[] = SAMPLE_AREA_SHE
   const find = (exam: AreaExam, line: { row?: number; condition: string }, note: string): { exam: AreaExam; key: string } => {
     const row = line.row != null && exam.rows.length ? exam.rows[Math.min(line.row, exam.rows.length - 1)] : undefined;
     const found: AreaExam = row
-      ? { ...exam, rows: exam.rows.map((r) => (r === row ? { ...r, guarding: 'bo' as const, note } : r)) }
+      ? {
+          ...exam,
+          // In the guarding column, or on a sheet with one OK/BO column in all three cells, which hold the one answer.
+          rows: exam.rows.map((r) =>
+            r !== row ? r : exam.single ? { ...r, guarding: 'bo' as const, electrical: 'bo' as const, access: 'bo' as const, note } : { ...r, guarding: 'bo' as const, note },
+          ),
+        }
       : { ...exam, conditions: exam.conditions.map((c) => (c.id === line.condition ? { ...c, answer: 'bo' as const, note } : c)) };
     return { exam: found, key: row ? `row:${row.id}` : `cond:${line.condition}` };
   };

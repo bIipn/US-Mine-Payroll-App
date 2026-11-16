@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { LogoPlate, ProviderMark } from '../../components/Brand';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
-import { DEMO_MODE, SITE_LABEL } from '../../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, SITE_LABEL } from '../../config';
 import type { AuthProvider, Role } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
@@ -191,7 +191,10 @@ export function AuthScreen() {
           <View style={styles.demo}>
             <Txt v="h3">Look around first</Txt>
             <Txt v="small" c={color.silica}>
-              This preview runs on sample data that stays on this device. Nothing here is a real US Mine record.
+              {/* A build made with the mine's own roster or sheets holds those as well as the samples. */}
+              {ROSTER.length > 0 || AREA_SHEETS.length > 0
+                ? 'The hours, checklists and requests in this preview are samples that stay on this device. None of them is a real US Mine record.'
+                : 'This preview runs on sample data that stays on this device. Nothing here is a real US Mine record.'}
             </Txt>
             <View style={styles.demoRows}>
               <Row

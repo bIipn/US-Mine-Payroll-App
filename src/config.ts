@@ -1,5 +1,5 @@
 import { parseAreaSheets } from './domain/areaExam';
-import { parsePersonName } from './domain/roster';
+import { parsePersonName, parseRoster } from './domain/roster';
 
 /**
  * App-wide configuration.
@@ -19,6 +19,22 @@ export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO !== '0';
  * person's name does not belong in the code: this repository is public.
  */
 export const ROSTER_OWNER = parsePersonName(process.env.EXPO_PUBLIC_ROSTER_OWNER);
+
+/**
+ * Everyone on the mine's own roster, one person to a line: the name, then the
+ * job title, then "supervisor" for a supervisor, with a bar between them.
+ *
+ *     Ortiz, Sam | Crusher
+ *     Quinn, Riley J | Maintenance | supervisor
+ *
+ * A build made with these has them all on the roster, so each can create an
+ * account under their own name. They come with no hours or records: the sample
+ * history stays on the made-up sample crew.
+ *
+ * Set EXPO_PUBLIC_ROSTER in `.env.local`, which is not committed. Real people's
+ * names do not belong in the code: this repository is public.
+ */
+export const ROSTER = parseRoster(process.env.EXPO_PUBLIC_ROSTER);
 
 /**
  * The mine's own work-area sheets for the pre shift exam: the name of an area,

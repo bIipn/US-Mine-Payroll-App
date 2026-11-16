@@ -1,19 +1,22 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { AREA_CONDITIONS, EXAM_COLUMNS, shiftLabel } from '../domain/areaExam';
+import { AREA_CONDITIONS, EXAM_COLUMNS, rowAnswer, shiftLabel } from '../domain/areaExam';
 import type { AreaExam, ExamCondition, ExamRow } from '../domain/types';
 import { color, font, space } from '../theme/theme';
 import { fmtDate, fmtDateTime } from '../util/format';
 import { Box, GridRow, Mark, PaperLine, PaperRow, PaperSheet, printed } from './Paper';
 
 const COL_W = 58;
+/** The one column of a sheet that has a single OK/BO mark for each line. */
+const ONE_W = 84;
 
 /**
  * A Pre Shift Exam laid out as the paper sheet is: the area's lines against
- * Guarding, Electrical and Safe access, then the conditions page with OK and
- * Bad Order. What the paper puts in its "Notes / Date fixed" column is written
- * under the line it belongs to.
+ * Guarding, Electrical and Safe access, or against the one OK/BO column some
+ * sheets have instead, then the conditions page with OK and Bad Order. What the
+ * paper puts in its "Notes / Date fixed" column is written under the line it
+ * belongs to.
  */
 export function ExamSheet({ exam, examiner, nameOf, mrfNumber }: {
   exam: AreaExam;
@@ -53,9 +56,13 @@ export function ExamSheet({ exam, examiner, nameOf, mrfNumber }: {
 
         <GridRow head style={{ marginTop: space.md }}>
           <Box first style={styles.labelBox}><Text style={printed}>{exam.area} areas:</Text></Box>
-          {EXAM_COLUMNS.map((column) => (
-            <Box key={column.id} width={COL_W}><Text style={styles.colHead}>{column.label}</Text></Box>
-          ))}
+          {exam.single ? (
+            <Box width={ONE_W}><Text style={styles.colHead}>OK/BO</Text></Box>
+          ) : (
+            EXAM_COLUMNS.map((column) => (
+              <Box key={column.id} width={COL_W}><Text style={styles.colHead}>{column.label}</Text></Box>
+            ))
+          )}
         </GridRow>
         {exam.rows.length === 0 ? (
           <GridRow><Box first style={styles.labelBox}><Text style={styles.lineText}>No lines on this area's sheet.</Text></Box></GridRow>
@@ -69,9 +76,13 @@ export function ExamSheet({ exam, examiner, nameOf, mrfNumber }: {
                   {row.label}
                 </Text>
               </Box>
-              {EXAM_COLUMNS.map((column) => (
-                <Box key={column.id} width={COL_W}><Mark answer={row[column.id]} /></Box>
-              ))}
+              {exam.single ? (
+                <Box width={ONE_W}><Mark answer={rowAnswer(row)} /></Box>
+              ) : (
+                EXAM_COLUMNS.map((column) => (
+                  <Box key={column.id} width={COL_W}><Mark answer={row[column.id]} /></Box>
+                ))
+              )}
             </View>
             {notes(row)}
           </View>

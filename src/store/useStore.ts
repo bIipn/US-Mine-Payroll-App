@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { AREA_SHEETS, DEMO_MODE, ROSTER_OWNER } from '../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { cleanText, parsePersonName, sameName, titleCase, withOwner, type PersonName } from '../domain/roster';
+import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
 import { CA_RULES, lunchEndAt, startedLunch } from '../domain/time';
@@ -144,8 +144,8 @@ interface Actions {
    * Load the starting data on first run, and make sure the build's owner is on
    * the roster and the build's own area sheets are there.
    */
-  ensureSeeded: (owner?: PersonName | null, sheets?: AreaSheet[]) => void;
-  resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[]) => void;
+  ensureSeeded: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[]) => void;
+  resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[]) => void;
 
   signUp: (input: SignUpInput) => Result;
   signIn: (email: string, password: string) => Result;
@@ -174,8 +174,10 @@ interface Actions {
   submitExam: (draft: ExamDraft) => Result<{ exam: AreaExam }>;
   /** Add the date a condition was corrected to the exam it was found on. */
   markFixed: (examId: string, findingKey: string, note?: string) => Result;
-  addAreaSheet: (title: string, rowsText: string) => Result<{ sheet: AreaSheet }>;
-  updateAreaSheet: (sheetId: string, title: string, rowsText: string) => Result;
+  /** `single` is a sheet with one OK/BO column for each line instead of guarding, electrical and safe access. */
+  addAreaSheet: (title: string, rowsText: string, single?: boolean) => Result<{ sheet: AreaSheet }>;
+  /** Leave `single` out to keep the columns the sheet has. */
+  updateAreaSheet: (sheetId: string, title: string, rowsText: string, single?: boolean) => Result;
   setAreaSheetActive: (sheetId: string, active: boolean) => void;
 
   addEmployee: (firstName: string, lastName: string, role?: Role, title?: string) => Result;
@@ -257,8 +259,15 @@ export const useStore = create<Store>()(
       const startSession = (account: Account) =>
         set({ session: { accountId: account.id, employeeId: account.employeeId } });
 
-      const rosterMatch = (first: string, last: string) =>
-        get().employees.find((e) => e.active && sameName(e, first, last));
+      /** The one person on the active roster a typed name is, or what to tell whoever typed it. */
+      const rosterMatch = (first: string, last: string): Result<{ employee: Employee }> => {
+        const hit = findOnRoster(get().employees.filter((e) => e.active), first, last);
+        if (!hit) return { ok: false, error: notOnRoster(first, last) };
+        if ('several' in hit) {
+          return { ok: false, error: `More than one person on the roster goes by "${clean(first)} ${clean(last)}". Type your name the way it is on the roster.` };
+        }
+        return { ok: true, employee: hit.person };
+      };
 
       const notOnRoster = (first: string, last: string) =>
         `We couldn't find "${clean(first)} ${clean(last)}" on the US Mine roster. Check the spelling, or see your supervisor to be added.`;
@@ -273,6 +282,8 @@ export const useStore = create<Store>()(
       const notYours = { ok: false as const, error: 'Only a supervisor, or the person it is assigned to, can work this request.' };
       /** The sheets a first start is made with: the build's own, or the samples. */
       const startingSheets = (named: AreaSheet[]) => (named.length ? named : SAMPLE_AREA_SHEETS);
+      /** The real people a build names, its owner among them: the sample crew starts apart from them. */
+      const realPeople = (people: RosterEntry[], owner: PersonName | null): PersonName[] => (owner ? [...people, owner] : people);
 
       return {
         ...initialData(),
@@ -282,23 +293,23 @@ export const useStore = create<Store>()(
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
         clearToast: () => set({ toast: null }),
 
-        ensureSeeded: (owner = ROSTER_OWNER, sheets = AREA_SHEETS) => {
+        ensureSeeded: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER) => {
           if (get().seededAt == null) {
             const now = Date.now();
-            set({ ...(DEMO_MODE ? buildDemoData(now, startingSheets(sheets)) : emptyData()), seededAt: now });
+            set({ ...(DEMO_MODE ? buildDemoData(now, startingSheets(sheets), realPeople(people, owner)) : emptyData()), seededAt: now });
           }
-          // The person this build was made for is always on the roster, and the build's
-          // own area sheets are always there, including on a phone whose data was saved
-          // before they were named.
+          // The people this build names are always on the roster, its owner among them, and
+          // the build's own area sheets are always there, including on a phone whose data
+          // was saved before they were named.
           const { employees, areaSheets } = get();
-          const roster = withOwner(employees, owner);
+          const roster = withBuildRoster(employees, people, owner);
           const named = withSheets(areaSheets, sheets);
           if (roster !== employees || named !== areaSheets) set({ employees: roster, areaSheets: named });
         },
-        resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS) => {
+        resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER) => {
           const now = Date.now();
-          const data = buildDemoData(now, startingSheets(sheets));
-          set({ ...initialData(), ...data, employees: withOwner(data.employees, owner), seededAt: now });
+          const data = buildDemoData(now, startingSheets(sheets), realPeople(people, owner));
+          set({ ...initialData(), ...data, employees: withBuildRoster(data.employees, people, owner), seededAt: now });
         },
 
         // ---- Accounts ----------------------------------------------------------------
@@ -307,8 +318,9 @@ export const useStore = create<Store>()(
           const address = email.trim().toLowerCase();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return { ok: false, error: 'Enter a valid email address.' };
           if (password.length < 8) return { ok: false, error: 'Use a password of at least 8 characters.' };
-          const employee = rosterMatch(firstName, lastName);
-          if (!employee) return { ok: false, error: notOnRoster(firstName, lastName) };
+          const match = rosterMatch(firstName, lastName);
+          if (!match.ok) return match;
+          const { employee } = match;
           const { accounts } = get();
           if (accounts.some((a) => a.email === address)) {
             return { ok: false, error: 'That email already has an account. Sign in instead.' };
@@ -346,15 +358,17 @@ export const useStore = create<Store>()(
 
         signInWithProvider: (provider, firstName, lastName) => {
           if (!clean(firstName) || !clean(lastName)) return { ok: false, error: 'Enter your first and last name.' };
-          const employee = rosterMatch(firstName, lastName);
-          if (!employee) return { ok: false, error: notOnRoster(firstName, lastName) };
+          const match = rosterMatch(firstName, lastName);
+          if (!match.ok) return match;
+          const { employee } = match;
           const { accounts } = get();
           let account = accounts.find((a) => a.employeeId === employee.id);
           if (!account) {
             account = {
               id: uid('acct_'),
               employeeId: employee.id,
-              email: `${employee.firstName}.${employee.lastName}@example.com`.toLowerCase(),
+              // A stand-in until the real sign-in is connected: the name, letters only.
+              email: `${`${employee.firstName} ${employee.lastName}`.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '')}@example.com`,
               provider,
               createdAt: Date.now(),
             };
@@ -773,10 +787,10 @@ export const useStore = create<Store>()(
           return { ok: true };
         },
 
-        addAreaSheet: (title, rowsText) => {
+        addAreaSheet: (title, rowsText, single) => {
           const { areaSheets } = get();
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
-          const sheet = makeSheet(title, rowsText, areaSheets.map((s) => s.id));
+          const sheet = makeSheet(title, rowsText, areaSheets.map((s) => s.id), single);
           if (!sheet) return { ok: false, error: 'Give the sheet the name of its work area.' };
           const same = areaSheets.find((s) => s.title.toLowerCase() === sheet.title.toLowerCase());
           if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
@@ -784,17 +798,23 @@ export const useStore = create<Store>()(
           return { ok: true, sheet };
         },
 
-        updateAreaSheet: (sheetId, title, rowsText) => {
+        updateAreaSheet: (sheetId, title, rowsText, single) => {
           const { areaSheets } = get();
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
           const current = areaSheets.find((s) => s.id === sheetId);
           if (!current) return { ok: false, error: 'That area sheet is no longer on the list.' };
-          const next = makeSheet(title, rowsText);
+          // With nothing said about the columns, the sheet keeps the ones it has.
+          const next = makeSheet(title, rowsText, [], single ?? !!current.single);
           if (!next) return { ok: false, error: 'Give the sheet the name of its work area.' };
           const same = areaSheets.find((s) => s.id !== sheetId && s.title.toLowerCase() === next.title.toLowerCase());
           if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
-          // Exams already signed keep the lines they were made on.
-          set({ areaSheets: areaSheets.map((s) => (s.id === sheetId ? { ...s, title: next.title, rows: next.rows } : s)) });
+          // Exams already signed keep the lines, and the columns, they were made on.
+          const { single: _was, ...kept } = current;
+          set({
+            areaSheets: areaSheets.map((s) =>
+              s.id === sheetId ? { ...kept, title: next.title, rows: next.rows, ...(next.single ? { single: true } : null) } : s,
+            ),
+          });
           return { ok: true };
         },
 

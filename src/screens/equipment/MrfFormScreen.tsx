@@ -3,7 +3,7 @@ import React, { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Button, Divider, Field, IconButton, Notice, Page, Panel, Row, Segmented, Sheet, Toggle, Txt, UnitPlate } from '../../components/ui';
-import { examFindings } from '../../domain/areaExam';
+import { examFindings, ON_THE_SHEET } from '../../domain/areaExam';
 import { CATEGORY_LABEL } from '../../domain/templates';
 import type { MrfPriority } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
@@ -34,7 +34,8 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
   const [priority, setPriority] = useState<MrfPriority>(forced || finding?.danger ? 'safety' : inspection || finding ? 'high' : 'routine');
   const [description, setDescription] = useState(
     finding
-      ? `${finding.where === 'Conditions' ? '' : `${finding.where}: `}${finding.note ?? ''}`
+      ? // The column it was found in goes first. The conditions page and a one-column sheet have none to name.
+        `${finding.where === 'Conditions' || finding.where === ON_THE_SHEET ? '' : `${finding.where}: `}${finding.note ?? ''}`
       : items.map((i) => (i.note ? `${i.label}: ${i.note}` : i.label)).join('\n'),
   );
   const [location, setLocation] = useState(route.params.location ?? '');

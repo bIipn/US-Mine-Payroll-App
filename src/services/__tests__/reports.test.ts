@@ -110,6 +110,16 @@ describe('safety report', () => {
     expect(headers(report.bytes, 6)).toEqual(['Date', 'Shift', 'Area', 'Examined by', 'Page', 'Line', 'Guarding', 'Electrical', 'Safe access', 'Result', 'Notes', 'Date fixed']);
   });
 
+  it('leaves the three columns blank on the lines of a sheet with one OK/BO column, with the mark under Result', () => {
+    const lines = table(report.bytes, 6).filter((line) => line.Page === 'Area sheet');
+    const one = lines.filter((line) => line.Area === 'Core shed');
+    expect(one.length).toBeGreaterThan(20);
+    for (const line of one) expect([line.Guarding, line.Electrical, line['Safe access'], line.Result]).toEqual([undefined, undefined, undefined, 'OK']);
+    // A sheet with the three columns keeps them.
+    const three = lines.find((line) => line.Area === 'Crusher')!;
+    expect([three.Guarding, three.Electrical, three['Safe access'], three.Result]).toEqual(['OK', 'OK', 'OK', 'OK']);
+  });
+
   it('names the swing shift on an exam made for it, and on each of its lines', () => {
     const last = data.exams[data.exams.length - 1];
     const swing = { ...data, exams: data.exams.map((exam) => (exam === last ? { ...exam, shift: 'swing' as const } : exam)) };

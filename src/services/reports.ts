@@ -401,7 +401,7 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
   const lineSheet: Sheet = {
     name: 'Exam Lines',
     title: 'Pre shift exams, line by line',
-    subtitle: `Every line of every exam, as it was marked: the area sheet with its three columns, then the conditions page. ${stamp}`,
+    subtitle: `Every line of every exam, as it was marked: the area sheet with its three columns, or its one mark under Result on a sheet with a single OK/BO column, then the conditions page. ${stamp}`,
     columns: [
       { header: 'Date', width: 12 }, { header: 'Shift', width: 8 }, { header: 'Area', width: 22 }, { header: 'Examined by', width: 24 },
       { header: 'Page', width: 12 }, { header: 'Line', width: 40 }, { header: 'Guarding', width: 10 }, { header: 'Electrical', width: 10 },
@@ -409,7 +409,9 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
     ],
     rows: exams.flatMap((exam) => [
       ...exam.rows.map((row): CellInput[] => [
-        ...examHead(exam), row.other ? 'Other' : 'Area sheet', row.label, mark(row.guarding), mark(row.electrical), mark(row.access),
+        ...examHead(exam), row.other ? 'Other' : 'Area sheet', row.label,
+        // A sheet with one OK/BO column has nothing to put in the three.
+        ...(exam.single ? ['', '', ''] : [mark(row.guarding), mark(row.electrical), mark(row.access)]),
         mark(rowAnswer(row)), { v: row.note ?? '', s: 'wrap' }, fixedOn(row.fixed?.at),
       ]),
       ...exam.conditions.map((c): CellInput[] => [

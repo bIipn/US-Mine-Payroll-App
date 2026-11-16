@@ -5,7 +5,8 @@ import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
 import { payrollReport, safetyReport } from '../../services/reports';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
-import { buildDemoData } from '../seed';
+import { findOnRoster, parseRoster, SPARE_LAST_NAMES } from '../../domain/roster';
+import { buildDemoData, SAMPLE_CREW_IDS } from '../seed';
 
 // The sample data has to hold together whatever day of the week the demo is opened.
 const DAYS = [9, 10, 11, 12, 13, 14, 15].map((d) => new Date(2026, 10, d, 10, 42).getTime());
@@ -13,6 +14,61 @@ const DAYS = [9, 10, 11, 12, 13, 14, 15].map((d) => new Date(2026, 10, d, 10, 42
 describe('sample data', () => {
   it('is the same every time for the same moment', () => {
     expect(buildDemoData(DAYS[4])).toEqual(buildDemoData(DAYS[4]));
+  });
+
+  it('says which people are the made-up ones: everyone it comes with', () => {
+    expect([...SAMPLE_CREW_IDS].sort()).toEqual(buildDemoData(DAYS[4]).employees.map((e) => e.id).sort());
+  });
+
+  // A build's own roster is private and this repository is public (see AGENTS.md). A sample
+  // person with the name of someone on that roster would be taken for them, and the made-up
+  // hours with it. Jest does not load .env.local, so this reads it itself, and only where a
+  // build on this machine names its roster there. Nowhere else is there anything to compare with.
+  const named = (() => {
+    // This project has no Node types, so the file system is asked for by name with the two calls used here.
+    const fs = jest.requireActual<{ existsSync(file: string): boolean; readFileSync(file: string, encoding: 'utf8'): string }>('fs');
+    const here = expect.getState().testPath ?? '';
+    const file = `${here.slice(0, here.search(/[\\/]src[\\/]/))}/.env.local`;
+    if (!fs.existsSync(file)) return [];
+    const found = fs.readFileSync(file, 'utf8').match(/^EXPO_PUBLIC_ROSTER=(?:"([\s\S]*?)"|'([\s\S]*?)'|(.*))$/m);
+    return parseRoster(found?.[1] ?? found?.[2] ?? found?.[3]);
+  })();
+
+  (named.length ? it : it.skip)('gives no sample person a name that fits anyone on the roster a build on this machine names', () => {
+    const taken = buildDemoData(DAYS[4]).employees.filter((e) => findOnRoster(named, e.firstName, e.lastName));
+    // Only the ids of the made-up people are printed if this fails, never a real name.
+    expect(taken.map((e) => e.id)).toEqual([]);
+  });
+
+  (named.length ? it : it.skip)('leaves no sample person with the last name of anyone on that roster, once it is told who is on it', () => {
+    // A last name without the "Jr" or "III" a roster may put after it.
+    const core = (lastName: string) => lastName.toLowerCase().replace(/[.,]/g, '').replace(/\s+(jr|sr|ii|iii|iv|v)$/, '');
+    const real = new Set(named.map((p) => core(p.lastName)));
+    const shared = buildDemoData(DAYS[4], undefined, named).employees.filter((e) => real.has(core(e.lastName)));
+    // Only the ids of the made-up people are printed if this fails, never a real name.
+    expect(shared.map((e) => e.id)).toEqual([]);
+  });
+
+  it('gives a sample person a spare last name when a build names someone with theirs', () => {
+    const plain = buildDemoData(DAYS[4]);
+    // Any of the sample crew will do: the build names someone else with the same last name.
+    const namesake = plain.employees[2];
+    const data = buildDemoData(DAYS[4], undefined, [{ firstName: 'Pat', lastName: namesake.lastName }]);
+    const renamed = data.employees[2];
+    expect(SPARE_LAST_NAMES).toContain(renamed.lastName);
+    // They are the same made-up person in every other way, and so is everyone else.
+    expect({ ...renamed, lastName: namesake.lastName }).toEqual(namesake);
+    expect(data.employees.filter((e, i) => i !== 2)).toEqual(plain.employees.filter((e, i) => i !== 2));
+    // Their sample account goes by the new name too.
+    const email = (d: typeof data) => d.accounts.find((a) => a.employeeId === namesake.id)?.email;
+    expect(email(data)).toBe(`${renamed.firstName}.${renamed.lastName}@example.com`.toLowerCase());
+    expect(data.accounts.map((a) => ({ ...a, email: '' }))).toEqual(plain.accounts.map((a) => ({ ...a, email: '' })));
+    // And their hours and records are the same ones, since those go by the person, not the name.
+    expect([data.shifts, data.inspections, data.exams, data.mrfs]).toEqual([plain.shifts, plain.inspections, plain.exams, plain.mrfs]);
+  });
+
+  it('keeps the sample crew as it is when a build names nobody with their last names', () => {
+    expect(buildDemoData(DAYS[4], undefined, [{ firstName: 'Pat', lastName: 'Ortiz' }])).toEqual(buildDemoData(DAYS[4]));
   });
 
   it.each(DAYS)('tells the same story when opened at %d', (now) => {
@@ -220,12 +276,54 @@ describe('sample data', () => {
     });
   });
 
+  it('has one sample sheet with a single OK/BO column, and the exams made on it say so', () => {
+    const data = buildDemoData(DAYS[4]);
+    const single = data.areaSheets.filter((sheet) => sheet.single).map((sheet) => sheet.id);
+    expect(single).toEqual(['core_shed']);
+    expect(data.exams.filter((exam) => exam.single).length).toBeGreaterThan(5);
+    for (const exam of data.exams) expect([exam.area, !!exam.single]).toEqual([exam.area, single.includes(exam.sheetId)]);
+  });
+
+  it('finds a condition on a sheet with one column in all three cells, since they hold the one answer', () => {
+    // The sample conditions are found on whichever sheets a build names, a one-column sheet among them.
+    const named = parseAreaSheets('North plant\nFeeder\n\nBag house [OK/BO]\nFan\nHopper');
+    const data = buildDemoData(DAYS[4], named);
+    const found = data.exams.filter((exam) => exam.single).flatMap((exam) => exam.rows).filter((row) => rowAnswer(row) === 'bo');
+    expect(found.length).toBeGreaterThan(0);
+    for (const row of found) expect([row.guarding, row.electrical, row.access]).toEqual(['bo', 'bo', 'bo']);
+  });
+
   it('makes the sample exams on whatever sheets a build names', () => {
     const named = parseAreaSheets('North plant\nFeeder\nBelt 4\nScreen\n\nBag house\nFan\nHopper');
     const data = buildDemoData(DAYS[4], named);
     expect(data.areaSheets).toEqual(named);
     expect(new Set(data.exams.map((x) => x.area))).toEqual(new Set(['North plant', 'Bag house']));
     expect(openFindings(data.exams).length).toBeGreaterThan(0);
+  });
+
+  it('has an examiner with more areas than one go round them one after another', () => {
+    // Seven areas for three examiners: each has two or three to go round on a shift.
+    const named = parseAreaSheets('North plant\nFeeder\n\nBag house\nFan\n\nYard\nGate\n\nAssay lab\nBalance\n\nWash bay\nHose reel\n\nFuel island\nNozzle\n\nPump house\nSump');
+    for (const now of DAYS) {
+      const data = buildDemoData(now, named);
+      const rounds = new Map<string, typeof data.exams>();
+      for (const exam of data.exams) {
+        const shift = data.shifts.find((s) => s.employeeId === exam.employeeId && s.clockIn.at <= exam.startedAt && (s.clockOut?.at ?? now) >= exam.submittedAt);
+        // Every exam is made on a shift, by someone on the clock.
+        expect(shift).toBeDefined();
+        rounds.set(shift!.id, [...(rounds.get(shift!.id) ?? []), exam]);
+      }
+      expect([...rounds.values()].some((round) => round.length > 1)).toBe(true);
+      for (const round of rounds.values()) {
+        const inOrder = [...round].sort((a, b) => a.startedAt - b.startedAt);
+        // Nobody is in two areas at once: each exam starts after the one before it was signed.
+        inOrder.forEach((exam, i) => {
+          if (i > 0) expect(exam.startedAt).toBeGreaterThan(inOrder[i - 1].submittedAt);
+        });
+      }
+      // And nothing is signed later than the moment the preview is opened.
+      expect(data.exams.filter((exam) => exam.submittedAt > now)).toEqual([]);
+    }
   });
 
   it('feeds reports whose totals agree with the payroll screen', () => {

@@ -2,7 +2,7 @@ import { Factory, Plus } from '../../components/icons';
 import React, { useState } from 'react';
 import { View } from 'react-native';
 
-import { Button, Divider, EmptyState, Field, Notice, Page, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
+import { Button, Divider, EmptyState, Field, Notice, Page, Panel, Row, Sheet, Tag, Toggle, Txt } from '../../components/ui';
 import { openFindings } from '../../domain/areaExam';
 import type { AreaSheet } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
@@ -24,6 +24,8 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
   const [editing, setEditing] = useState<AreaSheet | 'new' | null>(null);
   const [title, setTitle] = useState('');
   const [rows, setRows] = useState('');
+  /** One OK/BO column for each line, in place of guarding, electrical and safe access. */
+  const [single, setSingle] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const active = sheets.filter((s) => s.active);
@@ -34,6 +36,7 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
   const open = (sheet: AreaSheet | 'new') => {
     setTitle(sheet === 'new' ? '' : sheet.title);
     setRows(sheet === 'new' ? '' : sheet.rows.map((r) => r.label).join('\n'));
+    setSingle(sheet === 'new' ? false : !!sheet.single);
     setError(null);
     setEditing(sheet);
   };
@@ -43,11 +46,11 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
     let saved: string | undefined;
     let problem: string | undefined;
     if (current) {
-      const result = updateAreaSheet(current.id, title, rows);
+      const result = updateAreaSheet(current.id, title, rows, single);
       if (result.ok) saved = useStore.getState().areaSheets.find((s) => s.id === current.id)?.title;
       else problem = result.error;
     } else {
-      const result = addAreaSheet(title, rows);
+      const result = addAreaSheet(title, rows, single);
       if (result.ok) saved = result.sheet.title;
       else problem = result.error;
     }
@@ -72,7 +75,7 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
       footer={<Button testID="sheet-add" label="Add an area sheet" icon={Plus} kind="yellow" onPress={() => open('new')} />}
     >
       <Txt v="body" c={color.inkSoft}>
-        Each area has its own lines, checked for guarding, electrical and safe access. The 20 conditions on the second page are the same for every area.
+        Each area has its own lines. Most sheets check each line for guarding, electrical and safe access; some have one OK/BO column instead. The 20 conditions on the second page are the same for every area.
       </Txt>
 
       {active.length === 0 ? (
@@ -88,7 +91,7 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
                   testID={`sheet-${sheet.id}`}
                   left={<Factory color={color.ink} size={24} />}
                   title={sheet.title}
-                  sub={`${sheet.rows.length} ${sheet.rows.length === 1 ? 'line' : 'lines'} of its own, plus the 20 conditions. ${made} ${made === 1 ? 'exam' : 'exams'} on record.`}
+                  sub={`${sheet.rows.length} ${sheet.rows.length === 1 ? 'line' : 'lines'} of its own${sheet.single ? ' in one OK/BO column' : ''}, plus the 20 conditions. ${made} ${made === 1 ? 'exam' : 'exams'} on record.`}
                   chevron
                   onPress={() => open(sheet)}
                 />
@@ -139,8 +142,15 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
           autoCorrect={false}
           hint={`${lineCount} ${lineCount === 1 ? 'line' : 'lines'}. Type each the way it is printed. An area can start with none and still get the conditions page.`}
         />
+        <Toggle
+          testID="sheet-single"
+          label="One OK/BO column"
+          sub="For a sheet that marks each line OK or BO once, with no guarding, electrical and safe access columns."
+          value={single}
+          onChange={setSingle}
+        />
         {current ? (
-          <Txt v="small" c={color.silica}>Exams already signed keep the lines they were made on.</Txt>
+          <Txt v="small" c={color.silica}>Exams already signed keep the lines and the columns they were made on.</Txt>
         ) : null}
         <Button testID="sheet-save" label={current ? 'Save the sheet' : 'Add the sheet'} kind="ink" onPress={save} />
         {current && openHere > 0 ? (

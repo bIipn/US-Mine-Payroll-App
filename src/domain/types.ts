@@ -293,6 +293,8 @@ export interface AreaSheet {
   title: string;
   rows: { id: string; label: string }[];
   active: boolean;
+  /** The sheet has one OK/BO column for each line, in place of guarding, electrical and safe access. */
+  single?: boolean;
 }
 
 /** What was done about a condition, and when: "Notes / Date fixed" on the sheet. */
@@ -340,6 +342,8 @@ export interface AreaExam {
   shift: ShiftName;
   startedAt: number;
   submittedAt: number;
+  /** Made on a sheet with one OK/BO column. The three cells of each line then hold that one answer. */
+  single?: boolean;
   rows: ExamRow[];
   conditions: ExamCondition[];
 }

@@ -117,15 +117,23 @@ function unique(base: string, taken: Set<string>): string {
   return id;
 }
 
+/** Typed after a sheet's name, this marks a sheet with one OK/BO column: "Core shed [OK/BO]". */
+const SINGLE_MARK = /\[\s*ok\s*\/\s*bo\s*\]$/i;
+
 /**
  * A sheet from its name and its lines, one to a line of text. The heading can be
  * typed the way it is printed: "North Plant areas:" and "North Plant Pre Shift
  * Exam" both give "North Plant". Without the colon "areas" is part of the name,
  * so "Staging areas" stays as it is.
+ *
+ * Most sheets check each line for guarding, electrical and safe access. One that
+ * has a single OK/BO column instead is `single`: say so, or type [OK/BO] after
+ * the name.
  */
-export function makeSheet(title: string, rowsText: string, takenIds: string[] = []): AreaSheet | null {
+export function makeSheet(title: string, rowsText: string, takenIds: string[] = [], single = false): AreaSheet | null {
+  const typed = cleanText(title);
   const name = cleanText(
-    cleanText(title)
+    cleanText(typed.replace(SINGLE_MARK, ''))
       .replace(/\s+areas\s*:$/i, '')
       .replace(/:$/, '')
       .replace(/\s+pre[\s-]?shift exam$/i, ''),
@@ -137,7 +145,13 @@ export function makeSheet(title: string, rowsText: string, takenIds: string[] = 
     .map(cleanText)
     .filter(Boolean)
     .map((label) => ({ id: unique(slug(label), rowIds), label }));
-  return { id: unique(slug(name), new Set(takenIds)), title: name, rows, active: true };
+  return {
+    id: unique(slug(name), new Set(takenIds)),
+    title: name,
+    rows,
+    active: true,
+    ...(single || SINGLE_MARK.test(typed) ? { single: true } : null),
+  };
 }
 
 /**
@@ -180,7 +194,8 @@ export const SAMPLE_AREA_SHEETS: AreaSheet[] = parseAreaSheets(
   [
     'Crusher\nDump pocket\nGrizzly feeder\nJaw crusher\nRock breaker\nDischarge conveyor\nSurge bin\nControl booth\nLube unit\nDust collector',
     'Bagging plant\nFeed bin\nBag conveyor\nBulk bag filler\nPalletizer\nStretch wrapper\nBucket elevator\nBaghouse\nLoading dock\nForklift lane',
-    'Core shed\nCore saw\nCore splitter\nLogging benches\nCore racks\nSample store\nRoller door\nEyewash station',
+    // One of the samples has a single OK/BO column, as some of a mine's sheets do.
+    'Core shed [OK/BO]\nCore saw\nCore splitter\nLogging benches\nCore racks\nSample store\nRoller door\nEyewash station',
   ].join('\n\n'),
 );
 
@@ -275,7 +290,8 @@ export function buildExam(
   const rowMarks = [...sheet.rows.map((r) => draft.rows[r.id]), ...draft.others.map((o) => o.mark)];
   const bad = [...rowMarks, ...AREA_CONDITIONS.map((c) => draft.conditions[c.id])].filter((m) => m.answer === 'bo');
   if (bad.some((m) => !m.note || !cleanText(m.note))) return { ok: false, error: 'Say what is wrong on each Bad Order.' };
-  if (rowMarks.some((m) => m.answer === 'bo' && !m.columns?.length)) {
+  // A sheet with one OK/BO column has no column to pick.
+  if (!sheet.single && rowMarks.some((m) => m.answer === 'bo' && !m.columns?.length)) {
     return { ok: false, error: 'On each Bad Order, pick what is wrong: guarding, electrical or safe access.' };
   }
 
@@ -291,9 +307,13 @@ export function buildExam(
       shift: draft.shift,
       startedAt: draft.startedAt,
       submittedAt: who.submittedAt,
+      ...(sheet.single ? { single: true } : null),
+      // On a sheet with one column a mark names no columns, so its three cells all take the one answer.
       rows: [
-        ...sheet.rows.map((r) => examRow(r, draft.rows[r.id])),
-        ...draft.others.map((o, i) => examRow({ id: unique(`other_${i + 1}`, lineIds), label: cleanText(o.label), other: true }, o.mark)),
+        ...sheet.rows.map((r) => examRow(r, sheet.single ? { ...draft.rows[r.id], columns: [] } : draft.rows[r.id])),
+        ...draft.others.map((o, i) =>
+          examRow({ id: unique(`other_${i + 1}`, lineIds), label: cleanText(o.label), other: true }, sheet.single ? { ...o.mark, columns: [] } : o.mark),
+        ),
       ],
       conditions: AREA_CONDITIONS.map((c): ExamCondition => {
         const mark = draft.conditions[c.id];
@@ -327,6 +347,9 @@ export interface Finding {
 
 const conditionOf = new Map(AREA_CONDITIONS.map((c) => [c.id, c]));
 
+/** Where a Bad Order is, on a sheet with one OK/BO column: on the area's own sheet, as against the conditions page. */
+export const ON_THE_SHEET = 'Area sheet';
+
 export function examFindings(exam: AreaExam): Finding[] {
   const base = { examId: exam.id, sheetId: exam.sheetId, area: exam.area, employeeId: exam.employeeId, foundAt: exam.submittedAt };
   const tail = (line: ExamRow | ExamCondition) => ({
@@ -338,13 +361,14 @@ export function examFindings(exam: AreaExam): Finding[] {
   const fromRows = exam.rows
     .filter((row) => rowAnswer(row) === 'bo')
     .map((row): Finding => {
-      const wrong = EXAM_COLUMNS.filter((c) => row[c.id] === 'bo');
+      // A sheet with one OK/BO column has no column to name, and so no standard of a column to cite.
+      const wrong = exam.single ? [] : EXAM_COLUMNS.filter((c) => row[c.id] === 'bo');
       const where = wrong.map((c) => c.label).join(', ');
       return {
         key: `row:${row.id}`,
         ...base,
         label: row.label,
-        where: where.charAt(0) + where.slice(1).toLowerCase(),
+        where: exam.single ? ON_THE_SHEET : where.charAt(0) + where.slice(1).toLowerCase(),
         ...tail(row),
         refs: wrong.flatMap((c) => c.refs),
       };

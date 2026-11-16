@@ -4,6 +4,7 @@ import { DEFAULT_SITE } from '../../domain/site';
 import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
 import type { InspectionAnswer } from '../../domain/types';
+import { parseRoster } from '../../domain/roster';
 import { openShiftOf, useStore } from '../useStore';
 
 const at = (h: number, m = 0) => new Date(2026, 10, 13, h, m, 0).getTime();
@@ -83,6 +84,89 @@ describe('the build owner', () => {
   it('is nobody when the build names no owner', () => {
     s().ensureSeeded(null);
     expect(signUp()).toMatchObject({ ok: false });
+  });
+});
+
+describe("a build's own roster", () => {
+  const people = parseRoster('Ortiz, Sam | Crusher\nQuinn, Riley J | Maintenance | supervisor\nVance III, Lee "Buck" | Bagging plant');
+  const account = (firstName: string, lastName: string) => ({
+    firstName, lastName, email: `${firstName.replace(/\W/g, '')}@example.com`.toLowerCase(), password: 'haulroad88',
+  });
+  const me = () => s().employees.find((e) => e.id === s().session?.employeeId);
+
+  it('puts everyone it names on the roster with their job title, and makes nothing up for them', () => {
+    s().ensureSeeded(null, undefined, people);
+    expect(s().employees.find((e) => e.lastName === 'Ortiz')).toMatchObject({ firstName: 'Sam', title: 'Crusher', role: 'employee', active: true });
+    const named = s().employees.filter((e) => e.id.startsWith('ros_'));
+    expect(named).toHaveLength(3);
+    for (const person of named) {
+      const theirs = (list: { employeeId: string }[]) => list.some((x) => x.employeeId === person.id);
+      expect([theirs(s().shifts), theirs(s().leave), theirs(s().inspections), theirs(s().opLogs), theirs(s().exams), theirs(s().accounts)]).toEqual(Array(6).fill(false));
+      expect(s().mrfs.some((m) => [m.requestedBy, m.assignedTo, m.completedBy].includes(person.id))).toBe(false);
+      expect(s().payRates[person.id]).toBeUndefined();
+    }
+  });
+
+  it('lets them sign up under the name they go by', () => {
+    s().ensureSeeded(null, undefined, people);
+    expect(s().signUp(account('Buck', 'Vance'))).toEqual({ ok: true });
+    expect(me()).toMatchObject({ firstName: 'Lee "Buck"', lastName: 'Vance III', role: 'employee' });
+    s().signOut();
+    expect(s().signUp(account('riley', 'quinn'))).toEqual({ ok: true });
+    expect(me()).toMatchObject({ firstName: 'Riley J', role: 'supervisor', title: 'Maintenance' });
+    s().signOut();
+    expect(s().signInWithProvider('google', 'Sam', 'Ortiz')).toEqual({ ok: true });
+    expect(me()).toMatchObject({ lastName: 'Ortiz' });
+  });
+
+  it('asks for the whole name when a name fits more than one person', () => {
+    s().ensureSeeded(null, undefined, parseRoster('Park, Lee Roy\nPark, Roy "Lee"'));
+    expect(s().signUp(account('Roy', 'Park'))).toEqual({
+      ok: false,
+      error: 'More than one person on the roster goes by "Roy Park". Type your name the way it is on the roster.',
+    });
+    expect(s().signUp(account('Lee Roy', 'Park'))).toEqual({ ok: true });
+  });
+
+  it('is added once, and is still there after the sample data is reset', () => {
+    const before = s().employees.length;
+    s().ensureSeeded(null, undefined, people);
+    s().ensureSeeded(null, undefined, people);
+    expect(s().employees).toHaveLength(before + 3);
+    s().resetDemo(null, undefined, people);
+    expect(s().employees).toHaveLength(before + 3);
+  });
+
+  it('has the owner on it once, as a supervisor, with the job title the roster gives them', () => {
+    s().ensureSeeded({ firstName: 'Sam', lastName: 'Ortiz' }, undefined, people);
+    const sams = s().employees.filter((e) => e.lastName === 'Ortiz');
+    expect(sams).toEqual([expect.objectContaining({ firstName: 'Sam', role: 'supervisor', title: 'Crusher' })]);
+  });
+
+  it('starts the sample crew apart from the people it names: nobody made up has the last name of someone real', () => {
+    // The sample crew comes with a Torres and a Bell. This build names a Torres of its own, and its owner is a Bell.
+    const mine = parseRoster('Torres, Pat | Crusher');
+    const owner = { firstName: 'Lou', lastName: 'Bell' };
+    const check = () => {
+      const madeUp = s().employees.filter((e) => !e.id.startsWith('ros_') && !e.id.startsWith('own_'));
+      expect(madeUp).toHaveLength(14);
+      expect(madeUp.filter((e) => ['Torres', 'Bell'].includes(e.lastName))).toEqual([]);
+      expect(s().employees.filter((e) => ['Torres', 'Bell'].includes(e.lastName)).map((e) => e.firstName).sort()).toEqual(['Lou', 'Pat']);
+      // The made-up people keep their hours under the name they were given.
+      expect(s().shifts.some((shift) => shift.employeeId === 'e03')).toBe(true);
+    };
+    s().resetDemo(owner, undefined, mine);
+    check();
+    // A phone opening the build for the first time starts with the same crew.
+    useStore.setState({ seededAt: null });
+    s().ensureSeeded(owner, undefined, mine);
+    check();
+  });
+
+  it('keeps a made-up email for a sign-in with Apple, Google or Microsoft free of anything but letters', () => {
+    s().ensureSeeded(null, undefined, people);
+    s().signInWithProvider('apple', 'Lee', 'Vance');
+    expect(s().accounts.find((a) => a.employeeId === me()?.id)?.email).toBe('lee.buck.vance.iii@example.com');
   });
 });
 
@@ -593,6 +677,28 @@ describe('area sheets', () => {
 
     s().setAreaSheetActive('wash_bay', false);
     expect(s().areaSheets.find((x) => x.id === 'wash_bay')?.active).toBe(false);
+  });
+
+  it('can have one OK/BO column instead of the three, and keep it or change it when the sheet is edited', () => {
+    s().signInDemo('supervisor');
+    const added = s().addAreaSheet('Wash bay', 'Hose reel\nDrain grate', true);
+    expect(added).toMatchObject({ ok: true, sheet: { id: 'wash_bay', single: true } });
+    const sheet = () => s().areaSheets.find((x) => x.id === 'wash_bay')!;
+    // Changing the lines without a word about the columns leaves them as they are.
+    expect(s().updateAreaSheet('wash_bay', 'Wash bay', 'Hose reel\nDrain grate\nOil separator')).toEqual({ ok: true });
+    expect([sheet().single, sheet().rows.length]).toEqual([true, 3]);
+    expect(s().updateAreaSheet('wash_bay', 'Wash bay', 'Hose reel', false)).toEqual({ ok: true });
+    expect('single' in sheet()).toBe(false);
+    expect(s().updateAreaSheet('wash_bay', 'Wash bay', 'Hose reel', true)).toEqual({ ok: true });
+    expect(sheet().single).toBe(true);
+
+    // An exam on it is signed with a Bad Order that names no column.
+    const result = s().submitExam({
+      sheetId: 'wash_bay', shift: 'day', startedAt: Date.now(), others: [],
+      rows: { hose_reel: { answer: 'bo', note: 'Reel will not lock' } },
+      conditions: Object.fromEntries(AREA_CONDITIONS.map((c) => [c.id, { answer: 'ok' as const }])),
+    });
+    expect(result).toMatchObject({ ok: true, exam: { single: true } });
   });
 
   it('are not something an employee can change', () => {

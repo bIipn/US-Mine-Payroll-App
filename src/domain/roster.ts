@@ -1,4 +1,4 @@
-import type { Employee } from './types';
+import type { Employee, Role } from './types';
 
 /**
  * Names on the roster. Only people on the roster can create an account, so the
@@ -22,20 +22,148 @@ export const sameName = (person: PersonName, firstName: string, lastName: string
   person.lastName.toLowerCase() === cleanText(lastName).toLowerCase();
 
 /**
- * Read a name written as "First Last" or "Last, First". Everything after the
- * first word is the last name. Returns null unless there is both a first and a
- * last name.
+ * Read a name written as "First Last" or "Last, First". Without a comma,
+ * everything after the first word is the last name. With one, the name is split
+ * where the comma is, so a middle initial, a nickname or "III" stays where it
+ * was put. Returns null unless there is both a first and a last name.
  */
 export function parsePersonName(text: string | null | undefined): PersonName | null {
-  let line = cleanText(text ?? '');
-  if (line.includes(',')) {
-    const [last = '', first = ''] = line.split(',').map(cleanText);
-    if (!first || !last) return null;
-    line = `${first} ${last}`;
+  const line = cleanText(text ?? '');
+  const comma = line.indexOf(',');
+  if (comma >= 0) {
+    const last = cleanText(line.slice(0, comma));
+    const first = cleanText(line.slice(comma + 1));
+    return first && last ? { firstName: titleCase(first), lastName: titleCase(last) } : null;
   }
   const parts = line.split(' ').filter(Boolean);
   if (parts.length < 2) return null;
   return { firstName: titleCase(parts[0]), lastName: titleCase(parts.slice(1).join(' ')) };
+}
+
+// ---- Matching a typed name --------------------------------------------------------------------
+
+/** The words of a name in lower case, without quote marks, full stops, commas or hyphens. */
+const words = (text: string) => cleanText(text.toLowerCase().replace(/["“”'‘’.,-]/g, ' ')).split(' ').filter(Boolean);
+
+const SUFFIXES = ['jr', 'sr', 'ii', 'iii', 'iv', 'v'];
+
+/** A last name as its letters run together, and the "Jr" or "III" after it, if it has one. */
+function lastNameOf(text: string): { core: string; suffix: string } {
+  const all = words(text);
+  const suffix = all.length > 1 && SUFFIXES.includes(all[all.length - 1]) ? all[all.length - 1] : '';
+  return { core: (suffix ? all.slice(0, -1) : all).join(''), suffix };
+}
+
+/**
+ * Whether a typed name is this person. The roster holds a name the way the mine
+ * writes it, which can carry a middle initial, a nickname in quotes or "III".
+ * People leave those off when they type their own name, or go by the nickname.
+ * So the last names have to agree, give or take the "III", and every word of
+ * the typed first name has to be one of the roster's. An initial alone is not a name.
+ */
+function fits(person: PersonName, firstName: string, lastName: string): boolean {
+  const [theirs, typed] = [lastNameOf(person.lastName), lastNameOf(lastName)];
+  if (!typed.core || typed.core !== theirs.core || (typed.suffix && typed.suffix !== theirs.suffix)) return false;
+  const given = words(person.firstName);
+  const typedFirst = words(firstName);
+  return typedFirst.some((word) => word.length > 1) && typedFirst.every((word) => given.includes(word));
+}
+
+/**
+ * Who on the roster a typed name is. A name typed exactly as it is on the roster
+ * is that person. Otherwise it is the one person it fits, and when it fits more
+ * than one, all of them come back so the person can be asked to type the whole name.
+ */
+export function findOnRoster<T extends PersonName>(people: T[], firstName: string, lastName: string): { person: T } | { several: T[] } | null {
+  const exact = people.filter((p) => sameName(p, firstName, lastName));
+  const hits = exact.length ? exact : people.filter((p) => fits(p, firstName, lastName));
+  if (hits.length === 0) return null;
+  return hits.length === 1 ? { person: hits[0] } : { several: hits };
+}
+
+// ---- The roster a build names -----------------------------------------------------------------
+
+/** One person a build names for its roster. */
+export interface RosterEntry extends PersonName {
+  title?: string;
+  role: Role;
+}
+
+/**
+ * The roster a build names, from text with one person to a line: the name, then
+ * the job title, then "supervisor" for a supervisor, with a bar between them.
+ *
+ *     Ortiz, Sam | Crusher
+ *     Quinn, Riley J | Maintenance | supervisor
+ *
+ * A line that is not a full name is passed over, and so is a person named twice.
+ * Line ends can be `\n` typed out, which is what a setting holds outside double quotes.
+ */
+export function parseRoster(text: string | null | undefined): RosterEntry[] {
+  const people: RosterEntry[] = [];
+  for (const line of (text ?? '').replace(/\\n/g, '\n').split(/\r?\n/)) {
+    const [name = '', title = '', role = ''] = line.split('|').map(cleanText);
+    const person = parsePersonName(name);
+    if (!person || people.some((p) => sameName(p, person.firstName, person.lastName))) continue;
+    people.push({ ...person, ...(title ? { title } : null), role: role.toLowerCase() === 'supervisor' ? 'supervisor' : 'employee' });
+  }
+  return people;
+}
+
+/**
+ * The roster with everyone the build names on it, each with their job title.
+ *
+ * They come with no hours or records of their own: nothing is made up for a real
+ * person. Anyone already on the roster is left as they are, including someone a
+ * supervisor has removed. Returns the same list when there is nobody to add.
+ */
+export function withRoster(employees: Employee[], named: RosterEntry[]): Employee[] {
+  const taken = new Set(employees.map((e) => e.id));
+  const added: Employee[] = [];
+  for (const person of named) {
+    if ([...employees, ...added].some((e) => sameName(e, person.firstName, person.lastName))) continue;
+    const base = `ros_${`${person.firstName} ${person.lastName}`.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`;
+    let id = base;
+    for (let n = 2; taken.has(id); n++) id = `${base}_${n}`;
+    taken.add(id);
+    added.push({
+      id,
+      firstName: person.firstName,
+      lastName: person.lastName,
+      role: person.role,
+      ...(person.title ? { title: person.title } : null),
+      active: true,
+    });
+  }
+  return added.length ? [...employees, ...added] : employees;
+}
+
+/**
+ * Last names for made-up people to fall back on. A build that names someone
+ * with one of these passes it over, so none is ever shared with a real person.
+ */
+export const SPARE_LAST_NAMES = [
+  'Abbott', 'Baxter', 'Calloway', 'Dunmore', 'Ellison', 'Norwood', 'Okafor', 'Prescott',
+  'Quimby', 'Radcliffe', 'Sandoval', 'Thackeray', 'Underhill', 'Winslow', 'Yardley', 'Zeller',
+];
+
+/**
+ * Made-up people kept apart from the people a build names: nobody made up keeps
+ * a last name that someone real has, so the sample hours and records are never
+ * taken for a real person's or their family's. Whoever has such a name takes the
+ * next spare. The same list is handed back when there is nobody to rename.
+ */
+export function keptApart<T extends PersonName>(madeUp: T[], named: PersonName[]): T[] {
+  const core = (lastName: string) => lastNameOf(lastName).core;
+  const real = new Set(named.map((p) => core(p.lastName)));
+  if (!madeUp.some((p) => real.has(core(p.lastName)))) return madeUp;
+  const inUse = new Set(madeUp.map((p) => core(p.lastName)));
+  const spares = SPARE_LAST_NAMES.filter((name) => !real.has(core(name)) && !inUse.has(core(name)));
+  return madeUp.map((person) => {
+    if (!real.has(core(person.lastName))) return person;
+    const lastName = spares.shift();
+    return lastName ? { ...person, lastName } : person;
+  });
 }
 
 /**
@@ -57,4 +185,16 @@ export function withOwner(employees: Employee[], owner: PersonName | null): Empl
     ...employees,
     { id: `own_${slug}`, firstName: owner.firstName, lastName: owner.lastName, role: 'supervisor', active: true },
   ];
+}
+
+/**
+ * Everyone a build puts on the roster: the people it names, and its owner. When
+ * the roster names the owner too, they are on it once, as a supervisor, with
+ * the job title the roster gives them.
+ */
+export function withBuildRoster(employees: Employee[], named: RosterEntry[], owner: PersonName | null): Employee[] {
+  const people = owner
+    ? named.map((p): RosterEntry => (sameName(p, owner.firstName, owner.lastName) ? { ...p, role: 'supervisor' } : p))
+    : named;
+  return withOwner(withRoster(employees, people), owner);
 }

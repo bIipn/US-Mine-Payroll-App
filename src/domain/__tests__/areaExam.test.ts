@@ -187,6 +187,54 @@ describe('area sheets', () => {
   });
 });
 
+describe('a sheet with one OK/BO column', () => {
+  // Some sheets have a single OK/BO column for each line in place of guarding, electrical and safe access.
+  const sheet = makeSheet('Core shed [OK/BO]', 'Core saw\nCore racks\nRoller door')!;
+  const draft = (rows: ExamDraft['rows']): ExamDraft => ({
+    sheetId: sheet.id,
+    shift: 'day',
+    startedAt: at(6, 10),
+    rows: { ...Object.fromEntries(sheet.rows.map((r) => [r.id, { answer: 'ok' as const }])), ...rows },
+    others: [],
+    conditions: Object.fromEntries(AREA_CONDITIONS.map((c) => [c.id, { answer: 'ok' as const }])),
+  });
+  const who = { id: 'exam_1', employeeId: 'e1', submittedAt: at(6, 21) };
+
+  it('is marked by [OK/BO] after its name, in a pasted list as well', () => {
+    expect(sheet).toEqual({
+      id: 'core_shed', title: 'Core shed', active: true, single: true,
+      rows: [{ id: 'core_saw', label: 'Core saw' }, { id: 'core_racks', label: 'Core racks' }, { id: 'roller_door', label: 'Roller door' }],
+    });
+    const sheets = parseAreaSheets('Core shed areas: [ok/bo]\nCore saw\n\nYard\nGate');
+    expect(sheets.map((s) => [s.title, s.single])).toEqual([['Core shed', true], ['Yard', undefined]]);
+    // The mark can be set without typing it, which is how the app's own form does it.
+    expect(makeSheet('Core shed', 'Core saw', [], true)).toMatchObject({ title: 'Core shed', single: true });
+  });
+
+  it('takes a Bad Order with what is wrong and no column to pick', () => {
+    const result = buildExam(sheet, draft({ core_racks: { answer: 'bo', note: 'Top shelf is bent' } }), who);
+    expect(result).toMatchObject({ ok: true, exam: { single: true } });
+    if (!result.ok) return;
+    expect(result.exam.rows.map(rowAnswer)).toEqual(['ok', 'bo', 'ok']);
+    expect(examCounts(result.exam)).toEqual({ ok: 22, bo: 1, na: 0, lines: 23 });
+    // It is found on the area's own sheet, not in a column, and cites no standard of its own.
+    expect(examFindings(result.exam)).toEqual([
+      expect.objectContaining({ key: 'row:core_racks', label: 'Core racks', where: 'Area sheet', note: 'Top shelf is bent', refs: [] }),
+    ]);
+  });
+
+  it('still needs to know what is wrong', () => {
+    expect(buildExam(sheet, draft({ core_racks: { answer: 'bo', note: ' ' } }), who)).toEqual({ ok: false, error: 'Say what is wrong on each Bad Order.' });
+  });
+
+  it('leaves a sheet with the three columns as it was: no mark on the sheet or on its exams', () => {
+    const three = makeSheet('Crusher', 'Jaw crusher')!;
+    expect('single' in three).toBe(false);
+    const result = buildExam(three, { ...draft({}), sheetId: three.id, rows: { jaw_crusher: { answer: 'ok' } } }, who);
+    expect(result.ok && 'single' in result.exam).toBe(false);
+  });
+});
+
 describe('marking a line', () => {
   const line = { id: 'conveyor_12', label: 'Conveyor 12' };
 

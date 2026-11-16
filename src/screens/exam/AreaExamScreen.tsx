@@ -28,8 +28,9 @@ interface OtherLine {
 
 const blank = (answer: Answer): LineDraft => ({ answer, columns: [], note: '', danger: false });
 
-/** A Bad Order has to say what is wrong, and on the area sheet which column it is in. */
-const rowUnfinished = (mark?: LineDraft) => !mark || (mark.answer === 'bo' && (!mark.note.trim() || mark.columns.length === 0));
+/** A Bad Order has to say what is wrong, and on a sheet with the three columns which of them it is in. */
+const rowUnfinished = (mark: LineDraft | undefined, single?: boolean) =>
+  !mark || (mark.answer === 'bo' && (!mark.note.trim() || (!single && mark.columns.length === 0)));
 const conditionUnfinished = (mark?: LineDraft) => !mark || (mark.answer === 'bo' && !mark.note.trim());
 
 /** The Pre Shift Exam of one work area: its own lines, then the 20 conditions. */
@@ -92,9 +93,9 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
 
   /** The first line that still needs something, as the key it was laid out under. */
   const firstProblem = (): string | undefined => {
-    const row = sheet.rows.find((r) => rowUnfinished(rows[r.id]));
+    const row = sheet.rows.find((r) => rowUnfinished(rows[r.id], sheet.single));
     if (row) return `row-${row.id}`;
-    const other = others.find((o) => !o.label.trim() || rowUnfinished(o.mark));
+    const other = others.find((o) => !o.label.trim() || rowUnfinished(o.mark, sheet.single));
     if (other) return `other-${other.key}`;
     const condition = AREA_CONDITIONS.find((c) => conditionUnfinished(conditions[c.id]));
     return condition ? `cond-${condition.id}` : undefined;
@@ -269,7 +270,9 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
         <View style={styles.sectionHead}>
           <View style={{ flex: 1 }}>
             <Txt v="h3" accessibilityRole="header">{sheet.title} areas</Txt>
-            <Txt v="small" c={color.silica}>Each line is checked for guarding, electrical and safe access.</Txt>
+            <Txt v="small" c={color.silica}>
+              {sheet.single ? 'Each line is marked OK or Bad Order.' : 'Each line is checked for guarding, electrical and safe access.'}
+            </Txt>
           </View>
           {allowAllOk && rowsLeft ? <Button testID="rows-ok" label="Rest are OK" size="md" kind="quiet" onPress={() => restOk('rows')} /> : null}
         </View>
@@ -282,19 +285,19 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
 
         {sheet.rows.map((row) => {
           const mark = rows[row.id];
-          const flagged = showMissing && rowUnfinished(mark);
+          const flagged = showMissing && rowUnfinished(mark, sheet.single);
           return (
             <View key={row.id} testID={`line-row-${row.id}`} onLayout={place(`row-${row.id}`)} style={[styles.item, flagged && styles.itemFlagged, mark?.answer === 'bo' && styles.itemBad]}>
               <Txt v="strong">{row.label}</Txt>
               {openNote(`row:${row.id}`, mark?.answer)}
               <TriChoice testID={`row-${row.id}`} value={mark?.answer} onChange={(answer) => setRow(row.id, { answer })} />
-              {mark?.answer === 'bo' ? badOrder(`row-${row.id}`, mark, (patch) => setRow(row.id, patch), true) : null}
+              {mark?.answer === 'bo' ? badOrder(`row-${row.id}`, mark, (patch) => setRow(row.id, patch), !sheet.single) : null}
             </View>
           );
         })}
 
         {others.map((other) => {
-          const flagged = showMissing && (!other.label.trim() || rowUnfinished(other.mark));
+          const flagged = showMissing && (!other.label.trim() || rowUnfinished(other.mark, sheet.single));
           return (
             <View key={other.key} testID={`line-other-${other.key}`} onLayout={place(`other-${other.key}`)} style={[styles.item, flagged && styles.itemFlagged, other.mark?.answer === 'bo' && styles.itemBad]}>
               <View style={styles.otherHead}>
@@ -311,7 +314,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
                 <IconButton icon={Trash} label="Take this line off" onPress={() => setOthers((list) => list.filter((o) => o.key !== other.key))} bg={color.grayTint} />
               </View>
               <TriChoice testID={`other-${other.key}`} value={other.mark?.answer} onChange={(answer) => setOtherMark(other.key, { answer })} />
-              {other.mark?.answer === 'bo' ? badOrder(`other-${other.key}`, other.mark, (patch) => setOtherMark(other.key, patch), true) : null}
+              {other.mark?.answer === 'bo' ? badOrder(`other-${other.key}`, other.mark, (patch) => setOtherMark(other.key, patch), !sheet.single) : null}
             </View>
           );
         })}
