@@ -983,6 +983,7 @@ export const useStore = create<Store>()(
     {
       // A device that has opened a preview with the sample crew has their sample history saved.
       // A build without them keeps its own records somewhere else, so it never opens onto that.
+      // These keys predate the MineMuster name. They stay as they are, so a device keeps what it has saved.
       name: HOLDS_SAMPLES ? 'us-mine-crew' : 'us-mine-crew-records',
       version: STATE_VERSION,
       migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY) as unknown as Store,

@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const [dist = 'dist', out = path.join('preview', 'us-mine-crew-preview.html')] = process.argv.slice(2);
+const [dist = 'dist', out = path.join('preview', 'minemuster-preview.html')] = process.argv.slice(2);
 
 let html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8');
 const tag = html.match(/<script src="([^"]+)" defer><\/script>/);

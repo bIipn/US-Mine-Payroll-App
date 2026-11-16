@@ -13,6 +13,13 @@ Writes, in assets/:
     splash-icon.png              the lockup on transparent, for the black launch screen
     favicon.png                  the mark, 48 px, for a browser tab
 
+and, for the website in site/:
+    brand/minemuster-logo.webp   the lockup, 1600 px wide, for large screens
+    brand/minemuster-logo-800.webp  the lockup, 800 px wide, for phones
+    brand/og-image.png           the link preview: the lockup on black, 1200 x 630
+    apple-touch-icon.png         the mark on black, 180 square, for a phone's home screen
+    favicon.png                  the same 48 px mark as the app's
+
 The renders are silver on black. "Unscreen" turns the black into transparency: a pixel's opacity
 is its brightness above a black point, and its colour is what gives back the render over black.
 Laid over any dark colour, the result looks the same as the render screened onto it, glow and all.
@@ -25,6 +32,7 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, 'assets')
+SITE = os.path.join(ROOT, 'site')
 SOURCE = os.path.join(ASSETS, 'brand', 'source')
 LOCKUP = Image.open(os.path.join(SOURCE, 'minemuster-lockup.png')).convert('RGB')
 MARK = Image.open(os.path.join(SOURCE, 'minemuster-mark.png')).convert('RGB')
@@ -89,7 +97,19 @@ def main():
     mono.alpha_composite(shape, ((1024 - shape.width) // 2, (1024 - shape.height) // 2))
     mono.save(os.path.join(ASSETS, 'android-icon-monochrome.png'), optimize=True)
 
-    whole_mark((480, 480), 460).resize((48, 48), Image.LANCZOS).save(os.path.join(ASSETS, 'favicon.png'), optimize=True)
+    favicon = whole_mark((480, 480), 460).resize((48, 48), Image.LANCZOS)
+    favicon.save(os.path.join(ASSETS, 'favicon.png'), optimize=True)
+
+    # The website.
+    os.makedirs(os.path.join(SITE, 'brand'), exist_ok=True)
+    fit(lock, 1600).save(os.path.join(SITE, 'brand', 'minemuster-logo.webp'), 'WEBP', quality=86, method=6)
+    fit(lock, 800).save(os.path.join(SITE, 'brand', 'minemuster-logo-800.webp'), 'WEBP', quality=88, method=6)
+    card = Image.new('RGBA', (1200, 630), (0, 0, 0, 255))
+    shown = fit(lock, 860)
+    card.alpha_composite(shown, ((1200 - shown.width) // 2, (630 - shown.height) // 2))
+    card.convert('RGB').save(os.path.join(SITE, 'brand', 'og-image.png'), optimize=True)
+    whole_mark((1024, 1024), 820).resize((180, 180), Image.LANCZOS).save(os.path.join(SITE, 'apple-touch-icon.png'), optimize=True)
+    favicon.save(os.path.join(SITE, 'favicon.png'), optimize=True)
 
 
 if __name__ == '__main__':

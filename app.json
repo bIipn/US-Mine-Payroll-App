@@ -1,17 +1,17 @@
 {
   "expo": {
     "name": "MineMuster",
-    "slug": "us-mine-crew",
+    "slug": "minemuster",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.usmine.crew"
+      "bundleIdentifier": "com.minemuster.app"
     },
     "android": {
-      "package": "com.usmine.crew",
+      "package": "com.minemuster.app",
       "adaptiveIcon": {
         "backgroundColor": "#000000",
         "foregroundImage": "./assets/android-icon-foreground.png",
