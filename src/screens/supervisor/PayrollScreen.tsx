@@ -12,7 +12,7 @@ import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
 import { useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { addDays, fmtHrs, fmtRange, startOfWeek } from '../../util/format';
+import { addDays, fmtHrs, fmtRange, peopleCount, startOfWeek } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
 type View_ = 'period' | 'week';
@@ -96,7 +96,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
       <View style={styles.totals}>
         <View>
           <Txt v="h1" testID="payroll-total">{fmtHrs(totals.total)}</Txt>
-          <Txt v="body" c={color.silica}>hours to pay, {rows.filter((r) => r.total > 0).length} people</Txt>
+          <Txt v="body" c={color.silica}>hours to pay, {peopleCount(rows.filter((r) => r.total > 0).length)}</Txt>
         </View>
         <View style={styles.split}>
           <Stat compact value={fmtHrs(totals.reg)} label="Straight time" />

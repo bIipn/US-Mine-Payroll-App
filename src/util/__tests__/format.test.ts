@@ -1,4 +1,15 @@
-import { fmtMoney, fmtRate } from '../format';
+import { fmtMoney, fmtRate, peopleCount } from '../format';
+
+describe('peopleCount', () => {
+  it.each([
+    [0, '0 people'],
+    [1, '1 person'],
+    [2, '2 people'],
+    [89, '89 people'],
+  ])('counts %d as %s', (n, text) => {
+    expect(peopleCount(n)).toBe(text);
+  });
+});
 
 describe('fmtRate', () => {
   it.each([

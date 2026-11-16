@@ -167,6 +167,11 @@ export function shortName(p: { firstName: string; lastName: string }): string {
   return `${p.firstName.charAt(0)}. ${p.lastName}`;
 }
 
+/** "1 person", "2 people". */
+export function peopleCount(n: number): string {
+  return `${n} ${n === 1 ? 'person' : 'people'}`;
+}
+
 export function greeting(ms: number): string {
   const h = new Date(ms).getHours();
   if (h < 12) return 'Good morning';

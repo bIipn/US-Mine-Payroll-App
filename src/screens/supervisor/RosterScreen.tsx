@@ -10,7 +10,7 @@ import { DEMO_MODE, ROSTER, SAMPLE_CREW } from '../../config';
 import { SAMPLE_CREW_IDS } from '../../store/seed';
 import { useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
-import { fullName, initials } from '../../util/format';
+import { fullName, initials, peopleCount } from '../../util/format';
 
 type Adding = 'one' | 'list';
 
@@ -83,7 +83,7 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
     <Page
       testID="roster-screen"
       title="Roster"
-      sub={`${total} people, ${registered} with an account`}
+      sub={`${peopleCount(total)}, ${registered} with an account`}
       onBack={navigation.goBack}
       footer={<Button testID="roster-add" label="Add people" icon={UserPlus} kind="yellow" onPress={() => { reset(); setAdding(true); }} />}
     >

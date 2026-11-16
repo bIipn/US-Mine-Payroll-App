@@ -7,7 +7,7 @@ import { Avatar, Divider, Panel, Row, Stat, Tag, TopBar, Txt, UnitPlate } from '
 import { openFindings } from '../../domain/areaExam';
 import { employeeName, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { fmtDate, fmtDateLong, fmtRelativeDay, fmtTime, fullName, initials, startOfDay } from '../../util/format';
+import { fmtDate, fmtDateLong, fmtRelativeDay, fmtTime, fullName, initials, peopleCount, startOfDay } from '../../util/format';
 import { useNow } from '../../util/hooks';
 import { crewNow, missingClockOuts } from './crewStatus';
 
@@ -148,7 +148,7 @@ export function CrewScreen() {
         </Panel>
 
         <Panel title="Setup" flush>
-          <Row testID="go-roster" left={<Users color={color.ink} size={24} />} title="Roster" sub={`${employees.filter((e) => e.active).length} people can sign in`} chevron onPress={() => navigation.navigate('Roster')} />
+          <Row testID="go-roster" left={<Users color={color.ink} size={24} />} title="Roster" sub={`${peopleCount(employees.filter((e) => e.active).length)} can sign in`} chevron onPress={() => navigation.navigate('Roster')} />
           <Divider inset={space.lg} />
           <Row testID="go-sheets" left={<ListChecks color={color.ink} size={24} />} title="Area sheets" sub={`${areas.length} work ${areas.length === 1 ? 'area' : 'areas'} with a pre shift exam sheet`} chevron onPress={() => navigation.navigate('AreaSheets')} />
           <Divider inset={space.lg} />
