@@ -42,3 +42,6 @@ yarn-error.*
 
 # single-file preview build
 /preview
+
+# Python caches from running the scripts
+__pycache__/
