@@ -1,7 +1,8 @@
-// The database's own guarantees, read from the catalog: every security definer
-// function has an empty search_path, EXECUTE goes only to the roles that need
-// it, row level security is on for every table, each role holds exactly the
-// privileges it should, and the migrations leave what Supabase provides alone.
+// The database's own guarantees, read from the catalog: every function
+// searches pg_catalog first and the temporary schema last, EXECUTE goes only
+// to the roles that need it, row level security is on for every table, each
+// role holds exactly the privileges it should, no column keeps planner
+// statistics, and the migrations leave what Supabase provides alone.
 
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -27,7 +28,9 @@ const CALLABLE_BY = {
   deny_join_request: ['authenticated'],
   rotate_join_code: ['authenticated'],
   release_roster_claim: ['authenticated'],
+  lift_join_bar: ['authenticated'],
   my_join_requests: ['authenticated'],
+  is_last_supervisor: ['service_role'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
 };
@@ -38,17 +41,21 @@ const SECURITY_DEFINER = [
   'company_by_code',
   'create_company',
   'deny_join_request',
+  'is_last_supervisor',
   'is_member',
   'is_supervisor',
   'join_company',
+  'lift_join_bar',
   'my_join_requests',
   'release_roster_claim',
+  'roster_after_reactivate',
+  'roster_before_delete',
   'roster_before_write',
   'roster_keeps_a_supervisor',
   'rotate_join_code',
 ];
 
-const TABLES = ['companies', 'join_requests', 'notifications', 'roster'];
+const TABLES = ['companies', 'company_supervisor_guard', 'join_holds', 'join_requests', 'notifications', 'roster'];
 
 // What the authenticated role may do: whole-table privileges, and the columns it may insert and update.
 const AUTHENTICATED = {
@@ -60,6 +67,9 @@ const AUTHENTICATED = {
   },
   join_requests: { table: ['SELECT'], insert: [], update: [] },
   notifications: { table: ['SELECT'], insert: [], update: ['read_at'] },
+  // Kept by the functions and triggers only.
+  company_supervisor_guard: { table: [], insert: [], update: [] },
+  join_holds: { table: [], insert: [], update: [] },
 };
 const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 
@@ -71,6 +81,8 @@ async function publicFunctions() {
     from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
+      -- An extension someone put in public is not the migrations' to judge.
+      and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
     order by p.proname`);
 }
 
@@ -141,6 +153,18 @@ describe('tables', () => {
     }
   });
 
+  it('no column keeps planner statistics, so an estimate says nothing about rows the caller cannot read', async () => {
+    const columns = await db.adminRows(`
+      select c.relname as tbl, a.attname as col, a.attstattarget as target
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relkind in ('r', 'p') and a.attnum > 0 and not a.attisdropped
+      order by 1, a.attnum`);
+    assert.deepEqual([...new Set(columns.map((c) => c.tbl))], TABLES);
+    for (const c of columns) assert.equal(c.target, 0, `${c.tbl}.${c.col} keeps statistics (target ${c.target})`);
+  });
+
   it('authenticated holds exactly the privileges it should, down to the column', async () => {
     for (const [table, expected] of Object.entries(AUTHENTICATED)) {
       for (const privilege of TABLE_PRIVILEGES) {
@@ -170,7 +194,7 @@ describe('what Supabase provides', () => {
       order by 1`);
     assert.deepEqual(authObjects.map((o) => o.object), ['function jwt', 'function uid', 'relation users', 'relation users_pkey']);
     const columns = await db.adminRows("select attname from pg_attribute where attrelid = 'auth.users'::regclass and attnum > 0 and not attisdropped order by attnum");
-    assert.deepEqual(columns.map((c) => c.attname), ['id', 'email']);
+    assert.deepEqual(columns.map((c) => c.attname), ['id', 'email', 'deleted_at', 'banned_until']);
     const triggers = await db.adminRows("select tgname from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal");
     assert.deepEqual(triggers, []);
     const [uid] = await db.adminRows("select prosrc, prosecdef from pg_proc where oid = 'auth.uid'::regproc");

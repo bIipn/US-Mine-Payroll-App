@@ -22,18 +22,41 @@ export async function migrationFiles() {
   return (await readdir(MIGRATIONS)).filter((name) => name.endsWith('.sql')).sort();
 }
 
-/** A new database with the stand-ins and every migration applied. Close it when done. */
-export async function startDatabase() {
-  const pg = new PGlite();
+/**
+ * A new database with the stand-ins and every migration applied. Close it when done.
+ *
+ * By default the migrations run as PGlite's superuser. On Supabase they run as
+ * `postgres`, which is not a superuser, so `owner` applies them as a
+ * non-superuser role of that name instead, given what Supabase gives postgres
+ * on the database, schema public and auth.users. `extensions` are PGlite
+ * extensions to load, and `before` is SQL run as that owner before the
+ * migrations (to put an extension in public, say), so a statement that would
+ * need a superuser on Supabase fails here too.
+ */
+export async function startDatabase({ owner = null, extensions = {}, before = '' } = {}) {
+  const pg = new PGlite({ extensions });
   await pg.exec(SUPABASE_STUB);
+  if (owner) {
+    assert.match(owner, NAME);
+    await pg.exec(`
+      create role ${owner} nologin;
+      grant create on database postgres to ${owner};
+      grant usage, create on schema public to ${owner};
+      grant usage on schema auth to ${owner};
+      grant select, references on auth.users to ${owner};`);
+  }
+  const asOwner = owner ? `set role ${owner};\n` : '';
+  if (before) await pg.exec(`${asOwner}${before}\nreset role;`);
   for (const name of await migrationFiles()) {
     const sql = await readFile(new URL(name, MIGRATIONS), 'utf8');
     try {
       // One string of statements runs as one transaction, as each migration does on Supabase.
-      await pg.exec(sql);
+      await pg.exec(`${asOwner}${sql}`);
     } catch (error) {
       error.message = `${name}: ${error.message}`;
       throw error;
+    } finally {
+      if (owner) await pg.exec('reset role');
     }
   }
   return new Database(pg);

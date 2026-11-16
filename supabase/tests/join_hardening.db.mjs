@@ -56,8 +56,8 @@ describe('an unclaimed supervisor row', () => {
     assert.equal((await rosterRow(db, company.rows['Dana Hollis'])).user_id, null);
 
     // It cannot touch the real supervisors' notifications or release their claim.
-    await assert.rejects(db.as(second).query('update public.notifications set read_at = now() where company_id = $1', [company.id]));
-    await assert.rejects(db.as(second).call('release_roster_claim', { roster_id: company.ownRow }));
+    assert.equal(await db.as(second).affected('update public.notifications set read_at = now() where company_id = $1', [company.id]), 0);
+    await assert.rejects(db.as(second).call('release_roster_claim', { roster_id: company.ownRow }), (error) => error.code === 'P0002');
     assert.equal(await db.as(company.owner).call('is_supervisor', { company_id: company.id }), true);
     assert.ok((await unreadOf(company)) >= 1, 'the supervisors still have the join_request notice to see');
   });
@@ -164,7 +164,7 @@ describe('a hidden character in a typed name', () => {
 });
 
 describe('joining settles the account own pending request', () => {
-  it('removes a stale request so it cannot be approved to re-admit someone later', async () => {
+  it('withdraws a stale request so it cannot be approved to re-admit someone later', async () => {
     const company = await startCompany(db);
     const pat = await db.newAccount();
     assert.equal((await join(db, pat, company.code, 'Patty', 'Cole')).reason, 'not_on_roster');
@@ -173,9 +173,10 @@ describe('joining settles the account own pending request', () => {
     const [row] = await db.as(company.owner).rows("insert into public.roster (company_id, first_name, last_name) values ($1, 'Pat', 'Cole') returning id", [company.id]);
     assert.equal((await join(db, pat, company.code, 'Pat', 'Cole')).status, 'joined');
 
-    assert.equal((await db.adminRows('select count(*)::int as n from public.join_requests where id = $1', [requestId]))[0].n, 0);
-    // Taking them off later and approving the old request cannot bring them back, because it is gone.
+    // The request is kept, withdrawn, as a record of what the account typed first.
+    assert.equal((await db.adminRows('select status from public.join_requests where id = $1', [requestId]))[0].status, 'withdrawn');
+    // Taking them off later and approving the old request cannot bring them back, because it is settled.
     await db.as(company.owner).affected('update public.roster set active = false where id = $1', [row.id]);
-    await assert.rejects(db.as(company.owner).call('approve_join_request', { request_id: requestId }), (error) => error.code === 'P0002');
+    await assert.rejects(db.as(company.owner).call('approve_join_request', { request_id: requestId }), (error) => error.code === '55000');
   });
 });

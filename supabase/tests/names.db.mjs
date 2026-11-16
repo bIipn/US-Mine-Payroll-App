@@ -212,3 +212,58 @@ describe('find_on_roster against findOnRoster itself', () => {
     for (const [kind, n] of Object.entries(kinds)) assert.ok(n >= 10, `only ${n} pairings come to ${kind}`);
   });
 });
+
+describe('find_on_roster beyond plain ASCII', () => {
+  const cp = (n) => String.fromCodePoint(n);
+  // Made-up people written in Greek, with the final sigma where Greek puts it.
+  const greek = [
+    { firstName: 'Νίκος', lastName: 'Καρράς' },
+    { firstName: 'Γιώργος Αλέξης', lastName: 'Σταύρου' },
+  ];
+  const typedGreek = [
+    // All capitals, as a phone's caps lock types them: every sigma is the capital one.
+    ['ΝΊΚΟΣ', 'ΚΑΡΡΆΣ', 0],
+    ['ΑΛΈΞΗΣ', 'ΣΤΑΎΡΟΥ', 1],
+    // Lower case, with a medial sigma typed at the end of the word.
+    ['νίκοσ', 'καρράσ', 0],
+  ];
+
+  it('treats the final sigma as the sigma it is, in capitals or not', async () => {
+    const company = await companyOf(greek);
+    for (const [first, last, who] of typedGreek) {
+      const p = greek[who];
+      assert.equal(await found(company, first, last), `${p.firstName} ${p.lastName}`, `"${first}" "${last}"`);
+    }
+  });
+
+  it('agrees with findOnRoster on Greek names typed in capitals', { skip: app ? false : appMissing }, async () => {
+    const company = await companyOf(greek);
+    for (const [first, last] of typedGreek.slice(0, 2)) {
+      const hit = app.findOnRoster(greek, first, last);
+      const expected = hit === null ? null : 'person' in hit ? `${hit.person.firstName} ${hit.person.lastName}` : hit.several.map((p) => `${p.firstName} ${p.lastName}`);
+      assert.deepEqual(await found(company, first, last), expected, `"${first}" "${last}"`);
+    }
+  });
+
+  // These need the same folding in src/domain/roster.ts, which this step does
+  // not change: compose the text (normalize('NFC')) in cleanText, turn a
+  // capital I with a dot (U+0130) into I before toLowerCase and a final sigma
+  // into a medial one after it, and count a word's length in code points
+  // ([...word].length) for the "an initial is not a name" rule.
+  it('agrees with findOnRoster on a dotted capital I, a decomposed accent and a letter outside the BMP', {
+    skip: app ? false : appMissing,
+    todo: 'needs the same folding in src/domain/roster.ts',
+  }, async () => {
+    const people = [
+      { firstName: 'Ibrahim', lastName: 'Demir' },
+      { firstName: `${cp(0x20bb7)} Kit`, lastName: 'Marlow' },
+      { firstName: 'José', lastName: 'Ortega' },
+    ];
+    const company = await companyOf(people);
+    for (const [first, last] of [[`${cp(0x130)}BRAHIM`, 'DEMIR'], [cp(0x20bb7), 'Marlow'], [`Jose${cp(0x301)}`, 'Ortega']]) {
+      const hit = app.findOnRoster(people, first, last);
+      const expected = hit === null ? null : 'person' in hit ? `${hit.person.firstName} ${hit.person.lastName}` : hit.several.map((p) => `${p.firstName} ${p.lastName}`);
+      assert.deepEqual(await found(company, first, last), expected, `"${first}" "${last}"`);
+    }
+  });
+});

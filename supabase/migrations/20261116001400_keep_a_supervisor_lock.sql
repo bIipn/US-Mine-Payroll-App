@@ -12,8 +12,13 @@
 -- the same company's supervisors waits on that lock; the count that follows is
 -- a new statement, so at READ COMMITTED it takes a fresh snapshot and sees the
 -- first transaction's committed change. FOR NO KEY UPDATE does not conflict
--- with the FOR KEY SHARE that foreign-key checks take, and raises a
--- serialization failure under REPEATABLE READ instead of letting both through.
+-- with the FOR KEY SHARE that foreign-key checks take.
+--
+-- Correction: this lock does NOT hold under REPEATABLE READ, as an earlier
+-- version of this comment said. A row lock makes no new row version, so a
+-- waiting REPEATABLE READ transaction takes the lock without error once the
+-- first commits and counts with its older snapshot. Migration
+-- 20261116001700_supervisor_guard_writes.sql replaces the lock with a write.
 --
 -- The triggers that call this function are unchanged; replacing the function
 -- keeps them.

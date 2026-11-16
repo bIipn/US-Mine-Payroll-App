@@ -173,10 +173,10 @@ describe('approve_join_request with a new row', () => {
     await db.as(company.owner).affected("insert into public.roster (company_id, first_name, last_name) values ($1, 'Pat', 'Cole')", [company.id]);
     assert.equal((await join(db, account, company.code, 'Pat', 'Cole')).status, 'joined');
 
-    // Joining removed the pending request, so a stale request cannot re-admit them later.
-    assert.equal((await db.adminRows('select count(*)::int as n from public.join_requests where id = $1', [request.id]))[0].n, 0);
-    await refused(approve(company.owner, { request_id: request.id }), NOT_FOUND, /No such join request/);
-    await refused(deny(company.owner, request.id), NOT_FOUND, /No such join request/);
+    // Joining settled the pending request as withdrawn, so a stale request cannot re-admit them later.
+    assert.equal((await requestRow(request.id)).status, 'withdrawn');
+    await refused(approve(company.owner, { request_id: request.id }), WRONG_STATE, /already been decided/);
+    await refused(deny(company.owner, request.id), WRONG_STATE, /already been decided/);
     assert.equal(await db.as(account).call('is_member', { company_id: company.id }), true);
   });
 });

@@ -267,6 +267,39 @@ describe('company settings', () => {
     await refused(update('logo_path', 'x'.repeat(1025)), '23514');
   });
 
+  it('keeps the pay period to a size every member can download with the company', async () => {
+    const company = await startCompany(db);
+    const update = (value) => db.as(company.owner).affected('update public.companies set pay_period = $2 where id = $1', [company.id, value]);
+    await refused(update(JSON.stringify({ periods: 'x'.repeat(4 * 1024 * 1024) })), '23514', /companies_pay_period_size/);
+    await refused(update(JSON.stringify({ periods: 'x'.repeat(16 * 1024) })), '23514', /companies_pay_period_size/);
+    assert.equal(await update(JSON.stringify({ kind: 'semimonthly', paid: [5, 20], ifBankClosed: 'before', note: 'n'.repeat(8000) })), 1);
+    assert.equal((await companyRow(company.id)).pay_period.kind, 'semimonthly');
+  });
+
+  it("takes a logo path only as a file in the company's own storage", async () => {
+    const company = await startCompany(db);
+    const update = (value) => db.as(company.owner).affected('update public.companies set logo_path = $2 where id = $1', [company.id, value]);
+    for (const path of [
+      '../other-company/logo.png',
+      'logos/../../other-company/logo.png',
+      'logos/..',
+      '/etc/logo.png',
+      'logos\\..\\other\\logo.png',
+      `logos/logo${String.fromCharCode(0x202e)}gnp.svg`,
+      `logos/logo${String.fromCodePoint(0xe0041)}.png`,
+    ]) {
+      await refused(update(path), BAD_INPUT, /logo/).catch((error) => {
+        error.message = `${JSON.stringify(path)}: ${error.message}`;
+        throw error;
+      });
+    }
+    // Dots inside a name are fine.
+    for (const path of ['logos/logo.v2.png', `${company.id}/logo..png`, 'logo.png']) {
+      assert.equal(await update(path), 1, path);
+      assert.equal((await companyRow(company.id)).logo_path, path);
+    }
+  });
+
   it('never lets the join code, id, creator or dates be written through the API', async () => {
     const company = await startCompany(db);
     const other = await startCompany(db, { name: 'Test Pit B' });

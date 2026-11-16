@@ -19,9 +19,16 @@ create role service_role nologin noinherit bypassrls;
 create schema auth;
 grant usage on schema auth to anon, authenticated, service_role;
 
+-- Supabase's auth.users has many more columns; these are the ones the
+-- migrations read. deleted_at is set when Supabase Auth soft-deletes an
+-- account (auth.admin.deleteUser(id, true)), and banned_until while it is
+-- banned (auth.admin.updateUserById(id, { ban_duration })). Either way the
+-- row stays, so the roster's foreign key never fires.
 create table auth.users (
   id uuid primary key,
-  email text
+  email text,
+  deleted_at timestamptz,
+  banned_until timestamptz
 );
 
 -- The signed-in account, from the request's token. Null when nobody is signed in.

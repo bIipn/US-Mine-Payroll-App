@@ -14,7 +14,7 @@ import {
   startDatabase,
 } from './harness.mjs';
 
-const TABLES = ['companies', 'roster', 'join_requests', 'notifications'];
+const TABLES = ['companies', 'roster', 'join_requests', 'notifications', 'company_supervisor_guard', 'join_holds'];
 
 let db;
 let company;
@@ -64,7 +64,9 @@ describe('anon', () => {
       ["insert into public.roster (company_id, first_name, last_name) values ($1, 'Lee', 'Park')", [company.id]],
       ["insert into public.join_requests (company_id, user_id, first_name, last_name, reason) values ($1, gen_random_uuid(), 'Lee', 'Park', 'not_on_roster')", [company.id]],
       ["insert into public.notifications (company_id, kind, request_id) values ($1, 'join_request', $2)", [company.id, request.id]],
-      ...TABLES.map((table) => [`update public.${table} set created_at = now()`, []]),
+      ["insert into public.join_holds (company_id, user_id, kind) values ($1, gen_random_uuid(), 'barred')", [company.id]],
+      ['insert into public.company_supervisor_guard (company_id) values ($1)', [company.id]],
+      ...TABLES.map((table) => [`update public.${table} set ${table === 'company_supervisor_guard' ? 'changes = 0' : 'created_at = now()'}`, []]),
       ...TABLES.map((table) => [`delete from public.${table}`, []]),
       ...TABLES.map((table) => [`truncate public.${table} cascade`, []]),
     ];
@@ -98,16 +100,21 @@ describe('the authenticated role with no account id', () => {
       ['deny_join_request', { request_id: request.id }],
       ['rotate_join_code', { company_id: company.id }],
       ['release_roster_claim', { roster_id: company.ownRow }],
+      ['lift_join_bar', { request_id: request.id }],
+      ['my_join_requests', {}, true],
     ];
     for (const [fn, args, table] of calls) {
       await refused(table ? as.callRows(fn, args) : as.call(fn, args), NOT_SIGNED_IN, /Sign in first/);
     }
+    // The row level security policies call these two, so they answer false rather than refuse.
     assert.equal(await as.call('is_member', { company_id: company.id }), false);
     assert.equal(await as.call('is_supervisor', { company_id: company.id }), false);
     assert.equal((await db.adminRows("select status from public.join_requests where id = $1", [request.id]))[0].status, 'pending');
   });
 
   it('reads nothing', async () => {
-    for (const table of TABLES) assert.deepEqual(await db.noAccount().rows(`select * from public.${table}`), [], table);
+    for (const table of TABLES.slice(0, 4)) assert.deepEqual(await db.noAccount().rows(`select * from public.${table}`), [], table);
+    // The functions' own tables are not granted to the API roles at all.
+    for (const table of TABLES.slice(4)) await refused(db.noAccount().query(`select * from public.${table}`), NO_PRIVILEGE, /permission denied/);
   });
 });
