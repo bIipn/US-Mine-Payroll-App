@@ -10,8 +10,9 @@ Writes, in assets/:
     android-icon-foreground.png  the mark inside the adaptive icon's safe circle, on transparent
     android-icon-background.png  solid black
     android-icon-monochrome.png  the mark as one solid shape, for themed icons
-    splash-icon.png              the lockup on transparent, for the black launch screen
-    favicon.png                  the mark, 48 px, for a browser tab
+    splash-icon.png              the lockup on transparent, for the black launch screen on iOS
+    splash-icon-android.png      the mark alone, for Android's launch screen, which shows only a circle
+    favicon.png                  the mark as a solid silver shape on black, 48 px, for a browser tab
 
 and, for the website in site/:
     brand/minemuster-logo.webp   the lockup, 1600 px wide, for large screens
@@ -28,7 +29,7 @@ Remake the assets with this script whenever the renders change; do not edit them
 import os
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, 'assets')
@@ -76,8 +77,25 @@ def whole_mark(canvas_size, width, rgba=False):
     cx = (MARK_BOX[0] + MARK_BOX[2]) / 2 * k
     cy = (MARK_BOX[1] + MARK_BOX[3]) / 2 * k
     canvas = Image.new('RGBA' if rgba else 'RGB', canvas_size, (0, 0, 0, 0) if rgba else (0, 0, 0))
-    canvas.paste(big, (round(canvas_size[0] / 2 - cx), round(canvas_size[1] / 2 - cy)), big if rgba else None)
+    # A plain paste copies the pixels as they are. Pasting an RGBA image through itself as a mask
+    # would blend its alpha in a second time and darken it.
+    canvas.paste(big, (round(canvas_size[0] / 2 - cx), round(canvas_size[1] / 2 - cy)))
     return canvas
+
+
+def silhouette(width):
+    """The mark as one solid shape, `width` px wide, as an alpha mask: the strokes above a brightness
+    threshold, small dark reflections inside them closed up, enclosed holes filled, the glow left out.
+    The thin cuts between strokes stay open."""
+    lum = np.asarray(MARK.crop(MARK_BOX).convert('L')).astype(np.float32) / 255
+    mask = Image.fromarray(((lum > 0.3) * 255).astype(np.uint8), 'L')
+    mask = mask.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(5))
+    # Flood the background in from the edge; whatever it cannot reach is inside the shape.
+    pad = Image.new('L', (mask.width + 2, mask.height + 2), 255)
+    pad.paste(Image.eval(mask, lambda v: 255 - v), (1, 1))
+    ImageDraw.floodfill(pad, (0, 0), 128)
+    solid = Image.fromarray(np.where(np.asarray(pad)[1:-1, 1:-1] == 128, 0, 255).astype(np.uint8), 'L')
+    return solid.resize((width, round(solid.height * width / solid.width)), Image.LANCZOS)
 
 
 def main():
@@ -90,14 +108,20 @@ def main():
     whole_mark((1024, 1024), 600, rgba=True).save(os.path.join(ASSETS, 'android-icon-foreground.png'), optimize=True)
     Image.new('RGB', (1024, 1024), (0, 0, 0)).save(os.path.join(ASSETS, 'android-icon-background.png'), optimize=True)
 
-    lum = np.asarray(fit(MARK.crop(MARK_BOX), 600).convert('L')).astype(np.float32) / 255
-    solid = np.clip((lum - 0.12) / (0.40 - 0.12), 0, 1) * 255
-    shape = Image.fromarray(np.dstack([np.full_like(solid, 255)] * 3 + [solid]).astype(np.uint8), 'RGBA')
+    shape = silhouette(600)
     mono = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0))
-    mono.alpha_composite(shape, ((1024 - shape.width) // 2, (1024 - shape.height) // 2))
+    mono.paste(Image.new('RGBA', shape.size, (255, 255, 255, 255)), ((1024 - shape.width) // 2, (1024 - shape.height) // 2), shape)
     mono.save(os.path.join(ASSETS, 'android-icon-monochrome.png'), optimize=True)
 
-    favicon = whole_mark((480, 480), 460).resize((48, 48), Image.LANCZOS)
+    # Android 12 and later show the launch image inside a circle 192 dp across, so it gets the mark
+    # alone: drawn 192 dp wide (app.json), the mark is 160 dp and its corners stay inside the circle.
+    whole_mark((1200, 600), 1000, rgba=True).save(os.path.join(ASSETS, 'splash-icon-android.png'), optimize=True)
+
+    # A browser tab draws this at 16 px, where chrome and glow turn to grey: a solid silver shape reads.
+    tab = silhouette(460)
+    big = Image.new('RGB', (480, 480), (0, 0, 0))
+    big.paste(Image.new('RGB', tab.size, (228, 230, 234)), ((480 - tab.width) // 2, (480 - tab.height) // 2), tab)
+    favicon = big.resize((48, 48), Image.LANCZOS)
     favicon.save(os.path.join(ASSETS, 'favicon.png'), optimize=True)
 
     # The website.

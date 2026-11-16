@@ -13,7 +13,7 @@ import { APP_NAME, DEMO_MODE } from '../../config';
 import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
 import { monthOf, nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
-import { deadlineWords, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals, type TimeRules } from '../../domain/time';
+import { deadlineWords, floorMin, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals, type TimeRules } from '../../domain/time';
 import type { DemoLocation, GeoStamp, MealNote, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
@@ -88,8 +88,10 @@ export function ClockScreen() {
   const myUnits = [...openLogs(opLogs).values()].filter((log) => log.employeeId === me.id);
   // A clock-out with no lunch asks why only where the state owes a meal on a shift that long.
   const owed = rules.meal;
-  const needsMealNote = !!shift && !!owed && shift.lunches.length === 0 && now - shift.clockIn.at >= owed.owedAfterMs;
-  const canWaive = !!shift && owed?.waiverMaxMs != null && now - shift.clockIn.at <= owed.waiverMaxMs;
+  // Measured in whole minutes, the way the shift's flags are, so the sheet and the saved shift agree.
+  const elapsed = shift ? floorMin(now) - floorMin(shift.clockIn.at) : 0;
+  const needsMealNote = !!shift && !!owed && shift.lunches.length === 0 && elapsed >= owed.owedAfterMs;
+  const canWaive = !!shift && owed?.waiverMaxMs != null && elapsed <= owed.waiverMaxMs;
 
   /**
    * Read the phone's position for a punch. Returns null when the punch must not
@@ -186,7 +188,8 @@ export function ClockScreen() {
       <ScrollView testID="clock-screen" contentContainerStyle={{ paddingBottom: space.xxl }}>
         {/* The whole top of the screen takes the colour of where you stand. */}
         <View testID={`status-${status}`} style={[styles.field, { backgroundColor: field.bg, paddingTop: insets.top + space.md }]}>
-          <View style={styles.fieldTop}>
+          {/* With a logo, the location line goes under it, where it has the whole width. */}
+          <View style={company.logo ? styles.fieldTopStacked : styles.fieldTop}>
             <CompanyLogoPlate logo={company.logo} name={company.name} width={136} radius={6} />
             <Pressable
               accessibilityRole="button"
@@ -195,8 +198,10 @@ export function ClockScreen() {
               onPress={() => navigation.navigate('Site')}
               style={styles.gps}
             >
-              <MapPin color={field.fg} size={18} strokeWidth={2.5} />
-              <Text style={[styles.gpsText, { color: field.fg }]} numberOfLines={1}>{gpsLine}</Text>
+              <View style={{ flexShrink: 0 }}>
+                <MapPin color={field.fg} size={18} strokeWidth={2.5} />
+              </View>
+              <Text style={[styles.gpsText, { color: field.fg }]} numberOfLines={2}>{gpsLine}</Text>
             </Pressable>
           </View>
 
@@ -687,6 +692,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.kaolin },
   field: { paddingHorizontal: space.xl, paddingBottom: 64 },
   fieldTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
+  fieldTopStacked: { alignItems: 'flex-start', gap: space.sm },
   gps: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, minHeight: 44 },
   gpsText: { fontFamily: font.bodySemi, fontSize: 14, flexShrink: 1 },
   clockRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: -2 },

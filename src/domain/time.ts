@@ -393,5 +393,8 @@ export function reminderPlan(
     return { schedule: [lunchOverReminder(lunchEndAt(current))], cancel: DEADLINE_IDS };
   }
   if (current || !remindersOn) return nothing;
-  return { schedule: lunchReminders(shift.clockIn.at, rules), cancel: [LUNCH_OVER_ID] };
+  const schedule = lunchReminders(shift.clockIn.at, rules);
+  // Where the state sets no deadline there is nothing to schedule, so clear any a phone still holds
+  // from before the company's state changed: scheduling never replaces what is not scheduled again.
+  return { schedule, cancel: schedule.length ? [LUNCH_OVER_ID] : [LUNCH_OVER_ID, ...DEADLINE_IDS] };
 }

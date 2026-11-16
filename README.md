@@ -28,7 +28,7 @@ The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_
 
 - **Clock in and out with a GPS check.** A clock-in only goes through from inside the mine boundary. The location is read at the moment of the punch and never in the background.
 - **Lunch is one tap.** Tap Start lunch and that is it. Thirty minutes later the app puts you back on the clock by itself and sends a notification that lunch is over. Nobody clocks back in. Lunch is unpaid and comes off the day as 0.50.
-- **Lunch reminders.** The app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes.
+- **Lunch reminders, where the state sets a lunch deadline.** In California the app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes. In a state with no deadline there is no countdown; see [Rules by state](#rules-by-state).
 - **Hours the way the timesheet does them.** Minutes become hundredths of an hour (15 min = .25, 45 min = .75). 6:15 AM to 7:00 PM with a 30-minute lunch is 12.75 − 0.50 = **12.25**.
 - **Pay periods the way the company cuts its checks, or none.** A supervisor sets the schedule: every week, every two weeks, twice a month or once a month, paid a day of the month or so many days after the period ends. The clock screen then shows the hours so far and the next payday. A company that sets none sees hours by the workweek and the month. My hours splits each into straight time, overtime and double time, the same lines as the pay stub. Every figure is before taxes.
 - **What the check should come to.** Enter your hourly rate once and the app estimates gross pay for the period. The rate stays on your phone.
@@ -40,9 +40,9 @@ The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_
 
 **For supervisors, safety and payroll**
 
-- A live board: who is on site, who is close to their lunch deadline, which shifts have no clock-out, which units are red tagged, and which work-area conditions are still open.
+- A live board: who is on site, who is close to their lunch deadline (where the state sets one), which shifts have no clock-out, which units are red tagged, and which work-area conditions are still open.
 - Time corrections with a required reason and a permanent audit trail.
-- Payroll by employee for the pay period or any workweek: straight time, overtime and double time, with lunch flags for review.
+- Payroll by employee for the pay period, any workweek or any month: straight time, overtime and double time, with lunch flags for review where the state's meal rules call for them.
 - Paid leave: holiday, PTO and sick hours are entered by a supervisor, show as their own lines, and never count toward overtime.
 - Everyone's equipment cards and pre shift exams by day, each one opening as the paper it replaces.
 - Maintenance request queue: assign a request, start it, and complete it with the remarks and the time spent. Completing a request that came from an exam puts the date fixed on that exam.
@@ -76,7 +76,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 468 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel
+npm test           # 496 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -242,13 +242,13 @@ Only standards whose text has been checked are cited. The summaries in the app a
 | Area sheets | In the app (Crew → Area sheets), or `EXPO_PUBLIC_AREA_SHEETS` in `.env.local` |
 | Roster | In the app (Crew → Roster), or `EXPO_PUBLIC_ROSTER` in `.env.local` |
 | Standards and the steps after a Bad Order | `src/domain/standards.ts` |
-| Company name, state, place, logo and pay periods | In the app (More → Company), or `EXPO_PUBLIC_COMPANY` in `.env.local` |
+| Company name, state, place and pay periods | In the app (More → Company), or `EXPO_PUBLIC_COMPANY` in `.env.local` |
 | Lunch and overtime rules for each state | `src/domain/stateRules.ts`, built from `CA_RULES` and `FEDERAL_RULES` in `src/domain/time.ts` |
 | How pay periods and paydays are worked out, and bank holidays | `src/domain/payPeriod.ts` |
 | Boundary | `src/domain/site.ts`, or in the app |
 | Sample crew and fleet | `src/store/seed.ts` |
 | Colours and type | `src/theme/theme.ts` |
-| Company logo | `logo` in the company setting: an image address, or `us-mine` for the traced artwork in `src/components/logoArt.ts` |
+| Company logo | `logo` in `EXPO_PUBLIC_COMPANY` for now (an image address, or `us-mine` for the traced artwork in `src/components/logoArt.ts`); the company dashboard will take an upload |
 | MineMuster's logo, app icon, launch screen and favicon | The renders in `assets/brand/source`, then `python3 scripts/make-brand-assets.py` |
 
 The real roster and fleet can also be entered in the app: Crew → Roster → Add people → Paste a list.
@@ -300,7 +300,7 @@ Built with Expo (React Native) and TypeScript.
 - Make this repository private, or keep the real roster and the real area sheets in the backend only. Real employee names and the plant's own sheets must never be committed while it is public.
 - The mine's sign-off on which checklist lines are safety items, and on each area sheet as typed in.
 - Connect the backend and turn off preview mode (`EXPO_PUBLIC_DEMO=0`).
-- Set the real app identifiers in `app.json` (`ios.bundleIdentifier`, `android.package`). They are placeholders now and cannot be changed after the first release.
+- Keep the app identifiers in `app.json` as they are: `com.minemuster.app` for both `ios.bundleIdentifier` and `android.package`. They cannot be changed after the first release.
 - Apple Developer Program and Google Play Console accounts in the company's name.
 - The logo regenerated from the company's original artwork, with the company's sign-off on its use.
 - A privacy policy that covers the location check.

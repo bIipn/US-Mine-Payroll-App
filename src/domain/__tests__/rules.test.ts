@@ -88,6 +88,12 @@ describe('federal law: overtime past 40 hours a week, nothing by the day', () =>
     expect(reminderPlan(open, true, at(9, 7), FEDERAL_RULES).schedule).toEqual([]);
   });
 
+  it('clears lunch-deadline reminders a phone may still hold from another state', () => {
+    const open: Shift = { ...worked(9, 3, false), clockOut: undefined };
+    const plan = reminderPlan(open, true, at(9, 7), FEDERAL_RULES);
+    expect(plan.cancel).toEqual(expect.arrayContaining(['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0', 'lunch-end']));
+  });
+
   it('still tells the person when a lunch they took is over', () => {
     const lunching: Shift = { ...worked(9, 3, false), clockOut: undefined, lunches: [startedLunch({ at: at(9, 10) })] };
     expect(reminderPlan(lunching, true, at(9, 10, 5), FEDERAL_RULES).schedule.map((r) => r.id)).toEqual(['lunch-end']);

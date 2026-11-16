@@ -23,6 +23,7 @@ export function CrewScreen() {
   const sheets = useStore((s) => s.areaSheets);
 
   const rules = useRules();
+  const hasDeadline = rules.meal?.startByMs != null;
   const crew = useMemo(() => crewNow(employees, shifts, now, rules), [employees, shifts, now, rules]);
   const working = crew.filter((c) => c.presence === 'working').length;
   const atLunch = crew.filter((c) => c.presence === 'lunch').length;
@@ -45,14 +46,15 @@ export function CrewScreen() {
         <View style={styles.stats}>
           <Stat value={String(working)} label="Working" />
           <Stat value={String(atLunch)} label="At lunch" />
-          <Stat value={String(alerts.length)} label="Lunch due" tone={alerts.length ? 'bo' : undefined} />
+          {/* Only where the state sets a time a lunch must start by is there a lunch to be due. */}
+          {hasDeadline ? <Stat value={String(alerts.length)} label="Lunch due" tone={alerts.length ? 'bo' : undefined} /> : null}
           <Stat value={String(outOfService)} label="Units down" tone={outOfService ? 'bo' : undefined} />
         </View>
 
         <Panel title="Needs you now" flush>
           {nothing ? (
             <View style={{ padding: space.lg }}>
-              <Txt v="body" c={color.silica}>Nothing is waiting on you. Lunch deadlines, missing clock-outs, red-tagged units and open work-area conditions show up here.</Txt>
+              <Txt v="body" c={color.silica}>{`Nothing is waiting on you. ${hasDeadline ? 'Lunch deadlines, missing' : 'Missing'} clock-outs, red-tagged units and open work-area conditions show up here.`}</Txt>
             </View>
           ) : null}
           {alerts.map((line, i) => (

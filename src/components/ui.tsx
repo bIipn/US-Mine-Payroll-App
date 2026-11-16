@@ -728,6 +728,8 @@ const styles = StyleSheet.create({
   fieldError: { borderColor: color.red },
   input: {
     flex: 1,
+    // A web input will not shrink below its default width without this, and pushes the eye button out at 320 px.
+    minWidth: 0,
     minHeight: TAP - 4,
     fontFamily: font.body,
     fontSize: 18,

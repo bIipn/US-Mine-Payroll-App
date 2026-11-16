@@ -9,7 +9,8 @@ import { checkPaySchedule, describePaySchedule, nextPayday, type IfBankClosed, t
 import { rulesFor } from '../../domain/stateRules';
 import { mealSummary, overtimeSummary } from '../../domain/time';
 import type { ScreenProps } from '../../navigation/types';
-import { useStore } from '../../store/useStore';
+import { syncReminders } from '../../services/reminders';
+import { openShiftOf, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDate, ymd } from '../../util/format';
 
@@ -117,6 +118,9 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
       setError(result.error);
       return;
     }
+    // The lunch reminders already waiting on this phone follow the state, so bring them in line with the new one.
+    const { shifts, session, settings } = useStore.getState();
+    if (session) void syncReminders(openShiftOf(shifts, session.employeeId, Date.now()), settings.lunchReminders, rulesFor(next.state));
     showToast('Company details saved.');
     navigation.goBack();
   };
@@ -226,7 +230,7 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
                 <View style={{ flex: 1 }}>
                   <Field
                     testID="company-first-half"
-                    label="1st to 15th paid on the"
+                    label="1st–15th paid on the"
                     value={draft.firstHalf}
                     onChangeText={(firstHalf) => change({ firstHalf })}
                     keyboardType="number-pad"
@@ -235,7 +239,7 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
                 <View style={{ flex: 1 }}>
                   <Field
                     testID="company-second-half"
-                    label="16th to the end paid on the"
+                    label="16th–end paid on the"
                     value={draft.secondHalf}
                     onChangeText={(secondHalf) => change({ secondHalf })}
                     keyboardType="number-pad"
@@ -303,6 +307,6 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
 }
 
 const styles = StyleSheet.create({
-  pair: { flexDirection: 'row', gap: space.md },
+  pair: { flexDirection: 'row', alignItems: 'flex-end', gap: space.md },
   preview: { gap: 4, padding: space.md, backgroundColor: color.kaolin, borderRadius: 8 },
 });

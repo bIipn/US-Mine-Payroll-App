@@ -42,6 +42,8 @@ describe('MineMuster brand assets', () => {
 
   it('has a launch image with a transparent background, and a browser-tab icon', () => {
     expect(png('splash-icon.png').alpha).toBe(true);
+    // Android 12+ shows the launch image through a circle, so it gets the mark alone, twice as wide as tall.
+    expect(png('splash-icon-android.png')).toEqual({ width: 1200, height: 600, alpha: true });
     expect(png('favicon.png')).toMatchObject({ width: 48, height: 48 });
   });
 
