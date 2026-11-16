@@ -6,7 +6,7 @@ Any mine can use it. Each company sets its own name, the state whose hours rules
 
 It replaces the paper time sheet, the Operator Equipment Checklist card, the Pre Shift Exam sheets and the Maintenance Request form, and it does the hours math so nobody has to.
 
-![Time clock: sign in, GPS check, lunch countdown, and the day worked out as 12.75 − 0.50 = 12.25](docs/gallery-time-clock.png)
+![Time clock: sign in, a clock-in turned down away from the mine, the GPS check, lunch countdown, and the day worked out as 12.75 − 0.50 = 12.25](docs/gallery-time-clock.png)
 
 ![Pay periods: hours and next payday on the clock screen, the period split into straight time, overtime and double time, the pay estimate, a moved payday, crew payroll and paid leave](docs/gallery-pay-period.png)
 
@@ -16,11 +16,15 @@ It replaces the paper time sheet, the Operator Equipment Checklist card, the Pre
 
 ![Supervisor screens: crew board, who is on site, time log, corrections, safety log, maintenance requests, roster and the company settings](docs/gallery-supervisor.png)
 
+![In the pit and in the office: the no-signal strip, where the records stand, the PDF for an MSHA inspector, a payroll ID, the payroll hours file, the earning codes, and the safety forms without the time clock](docs/gallery-field-and-office.png)
+
 The Excel exports look like this ([payroll sample](docs/samples/Sample-Mining-Co-Payroll_sample.xlsx), [safety log sample](docs/samples/Sample-Mining-Co-Safety-Log_sample.xlsx)). The PDF for an inspector is made from the same records ([sample](docs/samples/Sample-Mining-Co-MSHA-Records_sample.pdf)):
 
 ![Payroll summary sheet in Excel: straight time, overtime, double time, holiday, PTO and sick hours by employee for the pay period](docs/excel-payroll.png)
 
 ![Safety log in Excel: each unit on a card as a row with the 21 lines of the checklist as columns, and the conditions found on pre shift exams with the date fixed](docs/excel-safety-log.png)
+
+![The first page of the PDF for an MSHA inspector: the equipment defects affecting safety with when each was corrected, then the pre-use equipment inspections, each signed with its date and time](docs/inspector-pdf.png)
 
 ## What it does
 
