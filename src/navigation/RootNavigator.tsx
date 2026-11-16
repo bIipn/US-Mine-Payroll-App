@@ -20,6 +20,7 @@ import { AreaExamScreen } from '../screens/exam/AreaExamScreen';
 import { HoursScreen } from '../screens/hours/HoursScreen';
 import { ShiftDetailScreen } from '../screens/hours/ShiftDetailScreen';
 import { MoreScreen } from '../screens/more/MoreScreen';
+import { CompanyScreen } from '../screens/more/CompanyScreen';
 import { MyRecordsScreen } from '../screens/more/MyRecordsScreen';
 import { SiteScreen } from '../screens/more/SiteScreen';
 import { StandardsScreen } from '../screens/more/StandardsScreen';
@@ -129,6 +130,7 @@ export function RootNavigator() {
           <Stack.Screen name="PayrollEmployee" component={PayrollEmployeeScreen} />
           <Stack.Screen name="Roster" component={RosterScreen} />
           <Stack.Screen name="Fleet" component={FleetScreen} />
+          <Stack.Screen name="Company" component={CompanyScreen} />
         </>
       )}
     </Stack.Navigator>

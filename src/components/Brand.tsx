@@ -1,9 +1,10 @@
 import React from 'react';
-import { View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 
+import type { CompanyLogo } from '../domain/company';
 import type { AuthProvider } from '../domain/types';
-import { color } from '../theme/theme';
+import { color, font } from '../theme/theme';
 import { LOGO_ART } from './logoArt';
 
 /**
@@ -35,6 +36,41 @@ export function LogoPlate({ width, radius = 8 }: { width: number; radius?: numbe
       style={{ alignSelf: 'flex-start', width, backgroundColor: color.white, borderRadius: radius, overflow: 'hidden' }}
     >
       <Logo width={width} />
+    </View>
+  );
+}
+
+/**
+ * The company's own logo on a white plate, where the app shows it: the top of
+ * the clock screen and the sign-in screen. A company with no logo shows
+ * nothing here, and the screen keeps its plain colour.
+ */
+export function CompanyLogoPlate({ logo, name, width, radius = 8 }: {
+  logo?: CompanyLogo;
+  name: string;
+  width: number;
+  radius?: number;
+}) {
+  if (!logo) return null;
+  if ('art' in logo) return <LogoPlate width={width} radius={radius} />;
+  return (
+    <View
+      testID="brand-logo"
+      accessibilityRole="image"
+      accessibilityLabel={name || 'Company logo'}
+      style={{ alignSelf: 'flex-start', width, backgroundColor: color.white, borderRadius: radius, overflow: 'hidden', padding: width * 0.04 }}
+    >
+      <Image source={{ uri: logo.uri }} resizeMode="contain" style={{ width: width * 0.92, height: width * 0.3 }} />
+    </View>
+  );
+}
+
+/** MineMuster's own name, for the sign-in screen of a company with no logo. */
+export function Wordmark() {
+  return (
+    <View testID="minemuster-wordmark" accessibilityRole="header" accessibilityLabel="MineMuster" style={{ alignSelf: 'flex-start', gap: 6 }}>
+      <Text style={{ fontFamily: font.condBold, fontSize: 52, lineHeight: 54, color: color.white, letterSpacing: 0.5 }}>MineMuster</Text>
+      <View style={{ height: 6, width: 72, backgroundColor: color.yellow, borderRadius: 3 }} />
     </View>
   );
 }

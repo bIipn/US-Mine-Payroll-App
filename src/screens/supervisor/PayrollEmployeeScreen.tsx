@@ -1,15 +1,14 @@
-import React, { useState } from 'react';
+import React from 'react';
 
 import { PeriodSheet } from '../../components/PeriodSheet';
 import { Page, Segmented } from '../../components/ui';
+import { useSpans } from '../../components/useSpans';
 import { WeekSheet } from '../../components/WeekSheet';
-import { payPeriodOf } from '../../domain/payPeriod';
+import { spanOf, SPAN_NAME, type SpanKind } from '../../domain/spans';
 import type { ScreenProps } from '../../navigation/types';
 import { useStore } from '../../store/useStore';
-import { fullName, startOfWeek } from '../../util/format';
+import { fullName } from '../../util/format';
 import { useNow } from '../../util/hooks';
-
-type View_ = 'period' | 'week';
 
 /**
  * One employee's hours for payroll. A supervisor can add holiday, PTO and sick
@@ -18,26 +17,21 @@ type View_ = 'period' | 'week';
 export function PayrollEmployeeScreen({ navigation, route }: ScreenProps<'PayrollEmployee'>) {
   const now = useNow(60_000);
   const employee = useStore((s) => s.employees.find((e) => e.id === route.params.employeeId));
-  const startsOn = useStore((s) => s.settings.workweekStartsOn);
-  const [view, setView] = useState<View_>(route.params.view);
-  const [period, setPeriod] = useState(() => payPeriodOf(route.params.start));
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(route.params.start, startsOn));
+  // Opens on the same run of days the payroll list was showing.
+  const { views, view, setView, span, setSpan, options } = useSpans(route.params.start, route.params.view);
   if (!employee) return null;
   return (
     <Page testID="payroll-employee" title={fullName(employee)} sub={employee.title} onBack={navigation.goBack}>
-      <Segmented<View_>
+      <Segmented<SpanKind>
         testID="employee-view"
         value={view}
         onChange={setView}
-        options={[
-          { value: 'period', label: 'Pay period' },
-          { value: 'week', label: 'Workweek' },
-        ]}
+        options={views.map((kind) => ({ value: kind, label: SPAN_NAME[kind] }))}
       />
-      {view === 'period' ? (
-        <PeriodSheet employeeId={employee.id} period={period} onPeriod={setPeriod} now={now} canAddLeave />
+      {view === 'week' ? (
+        <WeekSheet employeeId={employee.id} weekStart={span.start} onWeek={(start) => setSpan(spanOf('week', start, options))} now={now} />
       ) : (
-        <WeekSheet employeeId={employee.id} weekStart={weekStart} onWeek={setWeekStart} now={now} />
+        <PeriodSheet employeeId={employee.id} span={span} onSpan={setSpan} now={now} canAddLeave />
       )}
     </Page>
   );

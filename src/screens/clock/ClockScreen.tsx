@@ -5,13 +5,13 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
-import { LogoPlate } from '../../components/Brand';
+import { CompanyLogoPlate } from '../../components/Brand';
 import { SiteMap } from '../../components/SiteMap';
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Divider, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
-import { DEMO_MODE } from '../../config';
+import { APP_NAME, DEMO_MODE } from '../../config';
 import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
-import { nextPayday, payPeriodOf } from '../../domain/payPeriod';
+import { monthOf, nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
 import { CA_RULES, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals } from '../../domain/time';
 import type { DemoLocation, GeoStamp, MealNote, Shift } from '../../domain/types';
@@ -22,6 +22,7 @@ import { syncReminders } from '../../services/reminders';
 import { openLogs, openShiftOf, staleShiftOf, useMe, useStore } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
 import {
+  addDays,
   clockParts,
   fmtCountdown,
   fmtDate,
@@ -34,6 +35,7 @@ import {
   fullName,
   MIN,
   startOfDay,
+  startOfWeek,
 } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
@@ -57,6 +59,7 @@ export function ClockScreen() {
   const me = useMe();
   const shifts = useStore((s) => s.shifts);
   const settings = useStore((s) => s.settings);
+  const company = settings.company;
   const equipment = useStore((s) => s.equipment);
   const opLogs = useStore((s) => s.opLogs);
   const actions = useStore.getState();
@@ -181,7 +184,7 @@ export function ClockScreen() {
         {/* The whole top of the screen takes the colour of where you stand. */}
         <View testID={`status-${status}`} style={[styles.field, { backgroundColor: field.bg, paddingTop: insets.top + space.md }]}>
           <View style={styles.fieldTop}>
-            <LogoPlate width={136} radius={6} />
+            <CompanyLogoPlate logo={company.logo} name={company.name} width={136} radius={6} />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`${gpsLine}. Open the boundary map.`}
@@ -427,32 +430,47 @@ function AssignedToMe({ employeeId }: { employeeId: string }) {
   );
 }
 
+/**
+ * Hours so far, a tap from the person's hours. With the company's pay period,
+ * the period and the next payday; without one, this week and this month.
+ */
 function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number }) {
   const navigation = useNavigation();
   const shifts = useStore((s) => s.shifts);
   const leave = useStore((s) => s.leave);
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
+  const pay = useStore((s) => s.settings.company.pay);
   // The figures move by the minute, so there is no need to redo them every second.
   const minute = Math.floor(now / MIN);
-  const { period, total, payday } = useMemo(() => {
+  const line = useMemo(() => {
     const at = minute * MIN;
-    const current = payPeriodOf(at);
-    const range = computeRange(
-      shifts.filter((s) => s.employeeId === employeeId),
-      leave.filter((l) => l.employeeId === employeeId),
-      current.start,
-      current.end,
-      at,
-      { weekStartsOn: startsOn },
-    );
-    return { period: current, total: range.total, payday: nextPayday(at).payDate };
-  }, [shifts, leave, employeeId, startsOn, minute]);
+    const total = (start: number, end: number) =>
+      computeRange(
+        shifts.filter((s) => s.employeeId === employeeId),
+        leave.filter((l) => l.employeeId === employeeId),
+        start,
+        end,
+        at,
+        { weekStartsOn: startsOn },
+      ).total;
+    if (pay) {
+      const current = payPeriodOf(at, pay);
+      return { label: `Pay period ${fmtRange(current.start, current.lastDay)}`, hours: total(current.start, current.end), payday: nextPayday(at, pay).payDate };
+    }
+    const week = startOfWeek(at, startsOn);
+    const month = monthOf(at);
+    return { label: 'This week', hours: total(week, addDays(week, 7)), month: total(month.start, month.end) };
+  }, [shifts, leave, employeeId, startsOn, minute, pay]);
 
+  const said =
+    line.payday != null
+      ? `${line.label}, ${fmtHrs(line.hours)} hours so far. Next payday ${fmtDate(line.payday)}. Open my hours.`
+      : `${fmtHrs(line.hours)} hours this week and ${fmtHrs(line.month ?? 0)} this month. Open my hours.`;
   return (
     <Pressable
       testID="pay-period-line"
       accessibilityRole="button"
-      accessibilityLabel={`Pay period ${fmtRange(period.start, period.lastDay)}, ${fmtHrs(total)} hours so far. Next payday ${fmtDate(payday)}. Open my hours.`}
+      accessibilityLabel={said}
       onPress={() => {
         haptic.tap();
         navigation.navigate('Hours');
@@ -460,13 +478,20 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
       style={({ pressed }) => [styles.payLine, pressed && { backgroundColor: color.kaolin }]}
     >
       <View style={{ flex: 1 }}>
-        <Txt v="small" c={color.silica}>Pay period {fmtRange(period.start, period.lastDay)}</Txt>
-        <Txt v="numSm" testID="pay-period-hours">{fmtHrs(total)} hours</Txt>
+        <Txt v="small" c={color.silica}>{line.label}</Txt>
+        <Txt v="numSm" testID="pay-period-hours">{fmtHrs(line.hours)} hours</Txt>
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Txt v="small" c={color.silica}>{payday === startOfDay(now) ? 'Payday is today' : 'Next payday'}</Txt>
-        <Txt v="strong" testID="next-payday">{fmtDate(payday)}</Txt>
-      </View>
+      {line.payday != null ? (
+        <View style={{ alignItems: 'flex-end' }}>
+          <Txt v="small" c={color.silica}>{line.payday === startOfDay(now) ? 'Payday is today' : 'Next payday'}</Txt>
+          <Txt v="strong" testID="next-payday">{fmtDate(line.payday)}</Txt>
+        </View>
+      ) : (
+        <View style={{ alignItems: 'flex-end' }}>
+          <Txt v="small" c={color.silica}>This month</Txt>
+          <Txt v="strong" testID="month-hours">{fmtHrs(line.month ?? 0)} hours</Txt>
+        </View>
+      )}
       <ChevronRight color={color.silicaLight} size={22} />
     </Pressable>
   );
@@ -581,7 +606,7 @@ function ProblemBody({ problem }: { problem: Problem }) {
   } else if (problem.kind === 'mocked') {
     text = 'The phone reported a simulated location. Turn off any mock-location or GPS-changing app and try again. This attempt was logged.';
   } else if (problem.kind === 'denied') {
-    text = 'US Mine Crew reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.';
+    text = `${APP_NAME} reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.`;
   } else {
     text = 'Check that Location Services are on, step out into the open and try again.';
   }

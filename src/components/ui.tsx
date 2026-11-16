@@ -371,29 +371,32 @@ export function Segmented<T extends string>({ options, value, onChange, testID }
   );
 }
 
-/** A side-scrolling strip of filters. */
-export function Chips<T extends string>({ options, value, onChange }: {
-  options: { value: T; label: string }[]; value: T; onChange: (value: T) => void;
+/** A side-scrolling strip of filters. `wrap` lays every choice out on lines instead, so none is out of sight. */
+export function Chips<T extends string>({ options, value, onChange, testID, wrap }: {
+  options: { value: T; label: string }[]; value: T; onChange: (value: T) => void; testID?: string; wrap?: boolean;
 }) {
+  const chips = options.map((option) => {
+    const on = option.value === value;
+    return (
+      <Pressable
+        key={option.value}
+        testID={testID ? `${testID}-${option.value}` : undefined}
+        accessibilityRole="button"
+        accessibilityState={{ selected: on }}
+        onPress={() => {
+          haptic.tap();
+          onChange(option.value);
+        }}
+        style={[styles.chip, on && styles.chipOn]}
+      >
+        <Text style={[VARIANT.smallStrong, { color: on ? color.white : color.ink }]}>{option.label}</Text>
+      </Pressable>
+    );
+  });
+  if (wrap) return <View style={styles.chipsWrap}>{chips}</View>;
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-      {options.map((option) => {
-        const on = option.value === value;
-        return (
-          <Pressable
-            key={option.value}
-            accessibilityRole="button"
-            accessibilityState={{ selected: on }}
-            onPress={() => {
-              haptic.tap();
-              onChange(option.value);
-            }}
-            style={[styles.chip, on && styles.chipOn]}
-          >
-            <Text style={[VARIANT.smallStrong, { color: on ? color.white : color.ink }]}>{option.label}</Text>
-          </Pressable>
-        );
-      })}
+      {chips}
     </ScrollView>
   );
 }
@@ -746,6 +749,7 @@ const styles = StyleSheet.create({
   segmentNext: { borderLeftWidth: 2, borderLeftColor: color.ink },
   segmentOn: { backgroundColor: color.ink },
   chips: { gap: space.sm, paddingRight: space.xl },
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   chip: {
     minHeight: 44,
     paddingHorizontal: space.lg,

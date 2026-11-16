@@ -48,7 +48,7 @@ js = js.replace(/<\/script/gi, '<\\/script');
 
 html = html
   .replace(/<link rel="icon"[^>]*>/, '')
-  .replace(/<title>[^<]*<\/title>/, '<title>US Mine Crew preview</title>')
+  .replace(/<title>[^<]*<\/title>/, '<title>MineMuster preview</title>')
   .replace(tag[0], () => `<script>${js}</script>`);
 
 fs.mkdirSync(path.dirname(out), { recursive: true });

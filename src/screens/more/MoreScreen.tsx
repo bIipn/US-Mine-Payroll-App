@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { Banknote, BookOpen, ClipboardList, LogOut, MapPin, RotateCcw, Scale } from '../../components/icons';
+import { Banknote, BookOpen, Building2, ClipboardList, LogOut, MapPin, RotateCcw, Scale } from '../../components/icons';
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -100,6 +100,19 @@ export function MoreScreen() {
             onChange={toggleReminders}
           />
         </Panel>
+
+        {me.role === 'supervisor' ? (
+          <Panel title="Company" flush>
+            <Row
+              testID="more-company"
+              left={<Building2 color={color.ink} size={24} />}
+              title={settings.company.name || 'Company details'}
+              sub={settings.company.name ? 'Name, state and pay periods' : 'Give the company’s name, state and pay periods'}
+              chevron
+              onPress={() => navigation.navigate('Company')}
+            />
+          </Panel>
+        ) : null}
 
         {me.role === 'supervisor' ? (
           <Panel title="Checklist settings" flush>

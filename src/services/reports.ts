@@ -1,11 +1,10 @@
-import { COMPANY } from '../config';
 import { AREA_CONDITIONS, examCounts, examFindings, examResult, rowAnswer, shiftLabel } from '../domain/areaExam';
 import { cardsBetween } from '../domain/checklistCard';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { standard } from '../domain/standards';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, findItem, isHazard, onTheCard } from '../domain/templates';
 import { backFromLunchAt, FLAG_HELP, FLAG_LABEL, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
-import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Shift } from '../domain/types';
+import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Settings, Shift } from '../domain/types';
 import { addDays, DAY, fmtDateTime, fmtDayShort, fmtWeekday, HOUR, startOfDay, ymd } from '../util/format';
 import { buildWorkbook, type CellInput, type Sheet } from './xlsx';
 
@@ -23,7 +22,15 @@ export interface ReportData {
   opLogs: OperatingLog[];
   exams: AreaExam[];
   mrfs: Mrf[];
+  /** The company's name heads the sheets and names the file. The workweek is the one overtime is figured on. */
+  settings?: Pick<Settings, 'company' | 'workweekStartsOn'>;
 }
+
+/** "Sample Mining Co." -> "Sample-Mining-Co-", for a file name. Nothing for a company with no name yet. */
+const filePrefix = (data: ReportData) => {
+  const name = (data.settings?.company.name ?? '').replace(/[.']/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return name ? `${name}-` : '';
+};
 
 export interface Report {
   name: string;
@@ -73,7 +80,7 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
   const lastDay = addDays(periodEnd, -1);
   const people = data.employees.filter((e) => e.active).sort(byName);
   const employeeOf = new Map(data.employees.map((e) => [e.id, e]));
-  const rows = computePayroll(people, data.shifts, data.leave, periodStart, periodEnd, now);
+  const rows = computePayroll(people, data.shifts, data.leave, periodStart, periodEnd, now, { weekStartsOn: data.settings?.workweekStartsOn ?? 0 });
   const totals = sumPayroll(rows);
   const period = `${fmtDayShort(periodStart)} to ${fmtDayShort(lastDay)}, ${new Date(lastDay).getFullYear()}`;
   const paid = range.payDate
@@ -83,7 +90,7 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
 
   const summary: Sheet = {
     name: 'Payroll Summary',
-    title: `${COMPANY} payroll summary`,
+    title: data.settings?.company.name ? `${data.settings.company.name} payroll summary` : 'Payroll summary',
     subtitle: stamp,
     columns: [
       { header: 'Employee', width: 26 }, { header: 'Job title', width: 30 }, { header: 'Days worked', width: 12 },
@@ -210,7 +217,7 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
     ),
   };
 
-  return finish(`US-Mine-Payroll_${ymd(periodStart)}_to_${ymd(lastDay)}.xlsx`, [summary, daily, paidLeave, punches, flags]);
+  return finish(`${filePrefix(data)}Payroll_${ymd(periodStart)}_to_${ymd(lastDay)}.xlsx`, [summary, daily, paidLeave, punches, flags]);
 }
 
 /**
@@ -474,7 +481,7 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
       }),
   };
 
-  return finish(`US-Mine-Safety-Log_${ymd(from)}_to_${ymd(lastDay)}.xlsx`, [
+  return finish(`${filePrefix(data)}Safety-Log_${ymd(from)}_to_${ymd(lastDay)}.xlsx`, [
     checklists, defects, usage, examSheet, conditionSheet, lineSheet, requests, onSite,
   ]);
 }

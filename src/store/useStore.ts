@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW } from '../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, STARTING_COMPANY } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
+import { checkCompany, type Company } from '../domain/company';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
@@ -198,6 +199,8 @@ interface Actions {
   setDemoLocation: (mode: DemoLocation) => void;
   setLunchReminders: (on: boolean) => void;
   setAllowSectionAllOk: (on: boolean) => void;
+  /** Supervisors only. */
+  setCompany: (company: Company) => Result;
 
   addLeave: (input: LeaveInput) => Result;
   removeLeave: (leaveId: string) => void;
@@ -243,7 +246,7 @@ const initialData = (): Data => ({
   ...emptyData(),
   session: null,
   denied: [],
-  settings: defaultSettings(DEMO_MODE),
+  settings: defaultSettings(DEMO_MODE, STARTING_COMPANY),
   seededAt: null,
 });
 
@@ -280,7 +283,7 @@ export const useStore = create<Store>()(
       };
 
       const notOnRoster = (first: string, last: string) =>
-        `We couldn't find "${clean(first)} ${clean(last)}" on the US Mine roster. Check the spelling, or see your supervisor to be added.`;
+        `We couldn't find "${clean(first)} ${clean(last)}" on the roster. Check the spelling, or see your supervisor to be added.`;
 
       const signedOut = { ok: false as const, error: 'You are signed out.' };
       const isSupervisor = () => {
@@ -915,6 +918,16 @@ export const useStore = create<Store>()(
         setDemoLocation: (demoLocation) => set({ settings: { ...get().settings, demoLocation } }),
         setLunchReminders: (lunchReminders) => set({ settings: { ...get().settings, lunchReminders } }),
         setAllowSectionAllOk: (allowSectionAllOk) => set({ settings: { ...get().settings, allowSectionAllOk } }),
+        setCompany: (company) => {
+          if (!get().session) return signedOut;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the company details.' };
+          const next: Company = { ...company, name: clean(company.name), place: company.place && clean(company.place) ? clean(company.place) : undefined };
+          if (!next.place) delete next.place;
+          const problem = checkCompany(next);
+          if (problem) return { ok: false, error: problem };
+          set({ settings: { ...get().settings, company: next } });
+          return { ok: true };
+        },
 
         // ---- Paid leave and the pay estimate ----------------------------------------------
         addLeave: ({ employeeId, day, type, hours, note }) => {
@@ -971,7 +984,7 @@ export const useStore = create<Store>()(
       // A build without them keeps its own records somewhere else, so it never opens onto that.
       name: HOLDS_SAMPLES ? 'us-mine-crew' : 'us-mine-crew-records',
       version: STATE_VERSION,
-      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES) as unknown as Store,
+      migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
       partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt }) => ({
         session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt,

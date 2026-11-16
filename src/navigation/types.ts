@@ -29,9 +29,10 @@ export type RootStackParamList = {
   MrfQueue: undefined;
   Payroll: undefined;
   /** `start` is any day inside the pay period or workweek to open on. */
-  PayrollEmployee: { employeeId: string; start: number; view: 'period' | 'week' };
+  PayrollEmployee: { employeeId: string; start: number; view: 'period' | 'week' | 'month' };
   Roster: undefined;
   Fleet: undefined;
+  Company: undefined;
 };
 
 export type TabParamList = {

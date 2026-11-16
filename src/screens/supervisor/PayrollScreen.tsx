@@ -1,26 +1,25 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { LEAVE_LABEL, LEAVE_TYPES } from '../../components/DayTable';
 import { ChevronLeft, ChevronRight, FileSpreadsheet } from '../../components/icons';
-import { paydayLine } from '../../components/PeriodSheet';
+import { paydayLine, workweekLine } from '../../components/PeriodSheet';
 import { Button, IconButton, Page, Segmented, Stat, Tag, Txt } from '../../components/ui';
-import { nextPayPeriod, payPeriodOf, previousPayPeriod } from '../../domain/payPeriod';
+import { useSpans } from '../../components/useSpans';
 import { computePayroll, sumPayroll } from '../../domain/payroll';
+import { isCurrentSpan, spanLabel, stepSpan, SPAN_NAME, type SpanKind } from '../../domain/spans';
 import type { ScreenProps } from '../../navigation/types';
 import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
 import { useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { addDays, fmtHrs, fmtRange, listName, peopleCount, startOfWeek } from '../../util/format';
+import { fmtHrs, listName, peopleCount } from '../../util/format';
 import { useNow } from '../../util/hooks';
-
-type View_ = 'period' | 'week';
 
 /**
  * Hours for payroll, by employee, in the same lines as the pay stub: straight
- * time, overtime, double time, and paid leave. By pay period (the 1st to the
- * 15th and the 16th to the end of the month) or by workweek.
+ * time, overtime, double time, and paid leave. By the company's pay period when
+ * it has set one, by workweek, or by month.
  */
 export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
   const now = useNow(60_000);
@@ -28,13 +27,10 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
   const shifts = useStore((s) => s.shifts);
   const leave = useStore((s) => s.leave);
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
-  const [view, setView] = useState<View_>('period');
-  const [period, setPeriod] = useState(() => payPeriodOf(Date.now()));
-  const [week, setWeek] = useState(() => startOfWeek(Date.now(), startsOn));
-
-  const start = view === 'period' ? period.start : week;
-  const end = view === 'period' ? period.end : addDays(week, 7);
-  const isCurrent = view === 'period' ? period.start >= payPeriodOf(now).start : week >= startOfWeek(now, startsOn);
+  const { views, view, setView, span, setSpan, options } = useSpans(now);
+  const { start, end } = span;
+  const isCurrent = isCurrentSpan(span, now, options);
+  const which = view === 'period' ? 'pay period' : view === 'week' ? 'workweek' : 'month';
 
   const rows = useMemo(() => {
     const people = employees
@@ -47,8 +43,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
 
   const step = (direction: 1 | -1) => {
     if (direction === 1 && isCurrent) return;
-    if (view === 'period') setPeriod(direction === 1 ? nextPayPeriod(period) : previousPayPeriod(period));
-    else setWeek(addDays(week, 7 * direction));
+    setSpan(stepSpan(span, direction, options));
   };
 
   return (
@@ -65,27 +60,24 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
           kind="yellow"
           onPress={() =>
             exportReport(() =>
-              payrollReport({ ...useStore.getState() }, { start, end, payDate: view === 'period' ? period.payDate : undefined }, Date.now()),
+              payrollReport({ ...useStore.getState() }, { start, end, payDate: span.payDate }, Date.now()),
             )
           }
         />
       }
     >
-      <Segmented<View_>
+      <Segmented<SpanKind>
         testID="payroll-view"
         value={view}
         onChange={setView}
-        options={[
-          { value: 'period', label: 'Pay period' },
-          { value: 'week', label: 'Workweek' },
-        ]}
+        options={views.map((kind) => ({ value: kind, label: SPAN_NAME[kind] }))}
       />
       <View style={styles.nav}>
         <IconButton testID="period-prev" icon={ChevronLeft} label="Earlier" bg={color.paper} onPress={() => step(-1)} />
         <View style={{ flex: 1, alignItems: 'center' }}>
-          <Txt v="h3" testID="period-label">{fmtRange(start, addDays(end, -1))}</Txt>
+          <Txt v="h3" testID="period-label">{spanLabel(span)}</Txt>
           <Txt v="small" c={color.silica} center testID="period-payday">
-            {view === 'period' ? paydayLine(period, now) : isCurrent ? 'This workweek so far' : 'Sunday to Saturday'}
+            {view === 'week' ? (isCurrent ? 'This workweek so far' : workweekLine(startsOn)) : paydayLine(span, now, isCurrent)}
           </Txt>
         </View>
         <View style={{ opacity: isCurrent ? 0.3 : 1 }}>
@@ -162,7 +154,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
       </View>
 
       <Txt v="small" c={color.silica}>
-        ST is straight time, OT is time-and-a-half, DT is double time. Overtime follows California rules: over 8 hours a day or 40 straight-time hours in a workweek is OT, over 12 a day is DT, with the seventh-day rule. It is figured by the workweek, then added up for the days in the pay period. Lunch flags are for review and are never paid or docked automatically.
+        ST is straight time, OT is time-and-a-half, DT is double time. Overtime follows California rules: over 8 hours a day or 40 straight-time hours in a workweek is OT, over 12 a day is DT, with the seventh-day rule. It is figured by the workweek, then added up for the days in the {which}. Hours are before taxes. Lunch flags are for review and are never paid or docked automatically.
       </Txt>
     </Page>
   );

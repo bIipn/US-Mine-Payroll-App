@@ -1,6 +1,8 @@
-# US Mine Crew
+# MineMuster
 
-Time clock, the equipment checklist, the pre shift exam of each work area, maintenance requests and payroll hours for the crew at the U.S. Mine Corp. plant in Ione, California. One codebase builds the iPhone app, the Android app and a web version.
+Time clock, the equipment checklist, the pre shift exam of each work area, maintenance requests and payroll hours for a mine crew. One codebase builds the iPhone app, the Android app and a web version.
+
+Any mine can use it. Each company sets its own name, the state whose hours rules apply, its logo and its pay periods (or none). It was built first from the paper forms of U.S. Mine Corp.'s plant in Ione, California, and that company's version is kept as a company setting in a private build.
 
 It replaces the paper time sheet, the Operator Equipment Checklist card, the Pre Shift Exam sheets and the Maintenance Request form, and it does the hours math so nobody has to.
 
@@ -28,7 +30,7 @@ The Excel exports look like this ([payroll sample](docs/samples/US-Mine-Payroll_
 - **Lunch is one tap.** Tap Start lunch and that is it. Thirty minutes later the app puts you back on the clock by itself and sends a notification that lunch is over. Nobody clocks back in. Lunch is unpaid and comes off the day as 0.50.
 - **Lunch reminders.** The app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes.
 - **Hours the way the timesheet does them.** Minutes become hundredths of an hour (15 min = .25, 45 min = .75). 6:15 AM to 7:00 PM with a 30-minute lunch is 12.75 − 0.50 = **12.25**.
-- **Pay periods the way the checks are cut.** The 1st to the 15th is paid on the 20th, and the 16th to the end of the month is paid on the 5th. The clock screen shows the hours so far and the next payday. My hours splits the period into straight time, overtime and double time, the same lines as the pay stub.
+- **Pay periods the way the company cuts its checks, or none.** A supervisor sets the schedule: every week, every two weeks, twice a month or once a month, paid a day of the month or so many days after the period ends. The clock screen then shows the hours so far and the next payday. A company that sets none sees hours by the workweek and the month. My hours splits each into straight time, overtime and double time, the same lines as the pay stub. Every figure is before taxes.
 - **What the check should come to.** Enter your hourly rate once and the app estimates gross pay for the period. The rate stays on your phone.
 - **The Operator Equipment Checklist, the same card for every machine.** The 21 lines of the paper card, in its order and its wording, marked OK, BO or N/A with one big tap each. It takes the equipment hours at the start and the end, the gallons added and the comments. Each line shows the MSHA standard behind it, with the matching OSHA rule.
 - **Your card for the day.** Every unit you check gets a numbered column, laid out the way the paper is, with the total daily hours worked filled in from the time clock.
@@ -74,7 +76,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 420 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
+npm test           # 468 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -181,13 +183,23 @@ Overtime follows California rules: over 8 hours in a day or 40 straight-time hou
 
 ## Pay periods and paydays
 
+A supervisor sets them on More → Company. The sample company pays twice a month:
+
 | Pay period | Paid on |
 |---|---|
 | The 1st to the 15th | The 20th of the same month |
 | The 16th to the end of the month | The 5th of the next month |
 
-- **A pay date on a weekend or bank holiday moves to the banking day before it.** Saturday, December 5, 2026 becomes Friday, December 4. Bank holidays are the Federal Reserve's; a holiday on a Sunday closes banks the Monday after. This is the app's assumption until payroll confirms which way the date moves. The schedule is `PAY_SCHEDULE` in `src/domain/payPeriod.ts`.
-- **Overtime is figured by the workweek, Sunday to Saturday,** then added up for the days that fall in the pay period. A workweek that straddles two pay periods is worked out whole, and each day's hours go to the period the day is in.
+| Schedule | Periods | Paid |
+|---|---|---|
+| Every week | Seven days from any first day the company gives | So many days after the last day |
+| Every two weeks | Fourteen days from that first day | So many days after the last day |
+| Twice a month | The 1st to the 15th, the 16th to the end of the month | A day of the month for each half, or days after |
+| Once a month | The 1st to the last day | A day of the month, or days after |
+| No pay periods | Hours are shown by the workweek and the month | |
+
+- **A pay date on a weekend or bank holiday moves the way the company says:** to the banking day before, to the banking day after, or not at all. Saturday, December 5, 2026 becomes Friday, December 4 when it moves back. Bank holidays are the Federal Reserve's; a holiday on a Sunday closes banks the Monday after. The rules are in `src/domain/payPeriod.ts`.
+- **Overtime is figured by the workweek,** then added up for the days that fall in the pay period or the month. A workweek that straddles two pay periods is worked out whole, and each day's hours go to the period the day is in.
 - **Hours come in the pay stub's lines:** ST (straight time), OT (1.5 times), DT (2 times), and holiday, PTO and sick hours. Paid leave is paid at straight time and never counts toward overtime.
 - **The pay estimate** is hours times the rate the person entered, line by line, each line rounded to the cent: ST at the rate, OT at 1.5 times, DT at 2 times, leave at the rate. It is gross pay before taxes and deductions. The pay stub is the official figure.
 
@@ -219,18 +231,32 @@ Only standards whose text has been checked are cited. The summaries in the app a
 | Area sheets | In the app (Crew → Area sheets), or `EXPO_PUBLIC_AREA_SHEETS` in `.env.local` |
 | Roster | In the app (Crew → Roster), or `EXPO_PUBLIC_ROSTER` in `.env.local` |
 | Standards and the steps after a Bad Order | `src/domain/standards.ts` |
+| Company name, state, place, logo and pay periods | In the app (More → Company), or `EXPO_PUBLIC_COMPANY` in `.env.local` |
 | Lunch and overtime rules | `CA_RULES` in `src/domain/time.ts` |
-| Pay periods, paydays and bank holidays | `src/domain/payPeriod.ts` |
+| How pay periods and paydays are worked out, and bank holidays | `src/domain/payPeriod.ts` |
 | Boundary | `src/domain/site.ts`, or in the app |
 | Sample crew and fleet | `src/store/seed.ts` |
 | Colours and type | `src/theme/theme.ts` |
-| Company logo | `src/components/logoArt.ts`, drawn by `Logo` in `src/components/Brand.tsx` |
+| Company logo | `logo` in the company setting: an image address, or `us-mine` for the traced artwork in `src/components/logoArt.ts` |
 
 The real roster and fleet can also be entered in the app: Crew → Roster → Add people → Paste a list.
 
+## The company setting
+
+A build can name its company in `.env.local`, as JSON. A fresh install starts with it, and a supervisor can change it in the app:
+
+```
+EXPO_PUBLIC_COMPANY='{"name": "Example Aggregates Co.", "state": "NV", "place": "Fallon, Nevada",
+  "pay": {"frequency": "biweekly", "firstDay": "2026-11-01", "payday": {"daysAfter": 6}, "ifBankClosed": "before"}}'
+```
+
+`frequency` is `weekly`, `biweekly`, `semimonthly` or `monthly`; `payday` is `{"daysAfter": n}` or `{"dayOfMonth": [20, 5]}` (one day for each half of a twice-a-month schedule); `ifBankClosed` is `before`, `after` or `stay`. Leave out `pay` for no pay periods. A build that names no company starts with the made-up Sample Mining Co. when it has the sample crew, and with nothing filled in when it does not.
+
 ## The logo
 
-The sign-in screen, the Clock screen, the app icon and the launch screen carry US Mine Corporation's own logo: the navy lettering over the gold stepped rule. It is always shown on white, in its own colours and proportions.
+A company's logo sits on a white plate at the top of the Clock screen and on the sign-in screen, in its own colours and proportions. A company with no logo shows none: the Clock screen keeps its plain colour, and the sign-in screen shows the MineMuster name.
+
+U.S. Mine Corp.'s logo is built in as traced artwork (`"logo": "us-mine"` in its private build): the navy lettering over the gold stepped rule. The app icon and the launch screen still carry it, until MineMuster has its own.
 
 The logo in this build was traced from a screenshot the company's artwork was supplied in, so it is sharp at any size but its finest details are only as good as that screenshot. Before a store release, regenerate `src/components/logoArt.ts` and the files in `assets/` from the company's original artwork (an SVG, PDF or large PNG), and have the company sign off on how its logo is used.
 

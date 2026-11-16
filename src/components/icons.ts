@@ -6,6 +6,7 @@ export { default as ArrowLeft } from 'lucide-react-native/icons/arrow-left';
 export { default as Banknote } from 'lucide-react-native/icons/banknote';
 export { default as BellRing } from 'lucide-react-native/icons/bell-ring';
 export { default as BookOpen } from 'lucide-react-native/icons/book-open';
+export { default as Building2 } from 'lucide-react-native/icons/building-2';
 export { default as CalendarClock } from 'lucide-react-native/icons/calendar-clock';
 export { default as CalendarDays } from 'lucide-react-native/icons/calendar-days';
 export { default as CalendarPlus } from 'lucide-react-native/icons/calendar-plus';

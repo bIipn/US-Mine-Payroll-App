@@ -3,9 +3,9 @@ import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { LogoPlate, ProviderMark } from '../../components/Brand';
+import { CompanyLogoPlate, ProviderMark, Wordmark } from '../../components/Brand';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
-import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SITE_LABEL } from '../../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW } from '../../config';
 import type { AuthProvider, Role } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
@@ -28,6 +28,8 @@ export function AuthScreen() {
   const signInDemo = useStore((s) => s.signInDemo);
   const openAsOwner = useStore((s) => s.openAsOwner);
   const showToast = useStore((s) => s.showToast);
+  const company = useStore((s) => s.settings.company);
+  const place = company.place;
 
   const [mode, setMode] = useState<Mode>('signin');
   const [firstName, setFirstName] = useState('');
@@ -83,12 +85,12 @@ export function AuthScreen() {
         contentContainerStyle={{ paddingBottom: insets.bottom + space.xxl }}
       >
         <View style={[styles.field, { paddingTop: insets.top + space.xxl }]}>
-          <LogoPlate width={264} radius={10} />
+          {company.logo ? <CompanyLogoPlate logo={company.logo} name={company.name} width={264} radius={10} /> : <Wordmark />}
           <Txt v="h1" c={color.white} style={{ marginTop: space.xl }}>
             Clock in. Check your machine. Get paid right.
           </Txt>
           <Txt v="body" c={color.onDarkMuted} style={{ marginTop: space.sm }}>
-            Time, checklists and maintenance requests for the crew at {SITE_LABEL}.
+            Time, checklists and maintenance requests for the crew{place ? ` at ${place}` : ''}.
           </Txt>
         </View>
 
@@ -188,7 +190,7 @@ export function AuthScreen() {
           <View style={styles.rosterNote}>
             <ShieldCheck color={color.green} size={22} />
             <Txt v="small" c={color.inkSoft} style={{ flex: 1 }}>
-              Only people on the US Mine roster can create an account. Use your name the way payroll has it.
+              Only people on the company’s roster can create an account. Use your name the way payroll has it.
             </Txt>
           </View>
         </View>
@@ -199,8 +201,8 @@ export function AuthScreen() {
             <Txt v="small" c={color.silica}>
               {/* A build made with the mine's own roster or sheets holds those as well as the samples. */}
               {ROSTER.length > 0 || AREA_SHEETS.length > 0
-                ? 'The hours, checklists and requests in this preview are samples that stay on this device. None of them is a real US Mine record.'
-                : 'This preview runs on sample data that stays on this device. Nothing here is a real US Mine record.'}
+                ? 'The hours, checklists and requests in this preview are samples that stay on this device. None of them is a real record.'
+                : 'This preview runs on sample data that stays on this device. Nothing here is a real company’s record.'}
             </Txt>
             <View style={styles.demoRows}>
               <Row

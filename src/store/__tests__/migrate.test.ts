@@ -1,4 +1,7 @@
+import type { Company } from '../../domain/company';
 import { migratePersisted } from '../migrate';
+
+const COMPANY: Company = { name: 'Example Aggregates Co.', state: 'NV', pay: null };
 
 const v1 = {
   session: { accountId: 'a1', employeeId: 'e1' },
@@ -10,18 +13,18 @@ const v1 = {
 
 describe('migratePersisted', () => {
   it('reloads the sample data in a preview build saved before paid leave existed', () => {
-    const next = migratePersisted(v1, 1, true);
+    const next = migratePersisted(v1, 1, true, COMPANY);
     // Clearing seededAt is what makes the app load the sample data again at start-up.
     expect(next.seededAt).toBeNull();
     expect(next.session).toBeNull();
     expect(next.leave).toEqual([]);
     expect(next.payRates).toEqual({});
     // A person's own settings survive the reload.
-    expect(next.settings).toEqual({ lunchReminders: false });
+    expect(next.settings).toEqual({ lunchReminders: false, company: COMPANY });
   });
 
   it('keeps every real record in a live build and only adds the new empty lists', () => {
-    const next = migratePersisted(v1, 1, false);
+    const next = migratePersisted(v1, 1, false, COMPANY);
     expect(next.seededAt).toBe(1_700_000_000_000);
     expect(next.session).toEqual({ accountId: 'a1', employeeId: 'e1' });
     expect(next.shifts).toEqual([{ id: 's1' }]);
@@ -43,7 +46,7 @@ describe('migratePersisted', () => {
     };
 
     it('gives a lunch saved with no end its automatic end, 30 minutes after it started', () => {
-      const next = migratePersisted(v2, 2, false) as typeof v2;
+      const next = migratePersisted(v2, 2, false, COMPANY) as typeof v2;
       expect(next.shifts[0].lunches[0]).toEqual({ start: { at: start }, end: { at: start + 30 * 60_000, auto: true } });
       // A lunch that was punched back in from stays exactly as it was recorded.
       expect(next.shifts[1]).toEqual(v2.shifts[1]);
@@ -53,7 +56,7 @@ describe('migratePersisted', () => {
     });
 
     it('reloads the sample data in a preview build, so its lunches follow the new rule', () => {
-      const next = migratePersisted(v2, 2, true);
+      const next = migratePersisted(v2, 2, true, COMPANY);
       expect(next.seededAt).toBeNull();
       expect(next.session).toBeNull();
       expect(next.payRates).toEqual({ e1: 2500 });
@@ -71,7 +74,7 @@ describe('migratePersisted', () => {
     };
 
     it('keeps every record in a live build exactly as it was signed, and starts the exams', () => {
-      const next = migratePersisted(v3, 3, false);
+      const next = migratePersisted(v3, 3, false, COMPANY);
       expect(next.inspections).toEqual(v3.inspections);
       expect(next.mrfs).toEqual(v3.mrfs);
       expect(next.exams).toEqual([]);
@@ -80,7 +83,7 @@ describe('migratePersisted', () => {
     });
 
     it('reloads the sample data in a preview build, so its cards are on the real 21 lines', () => {
-      const next = migratePersisted(v3, 3, true);
+      const next = migratePersisted(v3, 3, true, COMPANY);
       expect(next.seededAt).toBeNull();
       expect(next.session).toBeNull();
     });
@@ -103,7 +106,7 @@ describe('migratePersisted', () => {
     };
 
     it('fills in date completed, completed by and remarks from the history, in a live build', () => {
-      const next = migratePersisted(v4, 4, false) as typeof v4;
+      const next = migratePersisted(v4, 4, false, COMPANY) as typeof v4;
       expect(next.mrfs[0]).toEqual({ ...v4.mrfs[0], completedAt: 5000, completedBy: 'e6', remarks: 'Replaced backup alarm and tested in reverse' });
       // An open request, one that already has its fields, and one with no history are left as they are.
       expect(next.mrfs.slice(1)).toEqual(v4.mrfs.slice(1));
@@ -112,21 +115,36 @@ describe('migratePersisted', () => {
     });
 
     it('reloads the sample data in a preview build, so it shows the sample areas of this version', () => {
-      const next = migratePersisted(v4, 4, true);
+      const next = migratePersisted(v4, 4, true, COMPANY);
       expect(next.seededAt).toBeNull();
       expect(next.session).toBeNull();
     });
   });
 
+  it('gives saved settings the company the build starts with, and keeps everything else', () => {
+    const v5 = { ...v1, leave: [], payRates: {}, exams: [], areaSheets: [], settings: { lunchReminders: false, workweekStartsOn: 1 } };
+    const next = migratePersisted(v5, 5, false, COMPANY);
+    expect(next.settings).toEqual({ lunchReminders: false, workweekStartsOn: 1, company: COMPANY });
+    expect(next.shifts).toEqual([{ id: 's1' }]);
+    expect(next.seededAt).toBe(1_700_000_000_000);
+  });
+
+  it('keeps a company that is already saved', () => {
+    const own: Company = { name: 'Another Co.', state: 'TX', pay: null };
+    const v6 = { ...v1, settings: { lunchReminders: false, company: own } };
+    expect((migratePersisted(v6, 5, false, COMPANY).settings as { company: Company }).company).toBe(own);
+  });
+
   it('leaves data from the current version alone', () => {
-    const v5 = {
+    const v6 = {
       ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'crusher' }],
       mrfs: [{ id: 'm1', status: 'completed', history: [{ at: 5000, by: 'e6', status: 'completed', note: 'Done' }] }],
+      settings: { lunchReminders: false, company: COMPANY },
     };
-    expect(migratePersisted(v5, 5, true)).toEqual(v5);
+    expect(migratePersisted(v6, 6, true, COMPANY)).toEqual(v6);
   });
 
   it('copes with nothing saved', () => {
-    expect(migratePersisted(undefined, 1, false)).toEqual({ leave: [], payRates: {}, exams: [], areaSheets: [] });
+    expect(migratePersisted(undefined, 1, false, COMPANY)).toEqual({ leave: [], payRates: {}, exams: [], areaSheets: [] });
   });
 });

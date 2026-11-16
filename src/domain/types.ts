@@ -1,3 +1,4 @@
+import type { Company } from './company';
 /** Shared data model. Times are epoch milliseconds unless noted. */
 
 export type Role = 'employee' | 'supervisor';
@@ -359,6 +360,8 @@ export interface SiteConfig {
 export type DemoLocation = 'gps' | 'at_mine' | 'in_town';
 
 export interface Settings {
+  /** Who the crew works for: name, state, logo, pay periods. */
+  company: Company;
   site: SiteConfig;
   /** 0 = Sunday. */
   workweekStartsOn: number;

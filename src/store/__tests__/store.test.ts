@@ -843,6 +843,40 @@ describe('settings', () => {
   });
 });
 
+describe('the company', () => {
+  const own = {
+    name: '  Example Aggregates   Co. ',
+    state: 'NV',
+    place: ' ',
+    pay: { frequency: 'biweekly' as const, firstDay: '2026-11-01', payday: { daysAfter: 6 }, ifBankClosed: 'before' as const },
+  };
+
+  it('starts a preview with the sample company', () => {
+    expect(s().settings.company.name).toBe('Sample Mining Co.');
+  });
+
+  it('is changed by a supervisor, tidied, and saved whole', () => {
+    s().signInDemo('supervisor');
+    expect(s().setCompany(own)).toEqual({ ok: true });
+    expect(s().settings.company).toEqual({ name: 'Example Aggregates Co.', state: 'NV', pay: own.pay });
+  });
+
+  it('can be set to have no pay periods at all', () => {
+    s().signInDemo('supervisor');
+    expect(s().setCompany({ ...own, pay: null })).toEqual({ ok: true });
+    expect(s().settings.company.pay).toBeNull();
+  });
+
+  it('is not changed by anyone else, or with a part missing', () => {
+    s().signInDemo('employee');
+    expect(s().setCompany(own)).toMatchObject({ ok: false, error: expect.stringMatching(/supervisor/) });
+    s().signInDemo('supervisor');
+    expect(s().setCompany({ ...own, state: '' })).toMatchObject({ ok: false, error: expect.stringMatching(/state/) });
+    expect(s().setCompany({ ...own, pay: { ...own.pay, firstDay: undefined } })).toMatchObject({ ok: false });
+    expect(s().settings.company.name).toBe('Sample Mining Co.');
+  });
+});
+
 describe('paid leave', () => {
   const day = new Date(2026, 10, 10, 9, 30).getTime();
 

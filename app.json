@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "US Mine Crew",
+    "name": "MineMuster",
     "slug": "us-mine-crew",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -43,7 +43,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "US Mine Crew reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.",
+          "locationWhenInUsePermission": "MineMuster reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.",
           "locationAlwaysAndWhenInUsePermission": false,
           "locationAlwaysPermission": false
         }

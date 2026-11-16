@@ -1,5 +1,5 @@
 /**
- * Visual language for US Mine Crew.
+ * Visual language for MineMuster.
  *
  * The palette is taken from the mine itself: equipment yellow, the black
  * ilmenite sand and white kaolin clay the Ione plant produces, the red

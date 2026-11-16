@@ -1,7 +1,7 @@
 import { strFromU8, unzipSync } from 'fflate';
 
-import { COMPANY } from '../../config';
-import { payPeriodOf } from '../../domain/payPeriod';
+import { SAMPLE_COMPANY } from '../../domain/company';
+import { payPeriodOf as periodOf } from '../../domain/payPeriod';
 import { checklistFor } from '../../domain/templates';
 import { buildDemoData } from '../../store/seed';
 import { addDays, startOfDay, startOfWeek } from '../../util/format';
@@ -15,14 +15,24 @@ function sheetText(bytes: Uint8Array, index: number): string[] {
   return [...xml.matchAll(/<t xml:space="preserve">([^<]*)<\/t>/g)].map((match) => match[1]);
 }
 
+const payPeriodOf = (ms: number) => periodOf(ms, SAMPLE_COMPANY.pay!);
+const SETTINGS = { company: SAMPLE_COMPANY, workweekStartsOn: 0 };
+
 describe('payroll report', () => {
-  const data = buildDemoData(now);
+  const data = { ...buildDemoData(now), settings: SETTINGS };
   const period = payPeriodOf(now);
   const report = payrollReport(data, { start: period.start, end: period.end, payDate: period.payDate }, now);
 
-  it('is headed with the company name the way the pay stub prints it', () => {
-    expect(COMPANY).toBe('U.S. Mine Corp.');
-    expect(sheetText(report.bytes, 1)[0]).toBe('U.S. Mine Corp. payroll summary');
+  it('is headed with the company name the way the pay stub prints it, and is named for it', () => {
+    expect(sheetText(report.bytes, 1)[0]).toBe('Sample Mining Co. payroll summary');
+    expect(report.name).toBe('Sample-Mining-Co-Payroll_2026-11-01_to_2026-11-15.xlsx');
+  });
+
+  it('says only "Payroll summary" for a company with no name yet', () => {
+    const unnamed = { ...data, settings: { ...SETTINGS, company: { name: '', state: '', pay: null } } };
+    const book = payrollReport(unnamed, { start: period.start, end: period.end }, now);
+    expect(sheetText(book.bytes, 1)[0]).toBe('Payroll summary');
+    expect(book.name).toBe('Payroll_2026-11-01_to_2026-11-15.xlsx');
   });
 
   it('says which pay period it covers and when it is paid', () => {

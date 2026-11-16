@@ -1,4 +1,5 @@
 import { AREA_CONDITIONS, buildExam, SAMPLE_AREA_SHEETS, shiftAt, withFix, withMrf, type ExamDraft } from '../domain/areaExam';
+import { SAMPLE_COMPANY, type Company } from '../domain/company';
 import { destination, toGeoStamp } from '../domain/geofence';
 import { keptApart, type PersonName } from '../domain/roster';
 import { DEFAULT_SITE } from '../domain/site';
@@ -116,8 +117,9 @@ const INDOORS_NA = ['berms', 'pulleys', 'belt_components', 'estops', 'mobile_equ
 /** An area that is a room or a shed, going by the name on its sheet. */
 const indoors = (sheet: AreaSheet) => /\b(lab|laboratory|office|shed)\b/i.test(sheet.title);
 
-export function defaultSettings(demo: boolean): Settings {
+export function defaultSettings(demo: boolean, company: Company = SAMPLE_COMPANY): Settings {
   return {
+    company,
     site: DEFAULT_SITE,
     workweekStartsOn: 0,
     lunchReminders: true,

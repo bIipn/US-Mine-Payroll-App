@@ -1,5 +1,10 @@
 import { AREA_CONDITIONS, examFindings, openFindings, parseAreaSheets, rowAnswer, SAMPLE_AREA_SHEETS, shiftAt } from '../../domain/areaExam';
-import { payPeriodOf, previousPayPeriod } from '../../domain/payPeriod';
+import { SAMPLE_COMPANY } from '../../domain/company';
+import { payPeriodOf as periodOf, previousPayPeriod as previousOf } from '../../domain/payPeriod';
+
+/** The sample company's pay periods. */
+const payPeriodOf = (ms: number) => periodOf(ms, SAMPLE_COMPANY.pay!);
+const previousPayPeriod = (period: ReturnType<typeof payPeriodOf>) => previousOf(period, SAMPLE_COMPANY.pay!);
 import { computePayroll, computeRange } from '../../domain/payroll';
 import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
@@ -328,7 +333,7 @@ describe('sample data', () => {
 
   it('feeds reports whose totals agree with the payroll screen', () => {
     const now = DAYS[4];
-    const data = buildDemoData(now);
+    const data = { ...buildDemoData(now), settings: { company: SAMPLE_COMPANY, workweekStartsOn: 0 } };
     const week = startOfWeek(now, 0);
     const period = payPeriodOf(now);
     const rows = computePayroll(data.employees, data.shifts, data.leave, period.start, period.end, now);
@@ -338,15 +343,15 @@ describe('sample data', () => {
       expect(r.paid + r.holiday + r.pto + r.sick).toBe(r.total);
     }
     const payroll = payrollReport(data, { start: period.start, end: period.end, payDate: period.payDate }, now);
-    expect(payroll.name).toBe('US-Mine-Payroll_2026-11-01_to_2026-11-15.xlsx');
+    expect(payroll.name).toBe('Sample-Mining-Co-Payroll_2026-11-01_to_2026-11-15.xlsx');
     expect(payroll.sheets).toBe(5);
     expect(payroll.bytes.slice(0, 2)).toEqual(new Uint8Array([0x50, 0x4b]));
     // A plain workweek still exports, for the weekly time log.
-    expect(payrollReport(data, { start: week, end: addDays(week, 7) }, now).name).toBe('US-Mine-Payroll_2026-11-08_to_2026-11-14.xlsx');
+    expect(payrollReport(data, { start: week, end: addDays(week, 7) }, now).name).toBe('Sample-Mining-Co-Payroll_2026-11-08_to_2026-11-14.xlsx');
 
     const to = addDays(startOfDay(now), 1);
     const safety = safetyReport(data, addDays(to, -30), to, now);
-    expect(safety.name).toBe('US-Mine-Safety-Log_2026-10-15_to_2026-11-13.xlsx');
+    expect(safety.name).toBe('Sample-Mining-Co-Safety-Log_2026-10-15_to_2026-11-13.xlsx');
     expect(safety.sheets).toBe(8);
     expect(safety.rows).toBeGreaterThan(900);
   });

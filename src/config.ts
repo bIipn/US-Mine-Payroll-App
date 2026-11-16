@@ -1,4 +1,5 @@
 import { parseAreaSheets } from './domain/areaExam';
+import { companyOrDefault, parseCompany } from './domain/company';
 import { parsePersonName, parseRoster, startsWithSamples } from './domain/roster';
 
 /**
@@ -63,7 +64,22 @@ export const SAMPLE_CREW = startsWithSamples(process.env.EXPO_PUBLIC_SAMPLE_CREW
  */
 export const AREA_SHEETS = parseAreaSheets(process.env.EXPO_PUBLIC_AREA_SHEETS);
 
-export const APP_NAME = 'US Mine Crew';
-/** The legal name, the way it is printed on the pay stub. */
-export const COMPANY = 'U.S. Mine Corp.';
-export const SITE_LABEL = 'Ione, California';
+/**
+ * The company this build is made for, as JSON: its name, the state its hours
+ * rules follow, where the crew works, its logo and its pay periods.
+ *
+ *     {"name": "Example Aggregates Co.", "state": "NV", "place": "Fallon, Nevada",
+ *      "pay": {"frequency": "biweekly", "firstDay": "2026-11-01",
+ *              "payday": {"daysAfter": 6}, "ifBankClosed": "before"}}
+ *
+ * A fresh install starts with it, and a supervisor can change it in the app.
+ * A build that names none starts with the made-up sample company when it has
+ * the sample crew, and with nothing filled in when it does not.
+ *
+ * Set EXPO_PUBLIC_COMPANY in `.env.local`, which is not committed.
+ */
+const BUILD_COMPANY = parseCompany(process.env.EXPO_PUBLIC_COMPANY);
+if (BUILD_COMPANY.error) console.warn(BUILD_COMPANY.error);
+export const STARTING_COMPANY = companyOrDefault(BUILD_COMPANY.company, SAMPLE_CREW);
+
+export const APP_NAME = 'MineMuster';
