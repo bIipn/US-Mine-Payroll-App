@@ -232,10 +232,21 @@ export async function newMember(db, company, first, last) {
   return account;
 }
 
-/** A second supervisor for a company: a supervisor row, claimed by a new account. */
+/**
+ * A second supervisor for a company: a supervisor row, and a new account let
+ * onto it. A supervisor row is never handed out by a typed name, so typing it
+ * leaves a request (reason supervisor_row) that the company's owner approves
+ * onto that row, which keeps its supervisor role.
+ */
 export async function secondSupervisor(db, company, first = 'Riley J', last = 'Quinn') {
-  await addToRoster(db, company.owner, company.id, { first, last, role: 'supervisor' }, company.rows);
-  return newMember(db, company, first, last);
+  const rowId = await addToRoster(db, company.owner, company.id, { first, last, role: 'supervisor' }, company.rows);
+  const account = await db.newAccount('member');
+  const result = await join(db, account, company.code, first, last);
+  assert.equal(result.status, 'pending', `${first} ${last} should wait for approval ${JSON.stringify(result)}`);
+  assert.equal(result.reason, 'supervisor_row', JSON.stringify(result));
+  const [request] = await db.adminRows("select id from public.join_requests where user_id = $1 and status = 'pending'", [account]);
+  await db.as(company.owner).call('approve_join_request', { request_id: request.id, roster_id: rowId });
+  return account;
 }
 
 /** A roster row as the owner sees it. */

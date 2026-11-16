@@ -27,6 +27,7 @@ const CALLABLE_BY = {
   deny_join_request: ['authenticated'],
   rotate_join_code: ['authenticated'],
   release_roster_claim: ['authenticated'],
+  my_join_requests: ['authenticated'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
 };
@@ -40,6 +41,7 @@ const SECURITY_DEFINER = [
   'is_member',
   'is_supervisor',
   'join_company',
+  'my_join_requests',
   'release_roster_claim',
   'roster_before_write',
   'roster_keeps_a_supervisor',
@@ -73,15 +75,15 @@ async function publicFunctions() {
 }
 
 describe('functions', () => {
-  it('every security definer function has its search_path set to empty', async () => {
+  it('every security definer function searches pg_catalog first and the temporary schema last', async () => {
     const functions = await publicFunctions();
     const definers = functions.filter((f) => f.definer);
     assert.deepEqual(definers.map((f) => f.name).sort(), SECURITY_DEFINER);
-    for (const fn of definers) assert.ok(fn.config.includes('search_path=""'), `${fn.name}: ${fn.config}`);
+    for (const fn of definers) assert.ok(fn.config.includes('search_path=pg_catalog, pg_temp'), `${fn.name}: ${fn.config}`);
   });
 
   it('so does every other function, private helpers included', async () => {
-    for (const fn of await publicFunctions()) assert.ok(fn.config.includes('search_path=""'), `${fn.name}: ${fn.config}`);
+    for (const fn of await publicFunctions()) assert.ok(fn.config.includes('search_path=pg_catalog, pg_temp'), `${fn.name}: ${fn.config}`);
   });
 
   it('EXECUTE is taken from PUBLIC, and given only to the roles that need it', async () => {
@@ -166,7 +168,7 @@ describe('what Supabase provides', () => {
       union all
       select 'function ' || p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'auth'
       order by 1`);
-    assert.deepEqual(authObjects.map((o) => o.object), ['function uid', 'relation users', 'relation users_pkey']);
+    assert.deepEqual(authObjects.map((o) => o.object), ['function jwt', 'function uid', 'relation users', 'relation users_pkey']);
     const columns = await db.adminRows("select attname from pg_attribute where attrelid = 'auth.users'::regclass and attnum > 0 and not attisdropped order by attnum");
     assert.deepEqual(columns.map((c) => c.attname), ['id', 'email']);
     const triggers = await db.adminRows("select tgname from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal");

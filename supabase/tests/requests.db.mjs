@@ -157,8 +157,8 @@ describe('approve_join_request with a new row', () => {
     const account = await newMember(db, company, 'Maria', 'De La Cruz');
     const oldRow = company.rows['Maria De La Cruz'];
     await db.as(company.owner).affected('update public.roster set active = false where id = $1', [oldRow]);
-    // Their old row is off the roster, so their name no longer matches anyone.
-    assert.equal((await join(db, account, company.code, 'Maria', 'De La Cruz')).reason, 'not_on_roster');
+    // They were taken off the roster, so their name leaves a request for a supervisor.
+    assert.equal((await join(db, account, company.code, 'Maria', 'De La Cruz')).reason, 'removed');
     const [request] = await db.adminRows("select * from public.join_requests where user_id = $1 and status = 'pending'", [account]);
 
     const rowId = await approve(company.owner, { request_id: request.id });
@@ -166,16 +166,17 @@ describe('approve_join_request with a new row', () => {
     assert.equal((await rosterRow(db, oldRow)).user_id, null);
   });
 
-  it('refuses a request from someone already on the roster; denying it closes it', async () => {
+  it('settles the pending request when the person joins by themselves, so it cannot be decided later', async () => {
     const company = await startCompany(db, { roster: CREW });
     const { account, request } = await asksToJoin(company, 'Pat', 'Cole');
     // A supervisor adds them, and they join by themselves before anyone decides.
     await db.as(company.owner).affected("insert into public.roster (company_id, first_name, last_name) values ($1, 'Pat', 'Cole')", [company.id]);
     assert.equal((await join(db, account, company.code, 'Pat', 'Cole')).status, 'joined');
 
-    await refused(approve(company.owner, { request_id: request.id }), WRONG_STATE, /already on the roster/);
-    await deny(company.owner, request.id);
-    assert.equal((await requestRow(request.id)).status, 'denied');
+    // Joining removed the pending request, so a stale request cannot re-admit them later.
+    assert.equal((await db.adminRows('select count(*)::int as n from public.join_requests where id = $1', [request.id]))[0].n, 0);
+    await refused(approve(company.owner, { request_id: request.id }), NOT_FOUND, /No such join request/);
+    await refused(deny(company.owner, request.id), NOT_FOUND, /No such join request/);
     assert.equal(await db.as(account).call('is_member', { company_id: company.id }), true);
   });
 });
@@ -192,7 +193,7 @@ describe('deny_join_request', () => {
     assert.equal(decided.decided_by, company.owner);
     assert.ok(decided.decided_at instanceof Date);
     assert.equal(await db.as(account).call('is_member', { company_id: company.id }), false);
-    assert.deepEqual(await db.as(account).rows('select status from public.join_requests'), [{ status: 'denied' }]);
+    assert.deepEqual((await db.as(account).callRows('my_join_requests')).map((r) => ({ status: r.status })), [{ status: 'denied' }]);
   });
 
   it('leaves the person free to ask again, as a new request', async () => {

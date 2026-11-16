@@ -121,12 +121,17 @@ describe('with a second supervisor', () => {
     assert.deepEqual((await supervisorsOf(company)).map((r) => r.user_id), [second]);
   });
 
-  it('lets one release the other, who can then claim the row again', async () => {
+  it('lets one release the other, who then needs a supervisor to be let back on the row', async () => {
     const company = await startCompany(db);
     const second = await secondSupervisor(db, company);
-    await db.as(company.owner).call('release_roster_claim', { roster_id: company.rows['Riley J Quinn'] });
+    const rowId = company.rows['Riley J Quinn'];
+    await db.as(company.owner).call('release_roster_claim', { roster_id: rowId });
     assert.equal(await db.as(second).call('is_supervisor', { company_id: company.id }), false);
-    assert.equal((await join(db, second, company.code, 'Riley', 'Quinn')).status, 'joined');
+
+    // Typing the name again does not hand back the supervisor row; it waits for approval.
+    assert.deepEqual(await join(db, second, company.code, 'Riley', 'Quinn'), { status: 'pending', company_name: 'Test Pit A', reason: 'supervisor_row' });
+    const [request] = await db.adminRows("select id from public.join_requests where user_id = $1 and status = 'pending'", [second]);
+    await db.as(company.owner).call('approve_join_request', { request_id: request.id, roster_id: rowId });
     assert.equal(await db.as(second).call('is_supervisor', { company_id: company.id }), true);
   });
 });

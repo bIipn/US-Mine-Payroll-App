@@ -61,10 +61,19 @@ describe('join_company: joined', () => {
     assert.equal((await requestsOf(account)).length, 0);
   });
 
-  it('gives the role on the row, so a supervisor row makes a supervisor', async () => {
+  it('never hands out a supervisor row by name: it waits for a supervisor to approve it', async () => {
     const company = await startCompany(db, { roster: CREW });
     const account = await db.newAccount();
-    assert.deepEqual(await join(db, account, company.code, 'Ana', 'Diaz'), { status: 'joined', company_name: 'Test Pit A', role: 'supervisor' });
+    assert.deepEqual(await join(db, account, company.code, 'Ana', 'Diaz'), {
+      status: 'pending',
+      company_name: 'Test Pit A',
+      reason: 'supervisor_row',
+    });
+    assert.equal(await db.as(account).call('is_supervisor', { company_id: company.id }), false);
+
+    // The company's owner approves the request onto that row, which keeps the supervisor role.
+    const [request] = await requestsOf(account);
+    assert.equal(await db.as(company.owner).call('approve_join_request', { request_id: request.id, roster_id: company.rows['Ana Diaz'] }), company.rows['Ana Diaz']);
     assert.equal(await db.as(account).call('is_supervisor', { company_id: company.id }), true);
   });
 
@@ -75,7 +84,7 @@ describe('join_company: joined', () => {
       [code.toLowerCase(), 'Riley', 'Quinn'],
       [`  ${code.slice(0, 4)} ${code.slice(4)}  `, 'Lee', 'Vance'],
       [`${code.slice(0, 4).toLowerCase()}-${code.slice(4)}`, 'Maria', 'De La Cruz'],
-      [`${code.slice(0, 3)}${EN_DASH}${code.slice(3, 6)} - ${code.slice(6)}`, 'Ana', 'Diaz'],
+      [`${code.slice(0, 3)}${EN_DASH}${code.slice(3, 6)} - ${code.slice(6)}`, 'Lee', 'Park'],
     ];
     for (const [text, first, last] of typed) {
       assert.equal((await join(db, await db.newAccount(), text, first, last)).status, 'joined', text);
@@ -100,7 +109,7 @@ describe('join_company: joined', () => {
     assert.equal((await rosterRow(db, company.rows['Lee Roy Park'])).user_id, null);
   });
 
-  it('lets someone who was taken off the roster back in on a new row, letting go of the old one', async () => {
+  it('lets a supervisor put someone taken off the roster back on a new row, letting go of the old one', async () => {
     const company = await startCompany(db, { roster: CREW });
     const account = await newMember(db, company, 'Maria', 'De La Cruz');
     const oldRow = company.rows['Maria De La Cruz'];
@@ -111,7 +120,12 @@ describe('join_company: joined', () => {
       "insert into public.roster (company_id, first_name, last_name, title) values ($1, 'Maria', 'De La Cruz', 'Scale house') returning id",
       [company.id],
     );
-    assert.deepEqual(await join(db, account, company.code, 'Maria', 'De La Cruz'), { status: 'joined', company_name: 'Test Pit A', role: 'employee' });
+    // A removed person is not let back in by themselves: they leave a request.
+    assert.deepEqual(await join(db, account, company.code, 'Maria', 'De La Cruz'), { status: 'pending', company_name: 'Test Pit A', reason: 'removed' });
+    assert.equal(await db.as(account).call('is_member', { company_id: company.id }), false);
+
+    const [request] = await requestsOf(account);
+    await db.as(company.owner).call('approve_join_request', { request_id: request.id, roster_id: newRow.id });
     assert.equal((await rosterRow(db, newRow.id)).user_id, account);
     const old = await rosterRow(db, oldRow);
     assert.equal(old.user_id, null);
@@ -227,9 +241,11 @@ describe('join_company: pending', () => {
     assert.equal(notes[0].request_id, request.id);
     assert.equal(notes[0].roster_id, null);
 
-    // The person sees their own request; they are not a member yet.
-    const own = await db.as(account).rows('select id, status, reason from public.join_requests');
-    assert.deepEqual(own, [{ id: request.id, status: 'pending', reason: 'not_on_roster' }]);
+    // The person sees their own request through my_join_requests; they are not a member yet.
+    // The table itself is readable only by the company's supervisors.
+    const own = await db.as(account).callRows('my_join_requests');
+    assert.deepEqual(own.map((r) => ({ id: r.id, status: r.status, reason: r.reason })), [{ id: request.id, status: 'pending', reason: 'not_on_roster' }]);
+    assert.deepEqual(await db.as(account).rows('select id from public.join_requests'), []);
     assert.equal(await db.as(account).call('is_member', { company_id: company.id }), false);
     assert.deepEqual(await db.as(account).rows('select id from public.roster'), []);
   });
