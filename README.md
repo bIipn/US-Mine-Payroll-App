@@ -74,7 +74,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 418 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
+npm test           # 420 unit tests: hours, lunch rules, overtime, pay periods, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```

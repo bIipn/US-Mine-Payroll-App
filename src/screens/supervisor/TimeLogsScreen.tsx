@@ -10,7 +10,7 @@ import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
 import { employeeName, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { addDays, fmtDate, fmtDistance, fmtHrs, fmtRelativeDay, fmtTime, startOfDay, startOfWeek } from '../../util/format';
+import { addDays, fmtDate, fmtDistance, fmtHrs, fmtRelativeDay, fmtTime, listName, startOfDay, startOfWeek } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
 /** Everyone's punches for one day: arrived, lunch, back, left. */
@@ -32,7 +32,7 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
   /** "Whitfield, D." keeps long names inside the column, the same way the payroll table lists them. */
   const rosterName = (id: string) => {
     const e = employees.find((x) => x.id === id);
-    return e ? `${e.lastName}, ${e.firstName.charAt(0)}.` : 'Unknown';
+    return e ? listName(e) : 'Unknown';
   };
 
   return (

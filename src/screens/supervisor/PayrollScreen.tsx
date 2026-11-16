@@ -12,7 +12,7 @@ import { exportReport } from '../../services/exportReport';
 import { payrollReport } from '../../services/reports';
 import { useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { addDays, fmtHrs, fmtRange, peopleCount, startOfWeek } from '../../util/format';
+import { addDays, fmtHrs, fmtRange, listName, peopleCount, startOfWeek } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
 type View_ = 'period' | 'week';
@@ -134,7 +134,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
           >
             <View style={styles.lineRow}>
               <View style={styles.name}>
-                <Txt v="strong" numberOfLines={1}>{row.employee.lastName}, {row.employee.firstName.charAt(0)}.</Txt>
+                <Txt v="strong" numberOfLines={1}>{listName(row.employee)}</Txt>
               </View>
               <Txt v="body" c={color.inkSoft} style={styles.num}>{fmtHrs(row.reg)}</Txt>
               <Txt v="body" c={row.ot > 0 ? color.amber : color.silicaLight} style={styles.num}>{fmtHrs(row.ot)}</Txt>

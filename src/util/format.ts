@@ -154,8 +154,14 @@ export function fmtDistance(metres: number): string {
   return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
 }
 
+/**
+ * The first letter of a name as it is written, past any quote mark. A roster can
+ * put a nickname in quotes first, the way a sign-in sheet does: "Buck" Lee gives B.
+ */
+const firstLetter = (text: string) => (text.match(/[A-Za-z0-9À-ɏ]/)?.[0] ?? '').toUpperCase();
+
 export function initials(first: string, last: string): string {
-  return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
+  return `${firstLetter(first)}${firstLetter(last)}`;
 }
 
 export function fullName(p: { firstName: string; lastName: string }): string {
@@ -164,7 +170,12 @@ export function fullName(p: { firstName: string; lastName: string }): string {
 
 /** J. Rivera */
 export function shortName(p: { firstName: string; lastName: string }): string {
-  return `${p.firstName.charAt(0)}. ${p.lastName}`;
+  return `${firstLetter(p.firstName)}. ${p.lastName}`;
+}
+
+/** Rivera, J. — a name in a list sorted by last name. */
+export function listName(p: { firstName: string; lastName: string }): string {
+  return `${p.lastName}, ${firstLetter(p.firstName)}.`;
 }
 
 /** "1 person", "2 people". */
