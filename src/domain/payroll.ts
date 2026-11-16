@@ -69,9 +69,9 @@ const emptyTotals = (): PayrollTotals => ({
  * (California's by default):
  *   - past the daily threshold is time-and-a-half, past the daily double-time
  *     threshold is double time, where the state has them (California: 8 and 12)
- *   - with California's seventh-day rule, on the seventh straight day worked in
- *     the workweek the first 8 hours are time-and-a-half and anything past 8 is
- *     double time
+ *   - with a seventh-day rule, the seventh straight day worked in the workweek
+ *     is all premium time: in California the first 8 hours are time-and-a-half
+ *     and anything past 8 is double time; in Kentucky it is all time-and-a-half
  *   - straight-time hours past the weekly threshold (40) become time-and-a-half,
  *     so hours already paid as daily overtime are not counted again
  * A shift that was never clocked out is left out of the totals and counted in
@@ -131,10 +131,12 @@ export function computeWeek(
     let dt: number;
     const otAt = rules.dailyOvertimeAfter ?? Infinity;
     const dtAt = rules.dailyDoubleAfter ?? Infinity;
-    if (rules.seventhDay && rules.dailyOvertimeAfter != null && i === 6 && workedAllSeven) {
+    if (rules.seventhDay && i === 6 && workedAllSeven) {
+      // The seventh day worked in the workweek is all premium time, and counts nothing toward the weekly 40.
+      const doubleAt = rules.seventhDay.doubleAfter ?? Infinity;
       reg = 0;
-      ot = Math.min(worked, otAt);
-      dt = Math.max(0, worked - otAt);
+      ot = Math.min(worked, doubleAt);
+      dt = Math.max(0, worked - doubleAt);
     } else {
       reg = Math.min(worked, otAt);
       ot = Math.max(0, Math.min(worked, dtAt) - otAt);

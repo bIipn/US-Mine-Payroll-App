@@ -157,6 +157,7 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
                 <View style={styles.preview} testID="company-rules">
                   <Txt v="small">{overtimeSummary(rulesFor(draft.state))}</Txt>
                   <Txt v="small">{mealSummary(rulesFor(draft.state))}</Txt>
+                  {rulesFor(draft.state).note ? <Txt v="small" testID="company-rules-note">{rulesFor(draft.state).note}</Txt> : null}
                   <Txt v="small" c={color.silica}>A summary in plain language, not legal advice.</Txt>
                 </View>
               ) : null}

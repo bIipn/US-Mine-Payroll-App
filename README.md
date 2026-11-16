@@ -76,7 +76,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 496 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel
+npm test           # 507 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -190,7 +190,15 @@ Overtime and meal periods follow the state the company is in, set on More → Co
 | On the clock screen | Start lunch, no countdown, no reminders | A countdown to the end of the fifth hour and reminders before it |
 | Lunch flags | None | Late lunch, no lunch, short lunch, second meal due |
 
-States with daily overtime or meal laws of their own are added to `src/domain/stateRules.ts` once each one is checked against the state's own statute or agency; until then a state works under federal law. Flags are for a supervisor to review. Nothing is paid or docked automatically. The summaries are plain language, not legal advice.
+Every state and the District of Columbia was checked against its own statute, rule or labor department, and checked again independently (16 November 2026). The rules are in `src/domain/stateRules.ts`, each with its citation:
+
+- **Daily overtime:** Alaska (past 8 hours), California (past 8, double time past 12) and Colorado (past 12). Everywhere else overtime is past 40 hours in the workweek.
+- **Seventh day:** California (8 hours at time and a half, the rest double) and Kentucky (every hour at time and a half), when all seven days of the workweek are worked.
+- **A meal with a time it must start by** (countdown, reminders, late-lunch flag): California, Illinois, Kentucky, Massachusetts, Maine, Nevada, New Hampshire, Oregon and Washington.
+- **A meal owed on a long shift, with no fixed start time** (no-lunch flag only): Colorado, Connecticut, Delaware, Minnesota, North Dakota, New York, Rhode Island, Tennessee and West Virginia.
+- **Said, not applied,** where a rule depends on something the app does not know or may not reach a mine: Nevada's daily overtime (only under 1.5 times the minimum wage), New York's clock-time meal windows, Oregon's manufacturing overtime, Rhode Island's Sunday and holiday premium, Florida's ten-hour rule for manual labor, Nebraska's lunch law and Vermont's reasonable opportunity to eat. The Company screen shows these notes.
+
+A collective bargaining agreement or a written agreement can change several of these rules. Flags are for a supervisor to review. Nothing is paid or docked automatically. The summaries are plain language, not legal advice.
 
 ## Pay periods and paydays
 

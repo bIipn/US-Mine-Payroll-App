@@ -16,8 +16,8 @@ export interface MealRules {
   owedAfterMs: number;
   /** The meal must start before this much work has passed, when the law sets a time. */
   startByMs: number | null;
-  /** The shortest meal period the law accepts. */
-  minMs: number;
+  /** The shortest meal period the law accepts. Null where it says only "a reasonable period". */
+  minMs: number | null;
   /** Shifts no longer than this may waive the meal by mutual consent. */
   waiverMaxMs: number | null;
   /** Work beyond this needs a second meal period. */
@@ -35,8 +35,13 @@ export interface TimeRules {
   dailyOvertimeAfter: number | null;
   dailyDoubleAfter: number | null;
   weeklyOvertimeAfter: number;
-  /** California's seventh-day rule: the seventh straight day worked in a workweek is all premium time. */
-  seventhDay: boolean;
+  /**
+   * A seventh-day rule: when all seven days of a workweek are worked, the seventh is all premium time,
+   * time-and-a-half up to `doubleAfter` hundredths and double time past it (California: 8.00; Kentucky: never).
+   */
+  seventhDay: { doubleAfter: number | null } | null;
+  /** A state rule the app cannot apply, said plainly for the Company screen. */
+  note?: string;
 }
 
 export const CA_RULES: TimeRules = {
@@ -46,7 +51,7 @@ export const CA_RULES: TimeRules = {
   dailyOvertimeAfter: 800,
   dailyDoubleAfter: 1200,
   weeklyOvertimeAfter: 4000,
-  seventhDay: true,
+  seventhDay: { doubleAfter: 800 },
 };
 
 /** The FLSA alone: time-and-a-half past 40 hours in a workweek, no daily overtime, no meal period required. */
@@ -57,7 +62,7 @@ export const FEDERAL_RULES: TimeRules = {
   dailyOvertimeAfter: null,
   dailyDoubleAfter: null,
   weeklyOvertimeAfter: 4000,
-  seventhDay: false,
+  seventhDay: null,
 };
 
 const hrs = (hundredths: number) => `${hundredths / 100}`;
@@ -74,9 +79,13 @@ export function deadlineWords(ms: number): string {
 export function mealSummary(rules: TimeRules): string {
   const meal = rules.meal;
   if (!meal) return 'No meal period is required by law. A lunch taken is 30 minutes, unpaid.';
-  const length = `A ${Math.round(meal.minMs / MIN)}-minute meal period`;
+  const length = meal.minMs != null ? `A ${Math.round(meal.minMs / MIN)}-minute meal period` : 'A lunch period';
   const second = meal.secondAfterMs != null ? `, and a second is owed past ${hoursOf(meal.secondAfterMs)} hours` : '';
-  if (meal.startByMs != null) return `${length} has to start before the end of ${deadlineWords(meal.startByMs)} of work${second}.`;
+  if (meal.startByMs != null) {
+    const words = deadlineWords(meal.startByMs);
+    const by = words.startsWith('the ') ? `the end of ${words}` : words;
+    return `${length} has to start before ${by} of work${second}.`;
+  }
   return `${length} is owed on a shift of ${hoursOf(meal.owedAfterMs)} hours or more${second}.`;
 }
 
@@ -85,7 +94,8 @@ export function overtimeSummary(rules: TimeRules): string {
   const whose = rules.name === FEDERAL_RULES.name ? rules.name : `${rules.name} rules`;
   const weekly = hrs(rules.weeklyOvertimeAfter);
   if (rules.dailyOvertimeAfter == null) {
-    return `Overtime follows ${whose}: over ${weekly} hours in a workweek is OT. There is no daily overtime.`;
+    const seventh = rules.seventhDay ? ', and every hour of a seventh day worked in the workweek' : '';
+    return `Overtime follows ${whose}: over ${weekly} hours in a workweek is OT${seventh}. There is no daily overtime.`;
   }
   const double = rules.dailyDoubleAfter != null ? `, over ${hrs(rules.dailyDoubleAfter)} a day is DT` : '';
   const seventh = rules.seventhDay ? ', with the seventh-day rule' : '';
@@ -256,7 +266,8 @@ export function shiftFlags(shift: Shift, now: number, rules: TimeRules = CA_RULE
       flags.push('late_lunch');
     }
 
-    const short = shift.lunches.some((l) => l.end && floorMin(l.end.at) - floorMin(l.start.at) < meal.minMs);
+    const min = meal.minMs;
+    const short = min != null && shift.lunches.some((l) => l.end && floorMin(l.end.at) - floorMin(l.start.at) < min);
     if (short) flags.push('short_lunch');
 
     if (meal.secondAfterMs != null && totals.paidMin * MIN > meal.secondAfterMs && shift.lunches.length < 2) {
