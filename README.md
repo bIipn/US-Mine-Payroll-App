@@ -272,6 +272,12 @@ A company's own logo sits on a white plate at the top of the Clock screen and in
 
 U.S. Mine Corp.'s logo is built in as traced artwork (`"logo": "us-mine"` in its private build): the navy lettering over the gold stepped rule.
 
+## The website
+
+minemuster.com shows a coming-soon page while MineMuster is built: `site/index.html`, one file with its styles inline and no script, served with the logo, the icons and the Barlow font from `site/`. It loads nothing from any other site.
+
+It is the Vercel project `minemuster`, linked to this repository with `site` as its root directory. A push builds it only when something in `site/` changed; the production site is deployed from a commit on purpose, and minemuster.com and www.minemuster.com (which redirects to it) point at the production deployment. The logo files in `site/brand` come from `scripts/make-brand-assets.py` with the app's.
+
 ## How the code is laid out
 
 ```
@@ -281,6 +287,10 @@ src/store/              app state (saved on the device), its migrations and the 
 src/services/           GPS, notifications, Excel writer, reports, file sharing
 src/components/         buttons, time card, the paper forms, day table, pay estimate, danger tag, site map
 src/screens/            auth, clock, equipment, exam, hours, more, supervisor
+assets/brand/           MineMuster's logo, and in source/ the renders every logo size is made from
+scripts/                the one-file preview, the brand assets, the preview fonts
+site/                   minemuster.com: the coming-soon page and its files
+supabase/               the server's database migrations and their tests (a draft, not deployed)
 ```
 
 Built with Expo (React Native) and TypeScript.
