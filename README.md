@@ -348,18 +348,25 @@ U.S. Mine Corp.'s logo is built in as traced artwork (`"logo": "us-mine"` in its
 
 ## The website
 
-minemuster.com is MineMuster's own site: what it does, the features with screenshots of the app running on the made-up Sample Mining Co., the inspector PDF, payroll, how a company starts, about and a FAQ. It is plain static files in `site/`, with no build step, and it loads nothing from any other site: no fonts, scripts, analytics or trackers.
+minemuster.com is MineMuster's own site: what it does, who it is for, the features with screenshots of the app running on the made-up Sample Mining Co., a Bad Order from the checklist to its date fixed, the inspector PDF, payroll, pricing, how a company starts, about, a FAQ and a contact form, with pages for pricing, contact, security, privacy and terms. It is plain static files in `site/`, with no build step, and it loads nothing from any other site: no fonts, scripts, analytics, trackers or cookies. The one request it makes elsewhere is the contact form's, when someone presses Send.
+
+During early access the main button is "Ask for early access", which opens the contact form: the 14-day trial starts on the dashboard's Billing page once the company's crew app is set up, so no company is charged before its crew can use MineMuster. "Sign in" opens the dashboard itself. The dashboard still understands `https://app.minemuster.com/?start=trial`, for when the site's button becomes "Start free trial". The price, $300 a month per company with a 14-day free trial, is written into the pages (`index.html`, `pricing.html`, `terms.html`) and the structured data on the home page, so a change of price changes all three.
 
 | File | What it is |
 |---|---|
-| `site/index.html` | The page, with its meta tags. The FAQ is `<details>`, so it works without script |
+| `site/index.html` | The home page, with its meta tags and its structured data (MineMuster and its offer, with no rating or review). The FAQ is `<details>`, so it works without script |
+| `site/pricing.html`, `site/contact.html`, `site/security.html`, `site/privacy.html`, `site/terms.html`, `site/404.html` | The other pages. Each repeats the home page's header and footer, so a change to either is made in every page. Links between pages leave off `.html` (`/pricing`), which `cleanUrls` serves |
+| `site/contact.js` | The contact form, on the home page and on `/contact`: it sends what was typed to the server's `submit_contact_request` with the project's publishable key, and puts the server's answer into plain words. The box named `website` is a trap for robots: people never see it, and the server keeps nothing when it is filled in |
+| `site/robots.txt`, `site/sitemap.xml` | Every page may be indexed; the sitemap lists them |
 | `site/site.css` | The styles: the black stage and bands, the daylight ground, records drawn as paper |
 | `site/site.js` | The small-screen menu, keyboard focus for the rows of screens you swipe, and the hero's 3D logo |
 | `site/3d/logo3d.js`, `site/3d/three.module.min.js` | The interactive 3D logo and three.js r170, loaded through an import map, only where WebGL 2 works and only once the hero is near the screen. Its page options (no wheel or pinch zoom, a vertical swipe scrolls the page, no drawing off screen, a taller frame, a stiller logo with reduced motion, the flat logo back if WebGL is lost) all default to the logo as it is on its own page |
 | `site/brand/`, `site/apple-touch-icon.png`, `site/favicon.png` | The logo files, made by `scripts/make-brand-assets.py`. The flat logo stands in for the 3D one until it has drawn, and for good where it cannot |
 | `site/shots/` | Phone screenshots of the app, 585 px wide, lazy-loaded |
 | `site/fonts/` | Barlow and Barlow Condensed, self-hosted, with their licence |
-| `site/vercel.json` | Cache headers: three.js and the fonts for 30 days, the logo and the screenshots for a day |
+| `site/vercel.json` | `cleanUrls`, the cache headers (three.js and the fonts for 30 days, the logo and the screenshots for a day), and the security headers. The Content-Security-Policy lets a page run only the site's own script files and the two inline scripts in `<head>` (the one that marks the page as having script, and the import map), each named by its SHA-256 hash: change either script and its hash in the policy has to change with it, or the browser refuses it. The page may talk only to the MineMuster Supabase project (for the contact form), and no other site may frame it. `/demo`, the app's one-file web build with its own inline scripts, has its own block with no policy |
+
+An inline script's hash is the SHA-256 of exactly the text between its tags, in base64: `printf '%s' "document.documentElement.classList.add('js')" | openssl dgst -sha256 -binary | base64`.
 
 It is the Vercel project `minemuster`, linked to this repository with `site` as its root directory. A push builds it only when something in `site/` changed; the production site is deployed from a commit on purpose, and minemuster.com and www.minemuster.com (which redirects to it) point at the production deployment. The logo files in `site/brand` come from `scripts/make-brand-assets.py` with the app's.
 

@@ -5,13 +5,26 @@
 /* ---------- Menu ---------- */
 const menuButton = document.querySelector('.menu-button');
 const menu = document.getElementById('menu');
+const bar = document.querySelector('.top-bar');
 if (menuButton && menu) {
+  const isOpen = () => menuButton.getAttribute('aria-expanded') === 'true';
   const setOpen = (open) => {
     menuButton.setAttribute('aria-expanded', String(open));
     menu.classList.toggle('is-open', open);
+    if (bar) bar.classList.toggle('menu-open', open);
   };
-  menuButton.addEventListener('click', () => setOpen(menuButton.getAttribute('aria-expanded') !== 'true'));
+  menuButton.addEventListener('click', () => setOpen(!isOpen()));
   menu.addEventListener('click', (e) => { if (e.target.closest('a')) setOpen(false); });
+  // The open menu covers the top of the page, so it closes once the keyboard's focus leaves the
+  // menu and its button (a Tab past its last link would otherwise land on a link hidden under it),
+  // and when a finger or the mouse presses anywhere outside it.
+  const inMenu = (node) => node instanceof Node && (menu.contains(node) || menuButton.contains(node));
+  (bar || menu).addEventListener('focusout', (e) => {
+    if (isOpen() && e.relatedTarget && !inMenu(e.relatedTarget)) setOpen(false);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (isOpen() && !inMenu(e.target)) setOpen(false);
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && menuButton.getAttribute('aria-expanded') === 'true') {
       setOpen(false);
@@ -65,11 +78,35 @@ function preload() {
 
 const whenIdle = (fn) => ('requestIdleCallback' in window ? window.requestIdleCallback(fn, { timeout: 1200 }) : setTimeout(fn, 200));
 
+// How the logo is turned, said the way that works on this screen: a mouse or trackpad drags it
+// (or the arrow keys turn it); on a touch screen only a sideways swipe turns it, since a swipe up
+// or down scrolls the page.
+const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)');
+const HOW_TO_TURN = {
+  fine: { hint: 'Drag to turn the logo', label: 'The MineMuster logo in 3D. Drag it, or use the arrow keys, to turn it.' },
+  touch: { hint: 'Swipe sideways to turn the logo', label: 'The MineMuster logo in 3D. Swipe sideways across it to turn it.' },
+};
+
+function sayHowToTurn(canvas, hint) {
+  const how = finePointer.matches ? HOW_TO_TURN.fine : HOW_TO_TURN.touch;
+  canvas.setAttribute('aria-label', how.label);
+  if (!hint) return;
+  const text = hint.querySelector('[data-logo-hint-text]');
+  if (text) text.textContent = how.hint;
+  else {
+    // No span for the words: they are the hint's last line of text.
+    const line = [...hint.childNodes].reverse().find((n) => n.nodeType === Node.TEXT_NODE && n.data.trim());
+    if (line) line.data = ` ${how.hint} `;
+  }
+}
+
 function startLogo() {
   const canvas = stage.querySelector('canvas');
   const flat = stage.querySelector('.stage-flat');
   const hint = document.querySelector('[data-logo-hint]');
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  sayHowToTurn(canvas, hint);
+  finePointer.addEventListener('change', () => sayHowToTurn(canvas, hint));
   preload();
   import('./3d/logo3d.js')
     .then(({ mountLogo }) => new Promise((resolve) => {
@@ -92,6 +129,18 @@ function startLogo() {
         touchScroll: true,
         pauseOffscreen: true,
         reducedMotionStill: true,
+        // It turns all the way round by itself, a turn about every 15 seconds, lingering face on and
+        // tilting gently, and reads the right way round on both sides. It starts once the flat logo
+        // has faded out, holds still while a mouse is over it or it has keyboard focus, and turns
+        // again 0.7 seconds after it is let go.
+        twoSided: true,
+        spinSpeed: 0.3,
+        dwell: 1,
+        bob: 0.09,
+        bobRate: 0.6,
+        spinDelay: 500,
+        resumeAfter: 700,
+        pauseOnHover: true,
         onReady() {
           stage.classList.add('is-live');
           flat.setAttribute('aria-hidden', 'true');

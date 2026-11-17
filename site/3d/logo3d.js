@@ -3,7 +3,24 @@
 //
 // Options, with the defaults that keep the logo as it is on its own page:
 //   wordmark: true        show MINE MUSTER and its rules under the mark
-//   autoRotate: true      a slow turntable when nobody is touching it (never with reduced motion)
+//   autoRotate: true      a slow turntable when nobody is touching it (never with reduced motion). The
+//                         turn eases in, eases out when a hand takes the logo, and eases back in a
+//                         moment after it is let go
+//   spinSpeed: 0.28       how fast it turns by itself, in radians a second (face on, with dwell)
+//   dwell: 0              how much longer it lingers face on: 0 turns it at an even speed, 1 turns it
+//                         twice as fast edge on as face on
+//   bob: 0.06             how far it tilts back and forth as it turns, in radians
+//   bobRate: 0.4          how quickly it tilts back and forth
+//   spinDelay: 0          milliseconds after the first frame before it starts to turn by itself (time
+//                         for whatever it replaces on the page to fade out)
+//   resumeAfter: 2500     milliseconds after the last drag, key or pinch before it turns by itself again
+//   pauseOnHover: false   true stops the turn while a mouse is over the logo or it has keyboard focus,
+//                         so it can be read and looked at (WCAG 2.2.2); a finger scrolling past does not.
+//                         Held far from a face, it eases on to the nearest face first, never stopping
+//                         edge on
+//   twoSided: false      true draws the back of the logo as its front, so the MM and MINE MUSTER read
+//                         the right way round all the way round, like a sign painted on both sides. The
+//                         swap is made as the logo passes edge on, where neither face can be seen
 //   transparent: false    true clears to transparent, so the page behind shows
 //   view: 'hero'          the angle it starts at and goes back to on a double tap
 //   wheelZoom: true       false leaves the wheel and trackpad to scroll the page
@@ -159,10 +176,17 @@ const VIEWS = {
   top: [0, 1.15],
   back: [Math.PI, 0],
 };
+// With pauseOnHover, a hold that starts more than this far from a face (in radians, about 35
+// degrees) eases on to the nearest face before it holds still, at this rate (a second and a half
+// or so to arrive).
+const SETTLE_FROM = 0.61;
+const SETTLE_RATE = 2.6;
 
 export function mountLogo(canvas, options = {}) {
   const opts = {
     wordmark: true, autoRotate: true, transparent: false, view: 'hero',
+    spinSpeed: 0.28, dwell: 0, bob: 0.06, bobRate: 0.4, spinDelay: 0, resumeAfter: 2500,
+    pauseOnHover: false, twoSided: false,
     wheelZoom: true, pinchZoom: true, touchScroll: false, pauseOffscreen: false,
     frame: null, maxPixels: Infinity, reducedMotionStill: false, onReady: null, onLost: null,
     ...options,
@@ -189,8 +213,12 @@ export function mountLogo(canvas, options = {}) {
   steelDark.color.set(0xb4bac4);
   steelDark.roughness = 0.42;
 
+  // The logo turns as a whole; its body is what is turned round so that, two-sided, the front faces
+  // the camera all the way round.
   const logo = new THREE.Group();
   scene.add(logo);
+  const body = new THREE.Group();
+  logo.add(body);
 
   // MM mark: faces in bright steel, side walls a shade darker so edges read.
   const markDepth = 0.9;
@@ -199,7 +227,7 @@ export function mountLogo(canvas, options = {}) {
   });
   markGeo.translate(0, 0, -markDepth / 2);
   const mark = new THREE.Mesh(markGeo, [steel, steelDark]);
-  logo.add(mark);
+  body.add(mark);
 
   // Wordmark and its flanking rules.
   const word = new THREE.Group();
@@ -224,7 +252,7 @@ export function mountLogo(canvas, options = {}) {
     word.add(ruleMesh);
   }
   word.visible = opts.wordmark;
-  logo.add(word);
+  body.add(word);
 
   // Glints on the blade tips, fading as each tip turns away from the viewer.
   const glintMat = new THREE.SpriteMaterial({ map: glintTexture(), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
@@ -232,7 +260,7 @@ export function mountLogo(canvas, options = {}) {
     const s = new THREE.Sprite(glintMat.clone());
     s.position.set(x, y, markDepth / 2 + 0.05);
     s.userData = { size: i < 2 ? 1.5 : 0.9, phase: i * 1.7 };
-    logo.add(s);
+    body.add(s);
     return s;
   });
 
@@ -245,10 +273,15 @@ export function mountLogo(canvas, options = {}) {
   scene.add(rim);
 
   /* ---- state ---- */
+  // vYaw and vPitch are the speed a flick was let go at, in radians a second. spin is how much of
+  // the turn by itself is running, from 0 to 1 (spinGoal is its first stage, for a soft start).
+  // hovered and focused are a mouse over the logo and keyboard focus on it; wasHeld is whether it
+  // was held still on the last frame, and settle the face a hold is easing it on to ({ goal, v }).
   const state = {
     yaw: startView[0], pitch: startView[1], zoom: 1,
     vYaw: 0, vPitch: 0, target: null, dragging: false, lastInput: -1e9,
     auto: opts.autoRotate && !reduceMotion,
+    spin: 0, spinGoal: 0, hovered: false, focused: false, wasHeld: false, settle: null,
   };
   const onMotionChange = (e) => { reduceMotion = e.matches; state.auto = opts.autoRotate && !reduceMotion; needsDraw = true; };
   motionQuery.addEventListener('change', onMotionChange);
@@ -279,11 +312,12 @@ export function mountLogo(canvas, options = {}) {
   /* ---- input: drag to rotate, wheel or pinch to zoom, double-tap to reset ---- */
   const pointers = new Map();
   let pinchStart = 0, zoomStart = 1, lastTap = 0;
-  const touch = () => { state.lastInput = performance.now(); state.target = null; needsDraw = true; };
+  const touch = () => { state.lastInput = performance.now(); state.target = null; state.settle = null; needsDraw = true; };
   // With touchScroll, a finger (or pen) is only "aiming" until it has moved far enough to tell a
   // sideways drag, which turns the logo, from a swipe up or down, which the browser scrolls.
   const aims = (e) => opts.touchScroll && e.pointerType !== 'mouse';
   const INTENT = 8;
+  const DRAG = 0.0075; // radians the logo turns for each pixel dragged
 
   // With pinch zoom off, two fingers zoom the page as they would anywhere else on it.
   canvas.style.touchAction = opts.touchScroll ? (opts.pinchZoom ? 'pan-y' : 'pan-y pinch-zoom') : 'none';
@@ -301,12 +335,13 @@ export function mountLogo(canvas, options = {}) {
     if (aims(e)) {
       // A second finger is a pinch, which is the page's to zoom: the first one stops turning the logo.
       if (!opts.pinchZoom && pointers.size > 0) { letGo(); return; }
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), live: false });
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), live: false, moves: [] });
       return;
     }
     if (!opts.pinchZoom && pointers.size > 0) return;
     canvas.setPointerCapture(e.pointerId);
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, live: true });
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, live: true, moves: [{ t: e.timeStamp, x: e.clientX, y: e.clientY }] });
+    state.vYaw = state.vPitch = 0; // a hand on it stops a flick
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
@@ -320,6 +355,7 @@ export function mountLogo(canvas, options = {}) {
   });
   canvas.addEventListener('pointermove', (e) => {
     const p = pointers.get(e.pointerId);
+    if (e.pointerType === 'mouse' && !state.dragging) state.hovered = true;
     if (!aims(e) || (p && p.live)) { // a finger that is scrolling the page leaves the light where it is
       const r = canvas.getBoundingClientRect();
       pointerLight.position.x = ((e.clientX - r.left) / r.width - 0.5) * 16;
@@ -332,6 +368,11 @@ export function mountLogo(canvas, options = {}) {
       if (ay >= INTENT && ay >= ax) { pointers.delete(e.pointerId); return; } // a scroll: leave it to the page
       if (ax < INTENT) return;
       p.live = true; // a sideways drag: it turns the logo from here on
+      // ...from where the finger is now: the distance it moved to show which way it was going is
+      // not turned all at once, which would jump the logo and fling it off.
+      p.x = e.clientX; p.y = e.clientY;
+      p.moves = [{ t: e.timeStamp, x: e.clientX, y: e.clientY }];
+      state.vYaw = state.vPitch = 0;
       try { canvas.setPointerCapture(e.pointerId); } catch { /* the pointer may already be gone */ }
       state.dragging = true;
       if (pointers.size === 2 && opts.pinchZoom) {
@@ -348,16 +389,30 @@ export function mountLogo(canvas, options = {}) {
       state.zoom = THREE.MathUtils.clamp(zoomStart * (pinchStart / Math.hypot(a.x - b.x, a.y - b.y)), 0.55, 2.2);
       touch();
     } else if (state.dragging) {
-      const k = 0.0075;
-      state.vYaw = dx * k * 0.5; state.vPitch = dy * k * 0.25;
-      state.yaw += dx * k;
-      state.pitch = THREE.MathUtils.clamp(state.pitch + dy * k, -1.45, 1.45);
+      state.yaw += dx * DRAG;
+      state.pitch = THREE.MathUtils.clamp(state.pitch + dy * DRAG, -1.45, 1.45);
+      // Where the pointer has been in the last moment, for the speed it is let go at.
+      p.moves.push({ t: e.timeStamp, x: e.clientX, y: e.clientY });
+      while (p.moves.length > 2 && e.timeStamp - p.moves[0].t > 120) p.moves.shift();
       touch();
     }
   });
+  // A flick coasts on at the speed it was let go at, measured in time rather than per event, so it
+  // goes as far on any screen. A drag that had stopped before it was let go does not coast.
+  const fling = (p, at) => {
+    state.vYaw = state.vPitch = 0;
+    const last = p.moves[p.moves.length - 1];
+    if (!last || at - last.t > 80) return;
+    const first = p.moves.find((s) => last.t - s.t <= 100);
+    const ms = last.t - first.t;
+    if (ms < 8) return;
+    state.vYaw = THREE.MathUtils.clamp((last.x - first.x) * DRAG * 1000 / ms, -4, 4);
+    state.vPitch = THREE.MathUtils.clamp((last.y - first.y) * DRAG * 1000 / ms, -2, 2);
+  };
   const release = (e) => {
     const p = pointers.get(e.pointerId);
     pointers.delete(e.pointerId);
+    if (p && p.live && state.dragging && e.type === 'pointerup' && pointers.size === 0) fling(p, e.timeStamp);
     if (p && !p.live && e.type === 'pointerup' && performance.now() - p.t0 < 300) {
       // A tap that never became a drag; two in a row go back to the starting view.
       const now = performance.now();
@@ -366,12 +421,24 @@ export function mountLogo(canvas, options = {}) {
     if (pointers.size === 0 || ![...pointers.values()].some((q) => q.live)) {
       state.dragging = false; canvas.style.cursor = 'grab';
     }
+    if (e.pointerType === 'mouse') {
+      // Let go outside the logo, the mouse is no longer over it.
+      const r = canvas.getBoundingClientRect();
+      state.hovered = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    }
   };
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
   // A context menu can swallow the button's release; never leave a pointer stuck turning the logo.
   canvas.addEventListener('lostpointercapture', (e) => { if (pointers.has(e.pointerId)) release(e); });
   canvas.addEventListener('contextmenu', letGo);
+  // With pauseOnHover the turn stops while a mouse is over the logo, and while it has focus from the
+  // keyboard (not from a click: a mouse that has moved off it lets it turn again).
+  canvas.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') state.hovered = true; });
+  canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !state.dragging) state.hovered = false; });
+  const focusVisible = () => { try { return canvas.matches(':focus-visible'); } catch { return true; } };
+  canvas.addEventListener('focus', () => { state.focused = focusVisible(); });
+  canvas.addEventListener('blur', () => { state.focused = false; });
   if (opts.wheelZoom) {
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
@@ -389,19 +456,25 @@ export function mountLogo(canvas, options = {}) {
     else if (e.key === '-') state.zoom = Math.min(2.2, state.zoom * 1.1);
     else return;
     e.preventDefault();
+    state.focused = true; // turned from the keyboard: it holds still until focus moves on
     touch();
   });
 
   /* ---- loop ---- */
   const clock = new THREE.Clock();
-  const worldPos = new THREE.Vector3(), normal = new THREE.Vector3();
+  const toCamera = new THREE.Vector3(), normal = new THREE.Vector3();
   let dist = fitDistance();
+  let readyAt = 0, glintTime = 0;
 
   function frame() {
     const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
-    const idle = performance.now() - state.lastInput > 2500;
+    const now = performance.now();
+    const held = opts.pauseOnHover && (state.hovered || state.focused);
+    const holdStarts = held && !state.wasHeld;
+    state.wasHeld = held;
 
     if (still()) {
+      state.settle = null;
       // Nothing moves by itself: a view is reached at once, a flick does not coast, and an
       // unchanged frame is not drawn again.
       if (state.target) {
@@ -411,6 +484,7 @@ export function mountLogo(canvas, options = {}) {
         needsDraw = true;
       }
       state.vYaw = state.vPitch = 0;
+      state.spin = state.spinGoal = 0;
       if (drawn && !needsDraw) return;
       needsDraw = false;
       centerY = frameCenterY();
@@ -423,15 +497,69 @@ export function mountLogo(canvas, options = {}) {
       state.pitch += (state.target[1] - state.pitch) * k;
       state.zoom += (1 - state.zoom) * k;
       if (Math.abs(state.target[0] - state.yaw) + Math.abs(state.target[1] - state.pitch) < 0.002) state.target = null;
-    } else if (!state.dragging && !still()) {
-      // Coast after a flick, then drift into a slow turntable.
-      state.yaw += state.vYaw; state.pitch = THREE.MathUtils.clamp(state.pitch + state.vPitch, -1.45, 1.45);
-      const decay = Math.exp(-dt * 4);
-      state.vYaw *= decay; state.vPitch *= decay;
-      if (state.auto && idle) {
-        state.yaw += dt * 0.28;
-        state.pitch += (0.14 + Math.sin(t * 0.4) * 0.06 - state.pitch) * (1 - Math.exp(-dt * 1.2));
+      state.spin = state.spinGoal = 0;
+      state.settle = null;
+    } else if (!still()) {
+      // A hold that starts while it is turning by itself, far from a face, would stop it where it
+      // is, perhaps edge on, a sliver that cannot be read. Instead it eases on to the nearest face
+      // (forward or back), carrying on from the speed it had, and holds there.
+      if (holdStarts && state.auto && !state.dragging && state.spin > 0.05) {
+        const period = opts.twoSided ? Math.PI : Math.PI * 2;
+        const goal = Math.round(state.yaw / period) * period;
+        if (Math.abs(goal - state.yaw) > SETTLE_FROM) {
+          const v = opts.spinSpeed * state.spin * (1 + opts.dwell * Math.sin(state.yaw) ** 2) + state.vYaw;
+          state.settle = { goal, v };
+          state.spin = state.spinGoal = 0;
+          state.vYaw = 0;
+        }
       }
+      if (state.settle && (!held || state.dragging)) {
+        // Let go on the way there: the turn by itself takes over from the speed it had.
+        const { v } = state.settle;
+        const full = opts.spinSpeed * (1 + opts.dwell * Math.sin(state.yaw) ** 2);
+        state.spin = state.spinGoal = v > 0 ? Math.min(1, v / full) : 0;
+        if (v <= 0) state.vYaw = v;
+        state.settle = null;
+      }
+      if (state.settle) {
+        // A critically damped ease: no jump in speed at the start, no swing past the face.
+        const s = state.settle;
+        s.v += (-2 * SETTLE_RATE * s.v - SETTLE_RATE * SETTLE_RATE * (state.yaw - s.goal)) * dt;
+        state.yaw += s.v * dt;
+        if (Math.abs(state.yaw - s.goal) < 0.002 && Math.abs(s.v) < 0.01) {
+          state.yaw = s.goal;
+          state.settle = null;
+        }
+      }
+      if (!state.dragging) {
+        // Coast after a flick, slowing to a stop.
+        state.yaw += state.vYaw * dt;
+        state.pitch = THREE.MathUtils.clamp(state.pitch + state.vPitch * dt, -1.45, 1.45);
+        state.vYaw *= Math.exp(-dt * 4); state.vPitch *= Math.exp(-dt * 8);
+      }
+      // The turn by itself is eased, never switched: it comes in along a soft S curve once the
+      // logo has been on the page a moment and nobody has touched it for resumeAfter, stops
+      // quickly under a hand, and slows to a stop while a mouse rests on it or it has focus.
+      const want = state.auto && drawn && !state.dragging && !held
+        && now - readyAt > opts.spinDelay && now - state.lastInput > opts.resumeAfter;
+      if (want) {
+        const k = 1 - Math.exp(-dt * 3);
+        state.spinGoal += (1 - state.spinGoal) * k;
+        state.spin += (state.spinGoal - state.spin) * k;
+      } else {
+        state.spin *= Math.exp(-dt * (state.dragging ? 10 : 3));
+        state.spinGoal = state.spin;
+        if (state.spin < 1e-4) state.spin = state.spinGoal = 0;
+      }
+      if (state.spin > 0) {
+        state.yaw += dt * opts.spinSpeed * state.spin * (1 + opts.dwell * Math.sin(state.yaw) ** 2);
+        if (!state.dragging) {
+          const tilt = 0.14 + Math.sin(t * opts.bobRate) * opts.bob;
+          state.pitch += (tilt - state.pitch) * (1 - Math.exp(-dt * 1.2)) * state.spin;
+        }
+      }
+      // A turn is a turn: keep the number small after hours of turning.
+      if (Math.abs(state.yaw) > 1e4) state.yaw %= Math.PI * 2;
     }
 
     logo.rotation.set(state.pitch, state.yaw, 0);
@@ -440,15 +568,24 @@ export function mountLogo(canvas, options = {}) {
     dist += (fitDistance() * state.zoom - dist) * (1 - Math.exp(-dt * 8));
     camera.position.set(0, 0, dist);
 
+    // Two-sided: once the camera is behind the plane through the middle of the logo, its body is
+    // turned round, so the face toward the camera is always the front and nothing reads mirrored.
+    // At that moment the camera is in the plane itself, both faces are edge on, and the swap does
+    // not show.
     normal.set(0, 0, 1).applyEuler(logo.rotation);
-    const facing = Math.max(0, normal.z);
+    const behind = opts.twoSided && normal.dot(toCamera.copy(camera.position).sub(logo.position)) < 0;
+    body.rotation.y = behind ? Math.PI : 0;
+    const facing = Math.max(0, behind ? -normal.z : normal.z);
+    if (!held) glintTime += dt; // the glints hold still too while the logo is held still
     for (const s of glints) {
-      const pulse = reduceMotion ? 0.85 : 0.7 + 0.3 * Math.sin(t * 1.6 + s.userData.phase);
+      const pulse = reduceMotion ? 0.85 : 0.7 + 0.3 * Math.sin(glintTime * 1.6 + s.userData.phase);
       s.material.opacity = Math.pow(facing, 6) * pulse;
       s.scale.setScalar(s.userData.size * (0.8 + 0.4 * pulse));
     }
     renderer.render(scene, camera);
-    if (!drawn) { drawn = true; if (typeof opts.onReady === 'function') opts.onReady(api); }
+    // The wait before it turns counts from when the first frame is done, which is when onReady lets
+    // the page fade over to it; a first frame can take a while to draw.
+    if (!drawn) { drawn = true; readyAt = performance.now(); if (typeof opts.onReady === 'function') opts.onReady(api); }
   }
 
   // Draw only while it can be seen, when asked to, and only once the shaders are ready.
@@ -481,6 +618,14 @@ export function mountLogo(canvas, options = {}) {
     const old = scene.environment;
     scene.environment = studioEnvironment(renderer);
     if (old) old.dispose();
+    // It comes back at the view it started at, which is how whatever stood in for it shows it,
+    // and turns by itself again only once it has been back for spinDelay.
+    [state.yaw, state.pitch] = startView;
+    state.zoom = 1;
+    state.target = null;
+    state.vYaw = state.vPitch = state.spin = state.spinGoal = 0;
+    dist = fitDistance();
+    centerY = frameCenterY();
     lost = false;
     needsDraw = true;
     update();
@@ -499,9 +644,12 @@ export function mountLogo(canvas, options = {}) {
   const api = {
     setView(name) {
       const v = VIEWS[name] || VIEWS.hero;
-      // Take the short way round to the requested yaw.
-      const turns = Math.round((state.yaw - v[0]) / (Math.PI * 2));
-      state.target = [v[0] + turns * Math.PI * 2, v[1]];
+      // Take the short way round to the requested yaw. Two-sided, the logo looks the same every
+      // half turn, so the nearest half turn will do.
+      const period = opts.twoSided ? Math.PI : Math.PI * 2;
+      const turns = Math.round((state.yaw - v[0]) / period);
+      state.target = [v[0] + turns * period, v[1]];
+      state.settle = null;
       state.vYaw = state.vPitch = 0;
       state.lastInput = performance.now();
       needsDraw = true;

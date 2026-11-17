@@ -21,6 +21,7 @@
   --yellow:#ffc400;      /* the app's action colour: buttons and focus only */
   --yellow-hi:#ffd43b;
   --frame:#1d2024;       /* the phone around a screenshot; the app's own no-signal strip */
+  --tag-red:#b3261e;     /* the red tag, and what is wrong in a form: 6.6:1 on paper, 5.6:1 on the ground */
   --focus:var(--ink);
 
   --gutter:clamp(1rem,4vw,3rem);
@@ -84,11 +85,14 @@ p,li,td,th,figcaption,summary,.small{text-wrap:pretty}
 .mark img{width:100%;height:100%}
 .nav{margin-left:auto;display:flex;align-items:center}
 .menu{list-style:none;display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
-.menu a{display:inline-flex;align-items:center;min-height:3rem;color:var(--steel-2);font-size:1rem;text-decoration:none;border-bottom:2px solid transparent}
+.menu a{display:inline-flex;align-items:center;justify-content:center;min-width:2.75rem;min-height:3rem;color:var(--steel-2);font-size:1rem;text-decoration:none;border-bottom:2px solid transparent}
 .menu a:hover{color:var(--steel-1);border-bottom-color:var(--steel-3)}
+.menu a[aria-current="page"]{color:var(--steel-1);border-bottom-color:var(--steel-1)}
 .menu-cta{display:none}
-.top-cta{flex:none;min-height:2.75rem;padding:.35rem 1.1rem;font-size:1.125rem}
+.top-actions{flex:none;display:flex;align-items:center;gap:.6rem}
+.top-actions .button{min-height:2.75rem;padding:.35rem 1.1rem;font-size:1.125rem}
 .menu-button{display:none}
+@media (min-width:64rem){.top-actions{margin-left:.5rem}}
 
 /* With script, the small-screen menu folds behind a button. */
 @media (max-width:63.99rem){
@@ -101,26 +105,45 @@ p,li,td,th,figcaption,summary,.small{text-wrap:pretty}
   .js [aria-expanded="true"] .menu-icon{visibility:hidden}
   .js [aria-expanded="true"] .menu-icon::before{top:-2px;transform:rotate(45deg)}
   .js [aria-expanded="true"] .menu-icon::after{top:-2px;transform:rotate(-45deg)}
-  .js .menu{display:none;position:absolute;left:0;right:0;top:100%;flex-direction:column;gap:0;padding:.5rem var(--gutter) 1.5rem;background:var(--black);border-bottom:1px solid var(--steel-rule);max-height:calc(100vh - 4rem);overflow-y:auto}
+  /* The open menu is a panel a shade lighter than the black under it, with a steel edge, so the
+     page below never reads as part of it. */
+  .js .menu{display:none;position:absolute;left:0;right:0;top:100%;flex-direction:column;gap:0;padding:.5rem var(--gutter) 1.5rem;background:#111316;border-bottom:2px solid #4a5058;box-shadow:0 1.25rem 2.5rem rgba(0,0,0,.6);max-height:calc(100vh - 4rem);overflow-y:auto}
   .js .menu.is-open{display:flex}
-  .js .menu li{border-top:1px solid #1d2024}
+  .js .menu li{border-top:1px solid #262a2f}
+  /* The menu carries its own button for this, so the bar's is put away while it is open. */
+  .js .menu-open .top-cta{visibility:hidden}
   .js .menu li:first-child{border-top:0}
-  .js .menu a{display:flex;min-height:3.5rem;font-size:1.125rem;border-bottom:0}
+  .js .menu a{display:flex;justify-content:flex-start;min-height:3.5rem;font-size:1.125rem;border-bottom:0}
+  .js .menu a[aria-current="page"]{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:.35em}
   .js .menu .menu-cta{display:block;border-top:0;padding-top:1rem}
-  .js .menu .menu-cta a{display:flex;justify-content:center;color:var(--ink)}
-  .top-cta{display:none}
+  .js .menu .menu-cta + .menu-cta{padding-top:.6rem}
+  .js .menu .menu-cta .button{justify-content:center}
+  .js .menu .menu-cta .button-primary{color:var(--ink)}
+  .js .menu .menu-cta .button-line{color:var(--steel-1);border:2px solid #6b727b}
+  .top-bar{gap:.6rem}
+  .top-sign{display:none}
+  .top-actions .top-cta{padding-inline:.85rem;font-size:1.0625rem}
   html:not(.js) .top-bar{flex-wrap:wrap;padding-block:.5rem}
-  html:not(.js) .nav{margin-left:0;width:100%}
+  html:not(.js) .nav{margin-left:0;width:100%;order:3}
+  html:not(.js) .top-actions{margin-left:auto}
 }
+/* Phones narrower than 375 px keep the early access button in the menu, so the bar never crowds. */
+@media (max-width:23.4rem){.top-actions .top-cta{display:none}}
 
 /* ---------- Hero: the 3D logo on its stage ---------- */
 .hero{text-align:center;padding:clamp(.25rem,1.5vh,1rem) 0 clamp(3.5rem,8vw,6rem)}
 /* The stage is taller than the logo face on, so it stays inside the stage as it turns (site.js
-   frames it with room above and below). On a phone the width sets the logo's size. */
+   frames it with room above and below: edge on and tilted, the ends of the wordmark's rules swing
+   down to within a few pixels of the stage's foot). On a phone the width sets the logo's size. */
 .stage{
   --stage-h:clamp(15rem,min(52vh,62vw),40rem);
   --stage-h:clamp(15rem,min(52svh,62vw),40rem);
   position:relative;height:var(--stage-h)}
+/* A screen wider than it is tall (a laptop) gets a shorter stage, so the hero's buttons are on the
+   first screen at 1280 by 720 and up. */
+@media (min-width:40rem) and (min-aspect-ratio:4/3){
+  .stage{--stage-h:clamp(15rem,min(42vh,62vw),40rem);--stage-h:clamp(15rem,min(42svh,62vw),40rem)}
+}
 @media (max-width:39.99rem){
   .stage{--stage-h:clamp(15rem,min(50vh,74vw),30rem);--stage-h:clamp(15rem,min(50svh,74vw),30rem)}
 }
@@ -134,13 +157,21 @@ p,li,td,th,figcaption,summary,.small{text-wrap:pretty}
 @media (prefers-reduced-motion:no-preference){
   .stage canvas,.stage-flat{transition:opacity .45s ease}
 }
-.stage-hint{display:flex;justify-content:center;align-items:center;gap:.6rem;min-height:1.5rem;margin-top:.75rem;color:var(--steel-3);font-size:var(--fs-small)}
+/* The hint sits in the band across the top of the stage, right over the logo: the turning logo
+   never reaches that band (its highest point is about an eighth of the stage down). It lets a drag
+   through to the logo. */
+.stage-hint{position:absolute;left:0;right:0;top:.25rem;z-index:1;display:flex;justify-content:center;align-items:center;gap:.6rem;min-height:1.5rem;color:var(--steel-3);font-size:var(--fs-small);line-height:1.5;pointer-events:none}
 .stage-hint svg{flex:none;width:1.75rem;height:1rem;color:var(--steel-3)}
 .hero-copy{margin-top:clamp(1rem,3vh,2rem)}
 .hero h1{font-size:var(--fs-h1);line-height:.98;color:var(--steel-1)}
 .hero-sub{max-width:38rem;margin:1.1rem auto 0;color:var(--steel-2);font-size:clamp(1.0625rem,1rem + .35vw,1.25rem);line-height:1.55}
 .hero .actions{justify-content:center;margin-top:clamp(1.5rem,3.5vh,2.25rem)}
-.hero-note{margin-top:1rem;color:var(--steel-3);font-size:var(--fs-small)}
+.hero-note{max-width:38rem;margin:1rem auto 0;color:var(--steel-3);font-size:var(--fs-small)}
+.hero-note a{color:var(--steel-1)}
+.hero-note-quiet{margin-top:.35rem}
+/* A link in a line of small print, with room above and below it to tap (44 px) that does not
+   push the lines apart. */
+.note-link{display:inline-block;padding-block:.7rem;margin-block:-.7rem}
 
 /* ---------- Sections ---------- */
 .section{padding-block:var(--section)}
@@ -233,13 +264,32 @@ table.paper caption{caption-side:top;text-align:left;padding:.6rem 1rem;backgrou
   .feature .shots-one{justify-content:center}
 }
 
-/* ---------- What it does ---------- */
-.what-grid{display:grid;gap:2.5rem}
-.for{display:grid;gap:2rem;margin-top:clamp(3rem,6vw,4.5rem)}
-.for h3{font-size:1.5rem}
-.for p{margin-top:.6rem;max-width:34rem}
-@media (min-width:48rem){.for{grid-template-columns:repeat(2,minmax(0,1fr));gap:3rem}}
-@media (min-width:64rem){.for{grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:4.5rem;padding-top:2.5rem;border-top:1px solid var(--rule)}}
+/* A link that goes on to more: condensed, with an arrow. */
+.text-link,.card-link{font-family:var(--cond);font-weight:700;font-size:1.1875rem;line-height:1.2;letter-spacing:.01em;color:var(--ink);text-decoration-thickness:2px}
+.text-link{display:inline-flex;align-items:center;min-height:2.75rem}
+.text-link::after,.card-link::after{content:"\00a0\2192";content:"\00a0\2192" / ""}
+.text-link:hover,.card-link:hover{text-decoration-thickness:3px}
+
+/* ---------- What it does: four cards, each a slip of paper ---------- */
+.cards{list-style:none;display:grid;gap:1rem;margin-top:clamp(3rem,6vw,4.5rem)}
+@media (min-width:40rem){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (min-width:64rem){.cards{grid-template-columns:repeat(4,minmax(0,1fr));gap:1.25rem}}
+.card{display:flex;flex-direction:column;background:var(--paper);border:2px solid var(--ink)}
+.card-head{padding:.7rem 1rem .6rem;border-bottom:2px solid var(--ink);font-size:1.3125rem;line-height:1.1;text-transform:uppercase;letter-spacing:.03em}
+/* Side by side, every head is two lines deep, so the slips' words and links start level. */
+@media (min-width:40rem){.card-head{display:flex;align-items:flex-end;min-height:calc(2.2em + 1.3rem + 2px)}}
+.card p{padding:.9rem 1rem 0;font-size:1rem;line-height:1.5}
+.card-link{align-self:flex-start;margin-top:auto;padding:1rem 1rem 1.1rem;font-size:1.0625rem}
+
+/* ---------- Who it is for ---------- */
+.kinds{list-style:none;display:flex;flex-wrap:wrap;gap:.6rem}
+.kinds li{padding:.5rem .85rem;background:var(--paper);border:2px solid var(--ink);font-family:var(--cond);font-weight:700;font-size:1.0625rem;line-height:1.2;text-transform:uppercase;letter-spacing:.045em;color:var(--ink)}
+.roles{display:grid;gap:2rem;margin-top:clamp(3rem,6vw,4.5rem)}
+.roles > div{padding-top:1.1rem;border-top:2px solid var(--ink)}
+.roles h3{font-size:1.5rem}
+.roles p{margin-top:.6rem}
+@media (min-width:48rem){.roles{grid-template-columns:repeat(2,minmax(0,1fr));gap:2.5rem 3rem}}
+@media (min-width:72rem){.roles{grid-template-columns:repeat(4,minmax(0,1fr));gap:2.25rem}}
 
 /* ---------- Features ---------- */
 .feature{padding-top:clamp(2.5rem,5vw,3.5rem);margin-top:clamp(2.5rem,5vw,3.5rem);border-top:2px solid var(--ink)}
@@ -252,6 +302,25 @@ table.paper caption{caption-side:top;text-align:left;padding:.6rem 1rem;backgrou
 /* The strip as the app draws it: a dark bar across the top of the screen, not a button. */
 .signal-strip{display:flex;align-items:center;gap:.75rem;margin-top:1.75rem;padding:.8rem 1rem;max-width:34rem;background:var(--frame);color:var(--steel-1);font-weight:500;line-height:1.35;border:1px solid var(--steel-rule)}
 .signal-strip svg{flex:none;width:1.4rem;height:1.4rem}
+
+/* ---------- From Bad Order to date fixed ---------- */
+/* Five slips joined by arrows: down the page on a phone, across it on a computer. */
+.loop{list-style:none;display:grid;gap:2.25rem;margin-top:clamp(2.5rem,5vw,3.5rem)}
+.loop li{position:relative;background:var(--paper);border:2px solid var(--ink)}
+.loop li + li::before{content:"";position:absolute;left:1.75rem;top:calc(-2.25rem - 2px);height:calc(2.25rem - 6px);border-left:2px solid var(--ink)}
+.loop li + li::after{content:"";position:absolute;left:calc(1.75rem - 5px);top:-10px;border-style:solid;border-width:8px 6px 0;border-color:var(--ink) transparent transparent}
+.loop-head{display:flex;align-items:center;gap:.65rem;padding:.6rem 1rem;border-bottom:2px solid var(--ink);font-size:1.25rem;line-height:1.1;text-transform:uppercase;letter-spacing:.04em}
+.loop-n{flex:none;display:inline-grid;place-items:center;width:1.9rem;height:1.9rem;border:2px solid currentColor;border-radius:50%;font-size:1.0625rem;letter-spacing:0;font-variant-numeric:tabular-nums}
+.loop li > p{padding:.85rem 1rem 1.05rem;font-size:1rem;line-height:1.5}
+.loop-tag .loop-head{background:var(--tag-red);color:#fff}
+@media (min-width:64rem){
+  .loop{grid-template-columns:repeat(5,minmax(0,1fr));gap:1.5rem}
+  .loop-head{min-height:4.25rem;font-size:1.125rem}
+  .loop li + li::before{left:calc(-1.5rem - 2px);top:calc(2.125rem - 1px);width:calc(1.5rem - 6px);height:0;border-left:0;border-top:2px solid var(--ink)}
+  .loop li + li::after{left:-10px;top:calc(2.125rem - 6px);border-width:6px 0 6px 8px;border-color:transparent transparent transparent var(--ink)}
+}
+.loop-foot{margin-top:2rem;max-width:46rem;padding:.15rem 0 .15rem 1.15rem;border-left:4px solid var(--ink)}
+.loop-foot p + p{margin-top:.6rem}
 
 /* ---------- Inspector ---------- */
 .records-wrap{margin-top:2rem}
@@ -288,6 +357,62 @@ table.paper caption{caption-side:top;text-align:left;padding:.6rem 1rem;backgrou
 .systems{margin-top:1.75rem}
 .systems td{font-size:1rem}
 
+/* ---------- Try the app, and other panels of paper ---------- */
+.demo{display:grid;gap:1.5rem 3rem;align-items:center;padding:clamp(1.5rem,4vw,2.75rem);background:var(--paper);border:2px solid var(--ink)}
+.demo h2{font-size:clamp(2rem,1.5rem + 2vw,3rem);line-height:1}
+.demo .lede{margin-top:1rem;max-width:40rem}
+@media (min-width:56rem){.demo{grid-template-columns:minmax(0,1fr) auto}}
+.demo-actions{display:flex;flex-wrap:wrap;gap:.75rem}
+.stamp{display:inline-block;margin-bottom:1rem;padding:.25rem .65rem;border:2px solid var(--ink);font-family:var(--cond);font-weight:700;font-size:.9375rem;line-height:1.2;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);transform:rotate(-2deg)}
+
+/* ---------- Pricing ---------- */
+.h-mid{font-size:clamp(1.875rem,1.5rem + 1.4vw,2.5rem);line-height:1.02}
+.trial{list-style:none;margin-top:2rem;max-width:36rem;background:var(--paper);border:2px solid var(--ink)}
+.h-mid + .trial{margin-top:1.5rem}
+.trial li{display:grid;grid-template-columns:minmax(0,8.5rem) minmax(0,1fr);border-top:1px solid var(--ink)}
+.trial li:first-child{border-top:0}
+.trial-when{padding:.8rem 1rem;border-right:1px solid var(--ink);font-family:var(--cond);font-weight:700;font-size:1.0625rem;line-height:1.3;text-transform:uppercase;letter-spacing:.045em;color:var(--ink)}
+.trial-what{padding:.8rem 1rem;line-height:1.5}
+@media (max-width:25.99rem){
+  .trial li{grid-template-columns:minmax(0,1fr)}
+  .trial-when{border-right:0;padding-bottom:0}
+  .trial-what{padding-top:.15rem}
+}
+.plan{width:100%;max-width:32rem;background:var(--paper);border:2px solid var(--ink)}
+/* On the home page the plan comes between the heading and the small print, so a phone shows the
+   price before the trial's dates and the cancelling; on a computer it stands on the right, beside
+   both. On the pricing page it is the same 32rem wide, on the left, and sits beside the trial
+   from a tablet up. */
+.plan-detail .trial{margin-top:0}
+@media (min-width:64rem){
+  .split-plan-end{grid-template-rows:auto 1fr;row-gap:0}
+  .split-plan-end > .plan{grid-column:2;grid-row:1 / span 2;justify-self:end}
+  .split-plan-end > .plan-intro{grid-column:1;grid-row:1}
+  .split-plan-end > .plan-detail{grid-column:1;grid-row:2;padding-top:2rem}
+}
+@media (min-width:44rem){
+  .split-plan{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:2rem;align-items:start}
+  .split-plan .trial li{grid-template-columns:minmax(0,7rem) minmax(0,1fr)}
+}
+@media (min-width:64rem){
+  .split-plan{grid-template-columns:minmax(0,32rem) minmax(0,1fr);gap:4.5rem}
+  .split-plan .trial li{grid-template-columns:minmax(0,8.5rem) minmax(0,1fr)}
+}
+.plan-head{display:flex;justify-content:space-between;gap:1rem;padding:.6rem 1.25rem;border-bottom:2px solid var(--ink);font-family:var(--cond);font-weight:700;font-size:.9375rem;line-height:1.2;text-transform:uppercase;letter-spacing:.06em;color:var(--ink)}
+.plan-head span + span{font-weight:600;color:var(--ink-2)}
+.plan-body{padding:1.5rem 1.25rem}
+.plan-price{display:flex;align-items:baseline;flex-wrap:wrap;gap:.25rem .6rem}
+.price-num{font-family:var(--cond);font-weight:700;font-size:clamp(4.25rem,3.5rem + 3vw,6rem);line-height:.85;letter-spacing:-.01em;color:var(--ink);font-variant-numeric:tabular-nums}
+.price-unit{font-family:var(--cond);font-weight:600;font-size:1.5rem;line-height:1.1;color:var(--ink-2)}
+.plan-sub{margin-top:.9rem;color:var(--ink)}
+.plan .lines{margin-top:1.25rem}
+.plan-go{width:100%;margin-top:1.5rem}
+.plan-small{margin-top:.75rem;font-size:var(--fs-small);line-height:1.5;text-align:center}
+.included{display:grid;gap:2.5rem;margin-top:clamp(2.5rem,5vw,3.5rem)}
+.included h3{font-size:1.5rem}
+@media (min-width:56rem){.included{grid-template-columns:repeat(3,minmax(0,1fr));gap:3rem}}
+.space-s{margin-top:.75rem}
+
 /* ---------- How a company starts ---------- */
 .steps{list-style:none;display:grid;gap:0;margin-top:clamp(2.5rem,5vw,3.5rem);counter-reset:step}
 .steps li{position:relative;display:grid;grid-template-columns:3rem minmax(0,1fr);column-gap:1rem;padding:1.5rem 0;border-top:1px solid var(--steel-rule)}
@@ -301,8 +426,10 @@ table.paper caption{caption-side:top;text-align:left;padding:.6rem 1rem;backgrou
   .steps li:last-child{border-bottom:0}
   .step-n{display:block;font-size:3.75rem;margin-bottom:1rem}
 }
-.start-cta{display:flex;flex-wrap:wrap;align-items:center;gap:1rem 1.5rem;margin-top:clamp(2.5rem,5vw,3.5rem)}
-.start-cta p{color:var(--steel-3);font-size:var(--fs-small)}
+.early{margin-top:clamp(2rem,4vw,2.75rem);max-width:46rem;padding:1.1rem 1.25rem;border:1px solid var(--steel-rule);border-left:4px solid var(--steel-3)}
+.early h3{font-size:1.375rem}
+.early p{margin-top:.4rem;color:var(--steel-2)}
+.start-cta{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin-top:clamp(2rem,4vw,2.75rem)}
 
 /* ---------- About ---------- */
 .private{margin-top:clamp(2.5rem,5vw,3rem)}
@@ -319,26 +446,110 @@ table.paper caption{caption-side:top;text-align:left;padding:.6rem 1rem;backgrou
 .faq-list .answer{padding:0 2.5rem 1.4rem 0;max-width:42rem}
 .faq-list .answer p + p{margin-top:.75rem}
 
+/* ---------- Contact form ---------- */
+.form{display:grid;gap:1.25rem;min-width:0}
+.form-note{font-size:var(--fs-small);color:var(--ink-2)}
+.form-row{display:grid;gap:1.25rem}
+@media (min-width:40rem){.form-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.field{display:grid;gap:.4rem;align-content:start;min-width:0}
+.field label{font-family:var(--cond);font-weight:700;font-size:1.1875rem;line-height:1.2;letter-spacing:.01em;color:var(--ink)}
+.opt{font-family:var(--text);font-weight:500;font-size:var(--fs-small);letter-spacing:0;color:var(--ink-2)}
+.field input,.field textarea{width:100%;min-height:3.5rem;padding:.8rem .9rem;border:2px solid var(--ink);border-radius:.375rem;background:var(--paper);color:var(--ink);font:500 1.0625rem/1.4 var(--text);-webkit-appearance:none;appearance:none}
+.field textarea{min-height:11rem;resize:vertical}
+.field input:focus-visible,.field textarea:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.field [aria-invalid="true"]{border-color:var(--tag-red);box-shadow:0 0 0 1px var(--tag-red)}
+.field-error{font-size:var(--fs-small);line-height:1.45;color:var(--tag-red)}
+.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.form-send{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1.25rem}
+.form-send .button[disabled]{opacity:.55;cursor:not-allowed}
+.form-status{font-size:var(--fs-small);line-height:1.45;color:var(--ink-2)}
+.form-status[data-kind="error"]{color:var(--tag-red)}
+.form-noscript{padding:.8rem 1rem;background:var(--paper);border-left:4px solid var(--ink)}
+.form-done{padding:1.25rem 1.4rem;background:var(--paper);border:2px solid var(--ink);border-left-width:6px}
+.form-done:focus{outline:3px solid var(--ink);outline-offset:3px}
+.form-done-title{font-family:var(--cond);font-weight:700;font-size:1.5rem;line-height:1.1;color:var(--ink)}
+.form-done p + p{margin-top:.4rem}
+.aside-box{margin-top:1.75rem;padding:1rem 1.15rem 1.15rem;background:var(--paper);border:2px solid var(--ink)}
+.aside-box h3{font-size:1.375rem}
+.aside-box p{margin-top:.35rem}
+.prose .aside-box p + p{margin-top:.5rem}
+.prose .h-mid + p{margin-top:1rem}
+.aside-actions{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.9rem}
+.aside-actions .button{min-height:3rem;padding:.35rem 1.1rem;font-size:1.125rem}
+
+/* The contact page: the form first, so a phone shows it on the first screen, and what else there
+   is beside it on a computer. */
+.split-form > .asides > .aside-box:first-child{margin-top:0}
+.form-lead{margin-top:.9rem;max-width:40rem}
+.form-col .form{margin-top:1.75rem}
+@media (min-width:64rem){.split-form{grid-template-columns:minmax(0,7fr) minmax(0,5fr)}.split-form > .asides{padding-top:.5rem}}
+
+/* ---------- Pages other than the home page ---------- */
+.page-head{padding:clamp(3.25rem,8vw,6rem) 0 clamp(3rem,6vw,4.5rem)}
+.page-head h1{max-width:18ch;font-size:var(--fs-h1);line-height:.98}
+.page-head .lede{max-width:40rem}
+.page-head .actions{margin-top:2rem}
+.eyebrow{margin-bottom:.9rem;font-family:var(--cond);font-weight:700;font-size:1.0625rem;line-height:1.2;text-transform:uppercase;letter-spacing:.08em;color:var(--steel-3)}
+.updated{margin-top:1.25rem;font-size:var(--fs-small);color:var(--steel-3)}
+
+/* A document with its contents beside it: security, privacy and terms. */
+.doc-layout{display:grid;gap:2.5rem}
+@media (min-width:64rem){
+  .doc-layout{grid-template-columns:minmax(0,15rem) minmax(0,46rem);gap:4.5rem;align-items:start}
+  .toc{position:sticky;top:6.5rem}
+}
+.toc{padding:1rem 1.1rem .5rem;background:var(--paper);border:2px solid var(--ink)}
+.toc-h{font-family:var(--cond);font-weight:700;font-size:.9375rem;line-height:1.2;text-transform:uppercase;letter-spacing:.06em}
+.toc ol{list-style:none;margin-top:.6rem}
+.toc li{border-top:1px solid var(--rule)}
+.toc a{display:flex;align-items:center;min-height:2.75rem;padding:.35rem 0;font-size:1rem;line-height:1.3;color:var(--ink-2);text-decoration:none}
+.toc a:hover{color:var(--ink);text-decoration:underline}
+.doc{min-width:0;max-width:46rem}
+.doc > section + section{margin-top:clamp(2.5rem,5vw,3.25rem)}
+.doc h2{padding-top:1.1rem;border-top:2px solid var(--ink);font-size:clamp(1.75rem,1.45rem + 1.1vw,2.25rem);line-height:1.05}
+.doc p,.doc ul{margin-top:1rem}
+.doc ul:not(.lines){padding-left:1.25rem;list-style:square}
+.doc ul:not(.lines) li + li{margin-top:.45rem}
+.doc ul:not(.lines) li::marker{color:var(--ink)}
+.doc .lines{margin-top:1.25rem}
+.doc b{font-family:var(--cond);font-weight:700;font-size:1.0625em;letter-spacing:.01em;color:var(--ink)}
+.doc a{color:var(--ink)}
+
+/* The 404 page's list of pages. */
+.page-list{list-style:none;max-width:48rem;margin-top:1.5rem;border-top:2px solid var(--ink)}
+.page-list li{display:grid;gap:.15rem;padding:.9rem 0;border-bottom:1px solid var(--rule)}
+.page-list a{display:flex;align-items:center;min-height:2.75rem;font-family:var(--cond);font-weight:700;font-size:1.375rem;line-height:1.2;color:var(--ink)}
+.page-list span{font-size:1rem}
+@media (min-width:48rem){.page-list li{grid-template-columns:17rem minmax(0,1fr);align-items:baseline;gap:1.5rem}}
+
+/* ---------- The closing band ---------- */
+.closing{padding-block:clamp(4rem,9vw,7rem);text-align:center;border-top:1px solid #16181b}
+.closing-sub{max-width:38rem;margin:1.1rem auto 0;font-size:clamp(1.0625rem,1rem + .35vw,1.25rem);line-height:1.55;color:var(--steel-2)}
+.closing .actions{justify-content:center;margin-top:2rem}
+.closing-note{margin-top:1.25rem;font-size:var(--fs-small);color:var(--steel-3)}
+.closing-note a{color:var(--steel-1)}
+
 /* ---------- Footer ---------- */
 .foot{padding:clamp(3.5rem,7vw,5rem) 0 2rem;border-top:1px solid #16181b}
-.foot-grid{display:grid;gap:2.5rem}
+.foot-grid{display:grid;gap:2.75rem}
+.foot-brand{display:flex;flex-direction:column;align-items:flex-start;gap:1.1rem}
 .foot-logo{width:min(100%,17rem)}
-.foot-tag{margin-top:1rem;color:var(--steel-2);max-width:22rem}
-.foot nav ul{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,max-content));grid-template-rows:repeat(4,auto);grid-auto-flow:column;gap:0 2rem}
-.foot nav a{display:inline-flex;align-items:center;min-height:2.75rem;color:var(--steel-2);text-decoration:none}
-.foot nav a:hover{color:var(--steel-1);text-decoration:underline}
-.foot-cta{display:flex;flex-direction:column;align-items:flex-start;gap:.75rem}
-.foot-cta p{color:var(--steel-3);font-size:var(--fs-small)}
+.foot-tag{color:var(--steel-2);max-width:22rem}
+.foot-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2rem 1.5rem}
+.foot .foot-h{font-family:var(--cond);font-weight:700;font-size:.9375rem;line-height:1.2;text-transform:uppercase;letter-spacing:.08em;color:var(--steel-3)}
+.foot-col ul{list-style:none;margin-top:.4rem}
+.foot-col a{display:inline-flex;align-items:center;min-width:2.75rem;min-height:2.75rem;line-height:1.3;color:var(--steel-2);text-decoration:none}
+.foot-col a:hover{color:var(--steel-1);text-decoration:underline}
+.foot-col a[aria-current="page"]{color:var(--steel-1);text-decoration:underline}
 .foot-base{margin-top:clamp(2.5rem,5vw,3.5rem);padding-top:1.5rem;border-top:1px solid var(--steel-rule);color:var(--steel-3);font-size:var(--fs-small);display:flex;flex-wrap:wrap;justify-content:space-between;gap:.5rem 2rem}
-@media (min-width:56rem){
-  .foot-grid{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,.8fr);gap:3rem;align-items:start}
-}
+@media (min-width:48rem){.foot-links{grid-template-columns:repeat(4,minmax(0,max-content));justify-content:space-between}}
+@media (min-width:64rem){.foot-grid{grid-template-columns:minmax(0,17rem) minmax(0,1fr);gap:4.5rem;align-items:start}}
 
 @media (prefers-contrast:more){
   :root{--ink-2:#24282d;--rule:#7d848c;--steel-2:#e2e3e3;--steel-3:#c6c8c8;--steel-rule:#6a6e72}
 }
 @media (forced-colors:active){
-  .button,.paper,.phone{border:2px solid CanvasText}
+  .button,.paper,.phone,.card,.kinds li,.loop li,.demo,.trial,.plan,.toc,.aside-box,.form-done{border:2px solid CanvasText}
   /* The steel logo is made for black: keep its stage black whatever the system colours are. */
   .stage,.foot-logo,.mark img{forced-color-adjust:none;background:#000}
 }
