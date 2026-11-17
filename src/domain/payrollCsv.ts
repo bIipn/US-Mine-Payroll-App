@@ -70,13 +70,20 @@ export function payrollCsv(rows: EmployeePayroll[], codes: PayCodes, layout: Pay
 }
 
 /**
+ * A field a spreadsheet could read as a formula: one that starts with = + - or
+ * @, in their full-width forms too, after any spaces, or that starts with a tab
+ * or a carriage return (OWASP's list for CSV injection).
+ */
+const FORMULA = /^(?:[\t\r]|[\s\u3000]*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20])/;
+
+/**
  * Rows as CSV: commas, quotes only where a field needs them, CRLF line ends.
  * A field that starts like a formula gets a leading apostrophe, so a
  * spreadsheet that opens the file shows the text instead of running it.
  */
 export function toCsv(rows: string[][]): string {
   const field = (value: string) => {
-    const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+    const safe = FORMULA.test(value) ? `'${value}` : value;
     return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
   return rows.map((row) => row.map(field).join(',')).join('\r\n') + '\r\n';

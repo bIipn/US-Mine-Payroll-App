@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.vercel/
+# Every file Vite reads settings from, but the example.
+.env
+.env.*
+!.env.example
+*.tsbuildinfo

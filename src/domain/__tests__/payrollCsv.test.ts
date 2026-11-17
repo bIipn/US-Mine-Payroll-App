@@ -66,5 +66,13 @@ describe('toCsv', () => {
 
   it('keeps a spreadsheet from reading a typed name as a formula', () => {
     expect(toCsv([['=SUM(A1)', '+1', '-x', '@me']])).toBe("'=SUM(A1),'+1,'-x,'@me\r\n");
+    // After a tab or spaces, which some importers trim, and in full-width forms.
+    expect(toCsv([['\t=HYPERLINK("x")', '  =1+1', '\u3000@me', '\uFF1DSUM(A1)', '\uFF0B1', '\uFF0D1', '\uFF20me']])).toBe(
+      '"\'\t=HYPERLINK(""x"")",\'  =1+1,\'\u3000@me,\'\uFF1DSUM(A1),\'\uFF0B1,\'\uFF0D1,\'\uFF20me\r\n',
+    );
+    // A field that starts with a tab or a carriage return at all.
+    expect(toCsv([['\tName', '\rName']])).toBe('\'\tName,"\'\rName"\r\n');
+    // Ordinary names, codes and hours are left alone.
+    expect(toCsv([['O\'Neil', 'Ortiz-Lee', 'REG', '8.00', ' Sam']])).toBe("O'Neil,Ortiz-Lee,REG,8.00, Sam\r\n");
   });
 });
