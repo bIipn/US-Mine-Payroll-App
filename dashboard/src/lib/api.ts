@@ -1,5 +1,6 @@
 import type { Role } from '@app/domain/types';
 
+import { billingAnswer, type BillingView } from './billing';
 import { authProblem, dataProblem, Problem } from './errors';
 import type {
   CompanyChoice,
@@ -113,6 +114,30 @@ export async function loadCompany(companyId: string): Promise<CompanyRow | null>
     .maybeSingle();
   if (error) throw dataProblem(error, 'Loading the company');
   return data as CompanyRow | null;
+}
+
+// ---- Billing -----------------------------------------------------------------------------------
+
+/** How long the billing check may take before the page lets the supervisor in without it. */
+const BILLING_WAIT_MS = 15_000;
+
+/**
+ * Where the company's subscription stands. Unlike the other calls this one never
+ * throws: what it cannot find out it says so, and the gate lets the supervisor
+ * in (`gate` in billing.ts). A server without `company_billing` yet is
+ * `missing`, not an error.
+ */
+export async function companyBilling(companyId: string): Promise<BillingView> {
+  const stop = new AbortController();
+  const timer = window.setTimeout(() => stop.abort(), BILLING_WAIT_MS);
+  try {
+    const { data, error, status } = await supabase.rpc('company_billing', { p_company_id: companyId }).abortSignal(stop.signal);
+    return billingAnswer({ data, error, status });
+  } catch (e) {
+    return billingAnswer({ data: null, error: { message: e instanceof Error ? e.message : '' } });
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 // ---- The sign-in roster -------------------------------------------------------------------

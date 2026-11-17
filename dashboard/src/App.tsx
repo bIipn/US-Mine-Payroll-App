@@ -2,9 +2,13 @@ import type { Session } from '@supabase/supabase-js';
 import { useCallback, useEffect, useState } from 'react';
 
 import { myCompanies, signOut } from './lib/api';
+import { BillingProvider } from './lib/billingState';
 import { companyToOpen, type OpenWhich } from './lib/companies';
 import { CompanyProvider } from './lib/company';
 import { messageOf } from './lib/errors';
+import { clearTrialIntent, wantsTrial } from './lib/intent';
+import { remember, remembered } from './lib/picked';
+import { go } from './lib/router';
 import type { CompanyChoice } from './lib/server';
 import { arrivedWith, supabase, tidyAddress } from './lib/supabase';
 import { AuthScreen, NewPasswordScreen } from './screens/AuthScreen';
@@ -13,24 +17,6 @@ import { NoCompanyScreen } from './screens/NoCompanyScreen';
 import { Shell } from './screens/Shell';
 import { Boundary } from './ui/boundary';
 import { Button, Loading, Notice } from './ui/kit';
-
-const PICKED = 'minemuster.office.company';
-
-function remembered(): string | null {
-  try {
-    return window.localStorage.getItem(PICKED);
-  } catch {
-    return null;
-  }
-}
-
-function remember(id: string): void {
-  try {
-    window.localStorage.setItem(PICKED, id);
-  } catch {
-    // A browser that keeps nothing still works; it just opens the first company.
-  }
-}
 
 type Auth = { state: 'checking' } | { state: 'out' } | { state: 'in'; session: Session } | { state: 'recovery'; session: Session };
 
@@ -75,7 +61,7 @@ export function App() {
   }, []);
 
   if (auth.state === 'checking') return <Loading>Opening MineMuster</Loading>;
-  if (auth.state === 'out') return <AuthScreen said={linkSaid} />;
+  if (auth.state === 'out') return <AuthScreen said={linkSaid} trial={wantsTrial()} />;
   if (auth.state === 'recovery') return <NewPasswordScreen onDone={() => setAuth({ state: 'in', session: auth.session })} />;
   return (
     <Boundary
@@ -108,12 +94,19 @@ function Companies({ session }: { session: Session }) {
     setError(null);
     try {
       const companies = await myCompanies();
-      setList(companies);
       const id = companyToOpen(companies, open);
       if (id) {
         setPicked(id);
         remember(id);
       }
+      // Sent from the website to start a trial: once a company opens, it opens on Billing, for a supervisor.
+      // The crew never sees billing, so for them the wish is simply spent.
+      if (companies.length > 0 && wantsTrial()) {
+        const opening = companies.find((c) => c.id === (id ?? remembered())) ?? companies[0];
+        clearTrialIntent();
+        if (opening.role === 'supervisor') go('/billing', { replace: true });
+      }
+      setList(companies);
       return companies.length > 0;
     } catch (e) {
       setError(messageOf(e));
@@ -166,26 +159,29 @@ function Companies({ session }: { session: Session }) {
     return <EmployeeScreen email={email} choice={choice} companies={list} onPick={pick} />;
   }
 
+  // Billing is asked alongside the records, so the gate is ready by the time they are.
   return (
-    <CompanyProvider
-      key={choice.id}
-      choice={choice}
-      me={session.user.id}
-      recheckRole={recheckRole}
-      loading={(progress) => <Loading>{progress}</Loading>}
-      failed={(message, retry) => (
-        <main className="loading">
-          <div className="stack" style={{ maxWidth: '34rem', padding: '1rem' }}>
-            <Notice tone="bo" title={`${choice.name} could not be loaded`}>{message}</Notice>
-            <div className="row">
-              <Button kind="ink" onClick={retry}>Try again</Button>
-              <Button kind="quiet" onClick={() => void signOut()}>Sign out</Button>
+    <BillingProvider key={choice.id} companyId={choice.id} recheckRole={recheckRole}>
+      <CompanyProvider
+        key={choice.id}
+        choice={choice}
+        me={session.user.id}
+        recheckRole={recheckRole}
+        loading={(progress) => <Loading>{progress}</Loading>}
+        failed={(message, retry) => (
+          <main className="loading">
+            <div className="stack" style={{ maxWidth: '34rem', padding: '1rem' }}>
+              <Notice tone="bo" title={`${choice.name} could not be loaded`}>{message}</Notice>
+              <div className="row">
+                <Button kind="ink" onClick={retry}>Try again</Button>
+                <Button kind="quiet" onClick={() => void signOut()}>Sign out</Button>
+              </div>
             </div>
-          </div>
-        </main>
-      )}
-    >
-      <Shell email={email} companies={list} onPick={pick} />
-    </CompanyProvider>
+          </main>
+        )}
+      >
+        <Shell email={email} companies={list} onPick={pick} />
+      </CompanyProvider>
+    </BillingProvider>
   );
 }

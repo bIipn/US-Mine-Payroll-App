@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { loadCompany, loadJoinRequests, loadNotifications, loadRecords, loadRoster } from './api';
+import { recordsOpen } from './billing';
+import { useBilling } from './billingState';
 import { messageOf, notAllowed } from './errors';
 import { board, type Board } from './overview';
 import { shapeRecords, type Shaped } from './records';
@@ -9,7 +11,10 @@ import type { CompanyChoice, CompanyRow, JoinRequestRow, NotificationRow, Record
 /**
  * Everything the dashboard shows for one company, loaded once and reloaded on
  * request: the company, its sign-in roster and join requests, and every record
- * its phones have sent, shaped for the app's own code.
+ * its phones have sent, shaped for the app's own code. The records are asked
+ * for only once billing says the company has MineMuster (`recordsOpen`); until
+ * then the company opens without them, for its Billing page, and the server
+ * would refuse them anyway.
  */
 
 export interface CompanyState {
@@ -27,6 +32,8 @@ export interface CompanyState {
   loadedAt: number;
   /** The records could not be loaded; the roster still can. */
   recordsError: string | null;
+  /** The records were not asked for: billing does not say the company is in. */
+  recordsHeld: boolean;
   now: number;
   reload: () => Promise<void>;
   reloadRoster: () => Promise<void>;
@@ -73,6 +80,8 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
   const [code, setCode] = useState(choice.join_code ?? null);
   const now = useNow();
   const turn = useRef(0);
+  // Yes, no, or not known yet: the records wait for billing's first answer.
+  const open = recordsOpen(useBilling().view);
 
   const loadPeople = useCallback(async () => {
     const [company, roster, requests, notifications] = await Promise.all([
@@ -91,19 +100,21 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
       const people = await loadPeople();
       let records: RecordRow[] = [];
       let recordsError: string | null = null;
-      try {
-        records = await loadRecords(choice.id, (n) => mine === turn.current && setProgress(`Loading records: ${n.toLocaleString('en-US')} so far`));
-      } catch (e) {
-        recordsError = messageOf(e);
-        if (notAllowed(e)) void recheckRole();
+      if (open) {
+        try {
+          records = await loadRecords(choice.id, (n) => mine === turn.current && setProgress(`Loading records: ${n.toLocaleString('en-US')} so far`));
+        } catch (e) {
+          recordsError = messageOf(e);
+          if (notAllowed(e)) void recheckRole();
+        }
       }
       if (mine !== turn.current) return;
-      setLoaded({ ...people, records, recordsError, loadedAt: Date.now() });
+      setLoaded({ ...people, records, recordsError, recordsHeld: !open, loadedAt: Date.now() });
     } catch (e) {
       if (mine === turn.current) setError(messageOf(e));
       if (notAllowed(e)) void recheckRole();
     }
-  }, [choice.id, loadPeople, recheckRole]);
+  }, [choice.id, loadPeople, recheckRole, open]);
 
   const reloadRoster = useCallback(async () => {
     const people = await loadPeople();
@@ -113,8 +124,14 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
   useEffect(() => {
     setLoaded(null);
     setProgress('Loading the company');
+  }, [choice.id]);
+
+  // Once billing has answered, and again whenever its answer opens or closes the records.
+  useEffect(() => {
+    if (open === null) return;
+    if (open) setProgress('Loading the records');
     void reload();
-  }, [choice.id, reload]);
+  }, [open, reload]);
 
   // A new code from the server, after a role check, without loading everything again.
   useEffect(() => setCode(choice.join_code ?? null), [choice.join_code]);

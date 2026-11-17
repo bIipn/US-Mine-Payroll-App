@@ -26,6 +26,24 @@ It is a Vite + React + TypeScript web app. It talks to the MineMuster Supabase p
 | Maintenance requests | The queue (not completed, in progress, completed, all), each request opening as the paper form with where it came from and its history |
 | Time and payroll | Only when the company keeps time. Hours by the company's pay period, or by workweek and month when it has none: straight time, overtime, double time, holiday, PTO and sick, meal flags for review and shifts with no clock-out, with each person's days. The payroll workbook and the hours file for the span shown |
 | Exports | The PDF for an MSHA inspector and the safety log for Excel, for today, the last 7 or 30 days, the last 12 months or any days up to 12 months; the payroll workbook and the payroll hours file (totals or one line a day) |
+| Billing | Where the company's MineMuster subscription stands, in plain words, and what is charged; the button to start the 14-day free trial (or to start the subscription again once it has ended), and Manage billing, Stripe's billing portal |
+
+**Billing.** MineMuster is $300 a month for the company, the whole crew included. A 14-day free trial takes a card at checkout; Stripe charges it $300 when the trial ends, then each month, until the company cancels. Cancelling stops the next charge, and the dashboard stays open to the end of the period already paid for. The Billing page says all of that, and where the company stands, from the server's `company_billing(p_company_id)` (`supabase/migrations/20261117000500_billing.sql`), which keeps what Stripe's events said:
+
+| The server says | The page says | The other supervisor pages |
+|---|---|---|
+| `none` | Start your 14-day free trial | The same panel, to start it |
+| `trial` | Free trial until the day it ends, and the first charge, $300 on that day; or, cancelled, the day it closes with nothing charged | Open |
+| `active` | The next charge and its date; or, cancelled, the day access ends | Open |
+| `past_due` | The last charge did not go through: update the card. Stripe is trying it again | Open |
+| `comped` | No charge for this company (let in by hand on the server); or, when a subscription started before that is still running, that it is still charged and how to cancel it | Open |
+| `ended` | Why it ended, and how to start again: the trial if the company never had one, otherwise the payment link with no trial (`RESTART_LINK`), or Write to us while that link is not set. A second trial started anyway is said to be one, with the day Stripe charges it | The same panel, to start it again |
+
+The rules are in `src/lib/billing.ts`, with tests: which states open the dashboard, the gate on each page, when the records load, the addresses on Stripe and the words for each state. Billing and Sign out always work. The lock is on the server: a supervisor reads the company's records only while it has MineMuster (`supabase/README.md`, What a supervisor reads). The dashboard follows the same answer and does not ask for the records until `company_billing` says the company is in. Only a server that has no `company_billing` at all (PostgREST's `PGRST202`, or `42883`) lets the supervisor in without that answer, and says quietly on Billing that billing is not set up on the server yet: a company is never shut out because the server is behind. A check that fails or takes over 15 seconds is not taken as a yes: each page says billing could not be checked and offers Check again. A check that fails after an answer is known keeps that answer, so a page neither shuts nor opens on one lost request.
+
+"Start your 14-day free trial" is a link, not a call: Stripe's payment link opens in the same tab with the company's id as `client_reference_id` (how the server ties the subscription to the company) and the signed-in email as `prefilled_email`, each percent-encoded. Stripe sends the person back to `/billing?started=…`; the page then asks `company_billing` every 3 seconds for about a minute until Stripe's word has reached the server, offers no second checkout meanwhile, and after the minute says it can take a moment and offers Check again. Once it is in, it says the trial (or the subscription) has started, to put the crew on the Roster page, and that during early access the crew's app is set up with the company: the iPhone and Android apps are not in the App Store or Google Play yet, and the Overview says the same while no records have arrived. A company with more than one subscription running (two supervisors who each finished checkout, say) is told it is charged for each, and to cancel one in Manage billing or write to us. "Manage billing" opens Stripe's billing portal sign-in in a new tab, with the email filled in. The billing state is asked again when the person comes back to the tab, at most every 30 seconds. The card is entered on Stripe's own pages; the dashboard never sees it.
+
+A new company opens on Billing once it is made. "Start free trial" on minemuster.com opens `https://app.minemuster.com/?start=trial`: the dashboard opens on Create an account, keeps the wish in this browser for a week at most (through confirming the email, which may open another tab), and opens on Billing when a company opens for a supervisor. The crew never see billing, and their screen never asks for it.
 
 Assigning, starting and completing a maintenance request, recording a date fixed, correcting a punch and entering paid leave stay in the app, where the rules for who may do them already live. The dashboard shows them as the phones sent them.
 
@@ -49,7 +67,7 @@ A person whose records arrived before their employee record is named from the si
 
 The server takes a crew member's shift, checklist or exam for anyone in the company, and any member's change to a maintenance request. So every record page says which account sent it, and a record sent from a crew member's account for someone else, or a request completed from an account that is neither a supervisor nor the person it is assigned to, is listed on the overview and marked on its page for a supervisor to look at.
 
-**Never here:** an hourly rate or any money. The rate stays on the phone it was entered on, and no page, file or test in this folder reads one. Standards are cited only where the app cites them, and the app's summaries of them are plain language, not legal advice.
+**Never here:** an hourly rate or anyone's pay. The rate stays on the phone it was entered on, and no page, file or test in this folder reads one. The one figure in dollars is MineMuster's own price, on Billing. Standards are cited only where the app cites them, and the app's summaries of them are plain language, not legal advice.
 
 **Time zone.** The app's code counts days, workweeks and pay periods in the local time of the device it runs on. On a phone at the mine that is the mine's. In the office it is this computer's, so when the computer keeps a different clock from the company's time zone, every page says so. Run payroll on a computer set to the company's time zone.
 
@@ -61,7 +79,7 @@ Node 22.12 or newer (`engines` in `package.json` says so, and Vercel builds with
 cd dashboard
 npm install
 npm run dev          # http://localhost:5173
-npm test             # Vitest: loading the records, their checks and shaping, the overview, payroll, who sent what, ranges, the roster tools, join answers, errors, time zones
+npm test             # Vitest: loading the records, their checks and shaping, the overview, payroll, who sent what, ranges, the roster tools, join answers, errors, time zones, billing
 npm run typecheck
 npm run build        # typecheck, then the static site in dist/
 npm run preview      # serve dist/ locally
@@ -85,7 +103,7 @@ The one file from `src/components` is `logoArt.ts`, the outlines of a company's 
 
 1. In Vercel, add a new project from this repository.
 2. Set **Root Directory** to `dashboard`. Leave on "Include files outside the root directory in the Build Step" (on by default): the build reads `../src`.
-3. `vercel.json` sets the rest: framework Vite, install `npm ci`, build `npm run build`, output `dist`, every path rewritten to `index.html` so an address such as `/requests/abc` opens the dashboard on that page, long caching for the hashed files in `/assets`, and the security headers: a Content-Security-Policy that lets the page run only its own scripts and styles and talk only to the MineMuster Supabase project, a Permissions-Policy that turns off the camera, microphone and location, Cross-Origin-Opener-Policy, HSTS, and headers that keep the page out of frames. A build pointed at another project with `VITE_SUPABASE_URL` must name that project in the policy's `connect-src` too, or every call to it is blocked.
+3. `vercel.json` sets the rest: framework Vite, install `npm ci`, build `npm run build`, output `dist`, every path rewritten to `index.html` so an address such as `/requests/abc` opens the dashboard on that page, long caching for the hashed files in `/assets`, and the security headers: a Content-Security-Policy that lets the page run only its own scripts and styles and talk only to the MineMuster Supabase project, a Permissions-Policy that turns off the camera, microphone and location, Cross-Origin-Opener-Policy, HSTS, and headers that keep the page out of frames. Stripe's checkout and billing portal are opened as pages (a link), never fetched, so the policy names no Stripe address. A build pointed at another project with `VITE_SUPABASE_URL` must name that project in the policy's `connect-src` too, or every call to it is blocked.
 4. Under the project's Domains, add `app.minemuster.com`, and add the DNS record Vercel shows for it (a CNAME for `app`) where minemuster.com's DNS is kept.
 5. In the Supabase project, under Authentication → URL Configuration, add `https://app.minemuster.com` to the redirect URLs (and as the site URL if the dashboard is where accounts start). The confirmation email and the password-reset email send people back to the address they signed up from, and Supabase only sends them to addresses on that list.
 
@@ -93,4 +111,4 @@ No environment variables are needed for the MineMuster project. Set the two `VIT
 
 ## Privacy
 
-The repository is public. Every name in the tests is made up, like the app's sample crew; the fixtures are made from the app's own made-up sample data. Keep real names, a mine's location and anything else personal out of this folder, its tests and its screenshots. The browser keeps the Supabase session and, for convenience, which company was open last; nothing else is stored on the computer.
+The repository is public. Every name in the tests is made up, like the app's sample crew; the fixtures are made from the app's own made-up sample data. Keep real names, a mine's location and anything else personal out of this folder, its tests and its screenshots. The browser keeps the Supabase session and, for convenience, which company was open last, and for a week at most that the person came from the website to start a trial; nothing else is stored on the computer.

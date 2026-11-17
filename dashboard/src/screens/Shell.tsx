@@ -4,6 +4,8 @@ import { keepsTime, stateName } from '@app/domain/company';
 import { fmtDateTime, fmtRelativeDay, fmtTime } from '@app/util/format';
 
 import { signOut } from '../lib/api';
+import { billingWords, gate, type Billing } from '../lib/billing';
+import { useBilling } from '../lib/billingState';
 import { useCompany } from '../lib/company';
 import { match, onLink, useLocation } from '../lib/router';
 import type { CompanyChoice } from '../lib/server';
@@ -11,7 +13,8 @@ import { browserZone, sameClock } from '../lib/timezone';
 import { zoneLabel } from '../lib/zones';
 import { CompanyLogoPlate, MineMusterLogo } from '../ui/brand';
 import { Boundary } from '../ui/boundary';
-import { Button, Notice } from '../ui/kit';
+import { Button, Loading, Notice } from '../ui/kit';
+import { BillingPage, StatusPanel } from './BillingPage';
 import { DefectsPage } from './DefectsPage';
 import { ExportsPage } from './ExportsPage';
 import { OverviewPage } from './OverviewPage';
@@ -48,6 +51,7 @@ function useNarrow(): boolean {
 /** The supervisor's dashboard: the sidebar, and the page the address names. */
 export function Shell({ email, companies, onPick }: { email: string; companies: CompanyChoice[]; onPick: (id: string) => void }) {
   const ctx = useCompany();
+  const billing = useBilling();
   const { path, query } = useLocation();
   const narrow = useNarrow();
   const [navOpen, setNavOpen] = useState(false);
@@ -119,6 +123,7 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
     { href: '/requests', label: 'Maintenance requests', count: board.requests.length || undefined, owns: (p) => p.startsWith('/requests') },
     ...(timeKept ? [{ href: '/payroll', label: 'Time and payroll', owns: (p: string) => p.startsWith('/payroll') }] : []),
     { href: '/exports', label: 'Exports', owns: (p) => p.startsWith('/exports') },
+    { href: '/billing', label: 'Billing', owns: (p) => p.startsWith('/billing') },
   ];
 
   let page: ReactNode;
@@ -134,9 +139,17 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
   else if (path === '/payroll' && timeKept) page = <PayrollPage view={query.get('view')} at={query.get('at')} />;
   else if ((params = match('/payroll/:id', path)) && timeKept) page = <PayrollPersonPage id={params.id} view={query.get('view')} at={query.get('at')} />;
   else if (path === '/exports') page = <ExportsPage />;
+  else if (path === '/billing') page = <BillingPage email={email} started={query.get('started')} />;
   else page = <NotFound timeKept={timeKept} path={path} />;
   // Without the records, an empty list would look like nothing is open. Say so instead.
-  if (ctx.recordsError && path !== '/' && path !== '/roster') page = <PageHead title="The records are not loaded" />;
+  if (ctx.recordsError && path !== '/' && path !== '/roster' && path !== '/billing') page = <PageHead title="The records are not loaded" />;
+  // With no trial or subscription, every page but Billing is the panel to start one (billing.ts decides).
+  const shut = gate(billing.view, path);
+  if (shut === 'wait') page = <Loading>Checking billing</Loading>;
+  else if (shut === 'unknown' && billing.view.kind === 'failed') page = <BillingUnknown message={billing.view.message} />;
+  else if ((shut === 'start' || shut === 'restart') && billing.view.kind === 'known') page = <BillingGate email={email} billing={billing.view.billing} />;
+  // Just let in (back from checkout, say): the records are on their way, so no page says there are none.
+  else if (shut === 'in' && ctx.recordsHeld && path !== '/billing' && path !== '/roster') page = <Loading>Loading the records</Loading>;
 
   const zone = ctx.company?.timezone;
   const here = browserZone();
@@ -147,11 +160,11 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
   return (
     <div className={navOpen ? 'shell nav-open' : 'shell'}>
       <a className="skip" href="#main" inert={drawer} onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}>Skip to the page</a>
-      <div className="topbar dark" inert={drawer}>
-        <Button kind="ondark" small aria-expanded={navOpen} aria-controls="side" ref={menuRef} onClick={() => setNavOpen(true)}>Menu</Button>
+      <header className="topbar dark" inert={drawer}>
+        <Button kind="ondark" aria-expanded={navOpen} aria-controls="side" ref={menuRef} onClick={() => setNavOpen(true)}>Menu</Button>
         <span className="topbar-company">{company.name || ctx.choice.name}</span>
         <MineMusterLogo width="6.5rem" />
-      </div>
+      </header>
       {/* On a narrow screen the sidebar is a drawer: out of reach while shut, and the only thing in reach while open. */}
       <aside className="side dark" id="side" aria-label="MineMuster" ref={sideRef} inert={narrow && !navOpen}>
         {drawer ? <Button kind="ondark" small className="side-close" onClick={closeNav}>Close the menu</Button> : null}
@@ -195,7 +208,7 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
         </nav>
         <div className="side-foot">
           <span>Signed in as {email}</span>
-          <Button kind="quiet" small onClick={() => void signOut()}>Sign out</Button>
+          <Button kind="quiet" onClick={() => void signOut()}>Sign out</Button>
         </div>
       </aside>
       <main className="main" id="main" ref={mainRef} tabIndex={-1} style={{ outline: 'none' }} inert={drawer}>
@@ -230,6 +243,51 @@ function ZoneNotice({ zone, here, full }: { zone: string; here: string; full: bo
   );
 }
 
+/**
+ * Where billing stands could not be checked: the page does not open on a
+ * guess. It says why, and checks again. Billing and signing out still work.
+ */
+function BillingUnknown({ message }: { message: string }) {
+  const { check } = useBilling();
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <PageHead title="Where billing stands could not be checked" actions={false} />
+      <Notice tone="warn">
+        <p>
+          {message} This page opens once the server says the company has MineMuster. <a href="/billing" onClick={onLink}>Go to Billing</a>.
+        </p>
+        <div className="row" style={{ marginTop: '0.6rem' }}>
+          <Button
+            kind="ink"
+            busy={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await check();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? 'Checking' : 'Check again'}
+          </Button>
+        </div>
+      </Notice>
+    </>
+  );
+}
+
+/** A page the company has not got: the Billing page's own panel, to start the trial or the subscription again. */
+function BillingGate({ email, billing }: { email: string; billing: Billing }) {
+  return (
+    <>
+      <PageHead title={billingWords(billing).title} actions={false} />
+      <StatusPanel billing={billing} email={email} gated />
+    </>
+  );
+}
+
 function PageFailed() {
   return (
     <>
@@ -260,7 +318,7 @@ function NotFound({ timeKept, path }: { timeKept: boolean; path: string }) {
 }
 
 /** The top of every page: what it is, and when the records last arrived. */
-export function PageHead({ title, lede, crumb, actions }: { title: string; lede?: ReactNode; crumb?: ReactNode; actions?: ReactNode }) {
+export function PageHead({ title, lede, crumb, actions }: { title: string; lede?: ReactNode; crumb?: ReactNode; actions?: ReactNode | false }) {
   const ctx = useCompany();
   const companyName = ctx.shaped.company.name || ctx.choice.name;
   // Each page names itself in the browser's tab, its history and its bookmarks.
@@ -274,7 +332,7 @@ export function PageHead({ title, lede, crumb, actions }: { title: string; lede?
         <h1 className="h1" tabIndex={-1}>{title}</h1>
         {lede ? <p className="lede">{lede}</p> : null}
       </div>
-      {actions ?? <Arrived />}
+      {actions === false ? null : actions ?? <Arrived />}
     </header>
   );
 }

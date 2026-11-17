@@ -3,6 +3,7 @@ import { keepsTime } from '@app/domain/company';
 import { fmtDateTime, fmtTime, ymd } from '@app/util/format';
 
 import { useCompany } from '../lib/company';
+import { EARLY_ACCESS } from '../lib/config';
 import { withStop } from '../lib/joinStatus';
 import { redTagSource } from '../lib/overview';
 import { KIND_WORDS, type Doubt } from '../lib/provenance';
@@ -57,7 +58,7 @@ export function OverviewPage() {
 
       {!shaped.lastArrived ? (
         <Notice tone="info" title="No records have arrived from the phones yet">
-          They come in once the crew’s phones are connected. Put the crew on the <A href="/roster">roster</A> and give them the join code. Each person then opens More → Company account in the MineMuster app, signs in and joins with the code. Their checklists, exams, requests{keepsTime(shaped.company) ? ' and hours' : ''} arrive here whenever the phone has signal.
+          They come in once the crew’s phones are connected. Put the crew on the <A href="/roster">roster</A> and give them the join code. Each person then opens More → Company account in the MineMuster app, signs in and joins with the code. Their checklists, exams, requests{keepsTime(shaped.company) ? ' and hours' : ''} arrive here whenever the phone has signal. {EARLY_ACCESS}
         </Notice>
       ) : null}
 

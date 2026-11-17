@@ -7,7 +7,9 @@ import { fmtTime } from '@app/util/format';
 import { companyByCode, createCompany, joinCompany, myJoinRequests, signOut } from '../lib/api';
 import type { OpenWhich } from '../lib/companies';
 import { messageOf } from '../lib/errors';
+import { wantsTrial } from '../lib/intent';
 import { joinMessage, REQUEST_STATUS } from '../lib/joinStatus';
+import { go } from '../lib/router';
 import { REASON_TEXT } from '../lib/rosterTools';
 import type { JoinResult, MyJoinRequest } from '../lib/server';
 import { browserZone } from '../lib/timezone';
@@ -38,6 +40,7 @@ type OnCompany = (open?: OpenWhich) => Promise<boolean>;
 
 export function NoCompanyScreen({ email, onCompany }: { email: string; onCompany: OnCompany }) {
   const [requests, setRequests] = useState<MyJoinRequest[]>([]);
+  const [trial] = useState(wantsTrial);
   useEffect(() => {
     myJoinRequests().then(setRequests).catch(() => setRequests([]));
   }, []);
@@ -53,6 +56,11 @@ export function NoCompanyScreen({ email, onCompany }: { email: string; onCompany
               <p className="lede">This account is not part of a company yet. Start one if you run the crew, or join yours with the code a supervisor gave you.</p>
             </div>
           </div>
+          {trial ? (
+            <Notice tone="info" title="Start your 14-day free trial">
+              Start your company first. Its Billing page opens next, and the trial starts there.
+            </Notice>
+          ) : null}
           <div className="choose">
             <StartCompany onCompany={onCompany} />
             <JoinWithCode onCompany={onCompany} onAsked={() => myJoinRequests().then(setRequests).catch(() => undefined)} />
@@ -100,7 +108,17 @@ function StartCompany({ onCompany }: { onCompany: OnCompany }) {
           <span className="code">{made.joinCode.slice(0, 4)} {made.joinCode.slice(4)}</span>
           <p>Give this code to the crew. Each person types it in the MineMuster app with their name. Put them on the roster first, and they join by themselves; anyone else waits for you to let them in.</p>
         </div>
-        <Button kind="main" onClick={() => void onCompany({ id: made.companyId })}>Open the company</Button>
+        <p>Next, start the 14-day free trial on the company’s Billing page. Then put the crew on the roster.</p>
+        {/* A new company opens on Billing: the rest of the dashboard opens once its trial has started. */}
+        <Button
+          kind="main"
+          onClick={() => {
+            go('/billing', { replace: true });
+            void onCompany({ id: made.companyId });
+          }}
+        >
+          Open the company’s Billing page
+        </Button>
       </section>
     );
   }
@@ -109,7 +127,7 @@ function StartCompany({ onCompany }: { onCompany: OnCompany }) {
     <form className="panel" onSubmit={submit} noValidate aria-labelledby="start-title">
       <div className="stack" style={{ gap: '0.3rem' }}>
         <h2 className="h2" id="start-title">Start a company</h2>
-        <p className="muted small">You become its first supervisor. You can add the rest of the crew next.</p>
+        <p className="muted small">You become its first supervisor. Next you start the 14-day free trial, then add the rest of the crew.</p>
       </div>
       <TextField label="Company name" value={name} onChange={setName} autoComplete="organization" maxLength={120} />
       <div className="form-grid">

@@ -28,8 +28,9 @@ export function Gate({ children, title, say, tab }: { children: ReactNode; title
 
 type Tab = 'in' | 'up' | 'reset';
 
-export function AuthScreen({ said: arrived = null }: { said?: string | null } = {}) {
-  const [tab, setTab] = useState<Tab>('in');
+/** `trial`: sent from the website to start a free trial, so the page opens on making an account and says what comes next. */
+export function AuthScreen({ said: arrived = null, trial = false }: { said?: string | null; trial?: boolean } = {}) {
+  const [tab, setTab] = useState<Tab>(trial ? 'up' : 'in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
@@ -109,6 +110,13 @@ export function AuthScreen({ said: arrived = null }: { said?: string | null } = 
         ) : null}
         <div className="stack" style={{ gap: '1.25rem' }} {...(tab !== 'reset' ? tabPanelProps('auth-panel', tab) : null)}>
         {arrived && !said && !error ? <Notice tone="warn" live>{arrived}</Notice> : null}
+        {trial && !arrived && !said && tab !== 'reset' ? (
+          <Notice tone="info" title="Start your 14-day free trial">
+            {tab === 'up'
+              ? 'Make an account and confirm your email. Then start your company, and the trial starts from its Billing page.'
+              : 'Sign in, or make an account first. The trial starts from your company’s Billing page.'}
+          </Notice>
+        ) : null}
         {said ? <Notice tone="info" live>{said}</Notice> : null}
         <TextField label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" inputMode="email" required error={fieldError.email} inputRef={emailRef} />
         {tab !== 'reset' ? (

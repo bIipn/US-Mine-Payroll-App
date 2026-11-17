@@ -422,6 +422,22 @@ a.redtag:focus-visible { outline: none; }
 .row-changes .field { width: min(100%, 18rem); }
 .row-changes .btn:disabled { opacity: 0.45; }
 
+/* ---------- Billing ---------- */
+/* Where the subscription stands, edged in the colour of its state: blue to start, green while open, amber when something needs doing. */
+/* One column on Billing: the notices, the panel and the terms end at one edge. */
+.billing-page { display: grid; gap: 1.75rem; max-width: 54rem; }
+.billing-panel { max-width: 54rem; border-left: 4px solid var(--blue); border-radius: 0 var(--radius) var(--radius) 0; }
+.billing-ok { border-left-color: var(--green); }
+.billing-warn { border-left-color: var(--amber); }
+.billing-panel p { max-width: 68ch; }
+.facts-terms { max-width: 54rem; }
+/* Read down like a form: what it is on the left, the terms beside it; one under the other on a phone. */
+.facts-terms > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0.15rem 1rem; }
+.facts-terms dd { text-align: left; }
+@media (max-width: 40rem) {
+  .facts-terms > div { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ---------- Narrow screens ---------- */
 /* A ledger too wide for its box, drawn row by row as cards (Ledger in ui/kit.tsx decides). */
 .ledger.is-stacked, .ledger.is-stacked tbody, .ledger.is-stacked tfoot { display: block; }
