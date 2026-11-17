@@ -1,7 +1,9 @@
+import type { Change } from '@app/domain/sync';
 import type { Role } from '@app/domain/types';
 
 import { billingAnswer, type BillingView } from './billing';
 import { authProblem, dataProblem, Problem } from './errors';
+import type { Deletion, VersionRow } from './history';
 import type {
   CompanyChoice,
   CompanyRow,
@@ -256,6 +258,8 @@ export async function markRead(ids: string[]): Promise<void> {
 /** The rows asked for in one read. The server may hand back fewer: it caps a read at its own max-rows. */
 export const RECORD_PAGE = 1000;
 
+const RECORD_COLUMNS = 'kind,id,rev,data,deleted,created_by,updated_by,created_at,updated_at';
+
 /**
  * Every record of the company, a page at a time. A supervisor reads every row;
  * `onPage` is told how many have come so far.
@@ -278,7 +282,7 @@ export async function loadRecords(companyId: string, onPage?: (sofar: number) =>
   for (;;) {
     const { data, error } = await supabase
       .from('records')
-      .select('kind,id,rev,data,deleted,created_by,updated_by,created_at,updated_at')
+      .select(RECORD_COLUMNS)
       .eq('company_id', companyId)
       .order('kind')
       .order('id')
@@ -296,4 +300,90 @@ export async function loadRecords(companyId: string, onPage?: (sofar: number) =>
   }
   const at = (iso: string) => Date.parse(iso) || 0;
   return [...byKey.values()].sort((a, b) => at(a.updated_at) - at(b.updated_at) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+}
+
+/**
+ * One record as the server has it now, taken off or not, or null when it shows
+ * none to this account: there is none, or the account may not read it (the
+ * company's subscription has stopped, or the account is no longer a supervisor).
+ */
+export async function readRecord(companyId: string, kind: string, id: string): Promise<RecordRow | null> {
+  const { data, error } = await supabase
+    .from('records')
+    .select(RECORD_COLUMNS)
+    .eq('company_id', companyId)
+    .eq('kind', kind)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw dataProblem(error, 'Checking what the server has');
+  return (data as RecordRow | null) ?? null;
+}
+
+/**
+ * The maintenance requests that name a unit, and its equipment checklists that
+ * did not pass, as the server has them now: what can be open on the unit. Read
+ * again before a unit is taken out of the fleet, as a request or a Bad Order a
+ * phone sent after the page loaded is a record of its own, not a change to the
+ * unit's.
+ */
+export async function readOpenOnUnit(companyId: string, unitId: string): Promise<RecordRow[]> {
+  const naming = () => supabase.from('records').select(RECORD_COLUMNS).eq('company_id', companyId).eq('data->>equipmentId', unitId);
+  const [requests, checklists] = await Promise.all([naming().eq('kind', 'mrf'), naming().eq('kind', 'inspection').neq('data->>result', 'pass')]);
+  const error = requests.error ?? checklists.error;
+  if (error) throw dataProblem(error, 'Checking what is open on the unit');
+  return [...((requests.data ?? []) as unknown as RecordRow[]), ...((checklists.data ?? []) as unknown as RecordRow[])];
+}
+
+/** The newest versions of one record the server has taken, each with the version it was made from. */
+export async function readVersions(companyId: string, kind: string, id: string, newest = 12): Promise<VersionRow[]> {
+  const { data, error } = await supabase
+    .from('record_history')
+    .select('version,rev,base,data,deleted,by,at')
+    .eq('company_id', companyId)
+    .eq('kind', kind)
+    .eq('id', id)
+    .order('version', { ascending: false })
+    .limit(newest);
+  if (error) throw dataProblem(error, 'Reading the versions');
+  return (data ?? []) as VersionRow[];
+}
+
+/** Every time a record of a kind was taken off: the unit, and when. The newest 500. */
+export async function readDeletions(companyId: string, kind: string): Promise<Deletion[]> {
+  const { data, error } = await supabase
+    .from('record_history')
+    .select('id,at')
+    .eq('company_id', companyId)
+    .eq('kind', kind)
+    .eq('deleted', true)
+    .order('at', { ascending: false })
+    .limit(500);
+  if (error) throw dataProblem(error, 'Reading what was taken off');
+  return (data ?? []) as Deletion[];
+}
+
+/**
+ * Send records the way a supervisor's phone does, with `push_records`, and hand
+ * back what the server said about each: taken, set aside (with its reason) or
+ * left for later. `readAnswer` in changes.ts puts that into words.
+ */
+export async function pushRecords(companyId: string, changes: Change[]): Promise<unknown> {
+  const { data, error } = await supabase.rpc('push_records', { company_id: companyId, changes });
+  if (error) {
+    // The server gives a company the account is not in the same answer as one that does not exist.
+    if ((error as { code?: string }).code === 'P0002') {
+      throw new Problem('Nothing was saved: this account is not on the company’s roster any more. Sign out and back in, or ask another supervisor.', 'P0002');
+    }
+    throw dataProblem(error, 'Saving');
+  }
+  return data;
+}
+
+/** The company's own row on the server: its name, state, time zone and pay period, which a supervisor may change. */
+export async function updateCompany(companyId: string, patch: Partial<Pick<CompanyRow, 'name' | 'state' | 'timezone' | 'pay_period'>>): Promise<void> {
+  if (Object.keys(patch).length === 0) return;
+  const { data, error } = await supabase.from('companies').update(patch).eq('id', companyId).select('id');
+  if (error) throw dataProblem(error, 'Changing the company on the server');
+  // A change the server's rules do not let through changes no row, and says nothing.
+  if (!data || data.length === 0) throw dataProblem({ code: '42501' }, 'Changing the company on the server');
 }

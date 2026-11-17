@@ -117,6 +117,7 @@ describe('a record that is not the shape the app writes', () => {
       (d: Obj) => { (d.company as Obj).payCodes = 'REG'; },
       (d: Obj) => { (d.company as Obj).pay = 'weekly'; },
       (d: Obj) => { d.workweekStartsOn = 9; },
+      (d: Obj) => { d.allowSectionAllOk = 'yes'; },
     ]) {
       const shaped = shapeRecords([broken('settings', 'x', change)], { company: server });
       expect(shaped.skipped.map((s) => s.kind)).toEqual(['settings']);

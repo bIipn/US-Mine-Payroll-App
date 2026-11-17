@@ -4,90 +4,19 @@ import { StyleSheet, View } from 'react-native';
 import { CompanyLogoPlate } from '../../components/Brand';
 import { Check } from '../../components/icons';
 import { Button, Chips, Divider, Field, Panel, Page, Row, Sheet, Toggle, Txt } from '../../components/ui';
-import { checkCompany, keepsTime, stateName, STATES, type Company } from '../../domain/company';
-import { DEFAULT_PAY_CODES, type PayCodes } from '../../domain/payrollCsv';
-import { checkPaySchedule, describePaySchedule, nextPayday, type IfBankClosed, type PayFrequency, type PaySchedule } from '../../domain/payPeriod';
+import { checkCompany, keepsTime, stateName, STATES } from '../../domain/company';
+import { BANK, CODE_ROWS, companyFromDraft, draftOf, OFTEN, PAID_BY, paidByOf, scheduleOf, type CompanyDraft, type Often, type PaidBy } from '../../domain/companyForm';
+import { checkPaySchedule, describePaySchedule, nextPayday, type IfBankClosed } from '../../domain/payPeriod';
 import { rulesFor } from '../../domain/stateRules';
 import { mealSummary, overtimeSummary } from '../../domain/time';
 import type { ScreenProps } from '../../navigation/types';
 import { syncReminders } from '../../services/reminders';
 import { openShiftOf, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
-import { fmtDate, ymd } from '../../util/format';
+import { fmtDate } from '../../util/format';
 
-type Often = 'none' | PayFrequency;
-type PaidBy = 'dayOfMonth' | 'daysAfter';
-
-const OFTEN: { value: Often; label: string }[] = [
-  { value: 'none', label: 'No pay periods' },
-  { value: 'weekly', label: 'Every week' },
-  { value: 'biweekly', label: 'Every two weeks' },
-  { value: 'semimonthly', label: 'Twice a month' },
-  { value: 'monthly', label: 'Once a month' },
-];
-
-const BANK: { value: IfBankClosed; label: string }[] = [
-  { value: 'before', label: 'Banking day before' },
-  { value: 'after', label: 'Banking day after' },
-  { value: 'stay', label: 'Stays put' },
-];
-
-/** The form's fields, all as typed, so a half-typed number is not lost. */
-interface Draft {
-  name: string;
-  state: string;
-  place: string;
-  mineId: string;
-  /** Whether the crew keeps time in the app as well as the safety forms. */
-  timeClock: boolean;
-  /** The earning code for each kind of hours on the payroll hours file. */
-  codes: PayCodes;
-  often: Often;
-  firstDay: string;
-  paidBy: PaidBy;
-  daysAfter: string;
-  firstHalf: string;
-  secondHalf: string;
-  ifBankClosed: IfBankClosed;
-}
-
-function draftOf(company: Company): Draft {
-  const pay = company.pay;
-  const days = pay && 'dayOfMonth' in pay.payday ? pay.payday.dayOfMonth : [];
-  return {
-    name: company.name,
-    state: company.state,
-    place: company.place ?? '',
-    mineId: company.mineId ?? '',
-    timeClock: keepsTime(company),
-    codes: company.payCodes ?? DEFAULT_PAY_CODES,
-    often: pay?.frequency ?? 'none',
-    firstDay: pay?.firstDay ?? ymd(Date.now()),
-    paidBy: pay ? ('dayOfMonth' in pay.payday ? 'dayOfMonth' : 'daysAfter') : 'dayOfMonth',
-    daysAfter: pay && 'daysAfter' in pay.payday ? String(pay.payday.daysAfter) : '5',
-    firstHalf: days[0] != null ? String(days[0]) : '20',
-    secondHalf: days[1] != null ? String(days[1]) : '5',
-    ifBankClosed: pay?.ifBankClosed ?? 'before',
-  };
-}
-
-const whole = (text: string) => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : NaN);
-
-function scheduleOf(draft: Draft): PaySchedule | null {
-  if (draft.often === 'none') return null;
-  const byWeek = draft.often === 'weekly' || draft.often === 'biweekly';
-  const paidBy: PaidBy = byWeek ? 'daysAfter' : draft.paidBy;
-  const payday =
-    paidBy === 'daysAfter'
-      ? { daysAfter: whole(draft.daysAfter) }
-      : { dayOfMonth: draft.often === 'semimonthly' ? [whole(draft.firstHalf), whole(draft.secondHalf)] : [whole(draft.firstHalf)] };
-  return {
-    frequency: draft.often,
-    ...(byWeek ? { firstDay: draft.firstDay.trim() } : {}),
-    payday,
-    ifBankClosed: draft.ifBankClosed,
-  };
-}
+// The form's fields and the company they make are the domain's (companyForm.ts), shared with the office dashboard.
+type Draft = CompanyDraft;
 
 /**
  * The company the crew works for: its name as the pay stub prints it, the
@@ -113,21 +42,11 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
   }, [schedule, scheduleProblem]);
 
   const byWeek = draft.often === 'weekly' || draft.often === 'biweekly';
-  const paidBy: PaidBy = byWeek ? 'daysAfter' : draft.paidBy;
+  const paidBy: PaidBy = paidByOf(draft);
 
-  const codes = Object.fromEntries(Object.entries(draft.codes).map(([k, v]) => [k, v.trim().toUpperCase()])) as unknown as PayCodes;
   const save = () => {
     // With no time clock the pay periods are not shown, so what was saved stays as it was for when it is turned back on.
-    const next: Company = {
-      ...company,
-      name: draft.name,
-      state: draft.state,
-      place: draft.place,
-      mineId: draft.mineId.trim(),
-      pay: draft.timeClock ? schedule : company.pay,
-      timeClock: draft.timeClock ? undefined : false,
-      payCodes: sameCodes(codes, DEFAULT_PAY_CODES) ? undefined : codes,
-    };
+    const next = companyFromDraft(company, draft);
     const problem = checkCompany({ ...next, name: next.name.trim() });
     if (problem) {
       setError(problem);
@@ -252,10 +171,7 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
                 <Chips<PaidBy>
                   wrap
                   testID="company-paid-by"
-                  options={[
-                    { value: 'dayOfMonth', label: 'On a day of the month' },
-                    { value: 'daysAfter', label: 'Days after it ends' },
-                  ]}
+                  options={PAID_BY}
                   value={draft.paidBy}
                   onChange={(next) => change({ paidBy: next })}
                 />
@@ -380,15 +296,6 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
     </Page>
   );
 }
-
-/** The six kinds of hours, two to a row. */
-const CODE_ROWS: { key: keyof PayCodes; label: string }[][] = [
-  [{ key: 'regular', label: 'Straight time' }, { key: 'overtime', label: 'Overtime' }],
-  [{ key: 'double', label: 'Double time' }, { key: 'holiday', label: 'Holiday' }],
-  [{ key: 'pto', label: 'PTO' }, { key: 'sick', label: 'Sick' }],
-];
-
-const sameCodes = (a: PayCodes, b: PayCodes) => (Object.keys(b) as (keyof PayCodes)[]).every((k) => a[k] === b[k]);
 
 const styles = StyleSheet.create({
   pair: { flexDirection: 'row', alignItems: 'flex-end', gap: space.md },

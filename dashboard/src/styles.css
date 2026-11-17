@@ -36,6 +36,8 @@
   --silica-light: #9a9e96;
   --rule: #d6d9d1;
   --rule-strong: #b9bdb4;
+  /* The edge of a field: 3.5 to 1 on white, so the box can be seen for what it is. */
+  --field-edge: #848a80;
   --gray-tint: #e4e6e0;
   --on-dark: #f1f1ee;
   --on-dark-muted: #b9bbb4;
@@ -126,16 +128,18 @@ h1[tabindex='-1']:focus { outline: none; }
 .field-error { color: var(--red); font-weight: 600; font-size: 0.8125rem; line-height: 1.4; }
 .input, .select, .textarea {
   width: 100%; min-height: 2.75rem; padding: 0.55rem 0.75rem;
-  background: var(--paper); border: 1.5px solid var(--rule-strong); border-radius: var(--radius);
+  background: var(--paper); border: 1.5px solid var(--field-edge); border-radius: var(--radius);
   font-size: 1rem; line-height: 1.35;
 }
 .input:hover, .select:hover, .textarea:hover { border-color: var(--silica); }
 .input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: 3px solid var(--blue); outline-offset: 0; border-color: var(--blue); }
-.input[aria-invalid='true'] { border-color: var(--red); }
+.input[aria-invalid='true'], .select[aria-invalid='true'] { border-color: var(--red); }
 .textarea { min-height: 9rem; resize: vertical; font-family: var(--text); }
 .input-code { font-family: var(--cond); font-weight: 700; font-size: 1.375rem; letter-spacing: 0.12em; text-transform: uppercase; }
 .check { display: inline-flex; align-items: center; gap: 0.55rem; min-height: 2.75rem; cursor: pointer; font-weight: 600; font-size: 0.9375rem; }
 .check input { width: 1.25rem; height: 1.25rem; accent-color: var(--ink); margin: 0; }
+/* A switch with what it does said under it. */
+.check-set { display: grid; gap: 0.15rem; justify-items: start; }
 .form-grid { display: grid; gap: 1rem; align-items: start; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
 
 /* Segmented choice: a run of radio buttons drawn as one bar. */
@@ -159,6 +163,10 @@ h1[tabindex='-1']:focus { outline: none; }
 .notice-bo { border-color: var(--red); background: var(--red-tint); }
 .notice-bo .notice-title { color: var(--red-deep); }
 .notice-line { padding-block: 0.6rem; }
+.notice-list { display: grid; gap: 0.3rem; margin-top: 0.4rem; padding-left: 1.15rem; list-style: disc; }
+.notice p, .notice-list li { max-width: 86ch; }
+/* What was said about a save: brought into view clear of the bar at the top and the one at the bottom. */
+.said { scroll-margin-block: 5rem; border-radius: var(--radius); }
 .disclosure > summary { width: fit-content; cursor: pointer; font-size: 0.875rem; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .disclosure > p { margin-top: 0.3rem; max-width: 70ch; }
 
@@ -189,7 +197,8 @@ a.plate:hover { box-shadow: 0 0 0 2px var(--ink); }
 .side {
   position: sticky; top: 0; height: 100vh; height: 100dvh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 1.25rem;
-  padding: 1.5rem 1rem 1.25rem; background: var(--ink); color: var(--on-dark);
+  /* The foot stays in reach at the bottom however many pages are listed; the list scrolls under it. */
+  padding: 1.5rem 1rem 0; scroll-padding-bottom: 7rem; background: var(--ink); color: var(--on-dark);
 }
 .side-logo { display: block; width: 10.5rem; margin: 0 0 0 0.5rem; }
 .side-company { display: grid; gap: 0.5rem; padding: 0.9rem 0.5rem 0; border-top: 1px solid #3a3934; }
@@ -209,7 +218,7 @@ a.plate:hover { box-shadow: 0 0 0 2px var(--ink); }
 .nav a[aria-current='page']::before { content: ''; position: absolute; left: 0; top: 0.5rem; bottom: 0.5rem; width: 4px; border-radius: 2px; background: var(--yellow); }
 .nav-count { min-width: 1.6rem; padding: 0 0.4rem; border-radius: 999px; background: #3d3c37; color: var(--on-dark); font-family: var(--cond); font-weight: 700; font-size: 0.9375rem; line-height: 1.5rem; text-align: center; }
 .nav-count-bo { background: var(--red); color: var(--paper); }
-.side-foot { margin-top: auto; display: grid; gap: 0.35rem; padding: 0.9rem 0.5rem 0; border-top: 1px solid #3a3934; color: var(--on-dark-muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.side-foot { position: sticky; bottom: 0; z-index: 1; margin-top: auto; display: grid; gap: 0.2rem; padding: 0.75rem 0.5rem 0.85rem; background: var(--ink); box-shadow: 0 -0.9rem 0.9rem -0.35rem var(--ink); border-top: 1px solid #3a3934; color: var(--on-dark-muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
 .side-foot .btn { justify-self: start; color: var(--on-dark); padding-inline: 0; }
 .side-foot .btn:hover { background: transparent; color: var(--paper); }
 .side-close { align-self: flex-start; }
@@ -418,9 +427,36 @@ a.redtag:focus-visible { outline: none; }
 .flag { display: block; margin-bottom: 0.35rem; }
 .flag:last-child { margin-bottom: 0; }
 .ledger tr.row-open td { background: var(--paper-shade); }
-.row-changes { display: grid; gap: 0.85rem; padding: 0.35rem 0; text-align: left; }
+/* The panel takes the row's width and never sets it: a long question in it must not move the columns above. */
+.row-changes { contain: inline-size; display: grid; gap: 0.85rem; padding: 0.35rem 0; text-align: left; }
 .row-changes .field { width: min(100%, 18rem); }
 .row-changes .btn:disabled { opacity: 0.45; }
+
+/* ---------- Fleet, exam sheets and company: the pages that set the company up ---------- */
+/* One column, the width of a sheet of paper: a form to read down, not across. Its notices end at the same edge. */
+.setup-page { display: grid; gap: 1.75rem; max-width: 54rem; }
+.setup-form { display: grid; gap: 1.75rem; }
+/* Save, and what the last save said, stay at the foot of the window while the form is on it. */
+.save-bar { position: sticky; bottom: 0; z-index: 2; display: grid; gap: 0.6rem; padding: 0.8rem 1rem; background: var(--paper); border: 1px solid var(--rule-strong); border-bottom-width: 0; border-radius: var(--radius) var(--radius) 0 0; box-shadow: 0 -6px 16px -8px rgba(28, 27, 25, 0.35); }
+/* A field the form moves to stays clear of that bar, and of the bar at the top of a phone. */
+.setup-form .input, .setup-form .select { scroll-margin-block: 5rem 15rem; }
+/* A way to the paper from a form that comes first on a narrow screen. */
+.narrow-only { display: none; }
+/* What the app's own rules say about a choice just made: the state's hours, the pay schedule in a sentence. */
+.rules-said { display: grid; gap: 0.3rem; padding: 0.75rem 0.9rem; background: var(--kaolin); border-radius: var(--radius); font-size: 0.875rem; line-height: 1.45; }
+.rules-said p { max-width: 70ch; }
+/* These pages are worked on a phone as well: every choice is 44 px tall. */
+.setup-form .seg label { min-height: 2.75rem; }
+.input-short { max-width: 8rem; }
+.field-short > .select { max-width: 18rem; }
+.field-short > .field-hint { max-width: 70ch; }
+/* The six kinds of hours, three to a row; two to a row on a phone. */
+.codes-grid { display: grid; gap: 1rem; align-items: start; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 30rem) {
+  .codes-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* A change panel under a row holds a whole small form: its fields share the row's width. */
+.row-changes .form-grid .field { width: auto; }
 
 /* ---------- Billing ---------- */
 /* Where the subscription stands, edged in the colour of its state: blue to start, green while open, amber when something needs doing. */
@@ -461,6 +497,7 @@ a.redtag:focus-visible { outline: none; }
   .split, .pair { grid-template-columns: minmax(0, 1fr); }
   /* What a record says is wrong comes before the paper it is on. */
   .split > .split-first { order: -1; }
+  .narrow-only { display: block; }
   .records { grid-template-columns: minmax(0, 1fr); }
   .days { position: static; max-height: 18rem; }
 }
@@ -475,6 +512,8 @@ a.redtag:focus-visible { outline: none; }
   .topbar .btn { color: var(--on-dark); border-color: #55544e; }
   .topbar-company { flex: 1; min-width: 0; font-family: var(--cond); font-weight: 700; font-size: 1.0625rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
   .main { padding-top: 1.25rem; }
+  /* Where the page is worked by touch, the button at its head is a full 44 px. */
+  .arrived .btn { min-height: 2.75rem; }
   .tally { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tally a:nth-child(3) { border-left: 0; }
   .tally a:nth-child(n + 3) { border-top: 1px solid var(--rule); }
@@ -484,6 +523,11 @@ a.redtag:focus-visible { outline: none; }
   .gate-light { align-items: flex-start; }
   .choose { grid-template-columns: minmax(0, 1fr); }
   .sheet-title { padding-inline: 1rem 4.5rem; text-align: left; font-size: 1.15rem; }
+}
+/* A short window on a desk: the list of pages closes up so that all of it, and the foot, fit without scrolling. */
+@media (min-width: 56.01rem) and (max-height: 52rem) {
+  .side { gap: 0.85rem; padding-top: 1rem; }
+  .nav a { min-height: 2.5rem; }
 }
 @media (max-width: 30rem) {
   .tags > li { width: calc(50% - 0.45rem); }

@@ -37,6 +37,11 @@ export interface CompanyState {
   now: number;
   reload: () => Promise<void>;
   reloadRoster: () => Promise<void>;
+  /**
+   * Put records this page has just saved, or just read again, in place of the
+   * versions it held, so the page shows them without loading everything again.
+   */
+  applyRecords: (rows: RecordRow[]) => void;
   /** Put a new join code on the company as soon as it is made. */
   setJoinCode: (code: string) => void;
   /**
@@ -64,7 +69,16 @@ export function useNow(everyMs = 60_000): number {
   return now;
 }
 
-type Loaded = Omit<CompanyState, 'reload' | 'reloadRoster' | 'setJoinCode' | 'recheckRole' | 'now' | 'board' | 'shaped' | 'choice' | 'me'>;
+type Loaded = Omit<CompanyState, 'reload' | 'reloadRoster' | 'applyRecords' | 'setJoinCode' | 'recheckRole' | 'now' | 'board' | 'shaped' | 'choice' | 'me'>;
+
+const rowKey = (row: Pick<RecordRow, 'kind' | 'id'>) => `${row.kind}:${row.id}`;
+
+/** The rows with each of `newer` in place of the version of it they held. */
+function withRows(rows: RecordRow[], newer: RecordRow[]): RecordRow[] {
+  if (newer.length === 0) return rows;
+  const keys = new Set(newer.map(rowKey));
+  return [...rows.filter((r) => !keys.has(rowKey(r))), ...newer];
+}
 
 export function CompanyProvider({ choice, me, recheckRole, children, loading, failed }: {
   choice: CompanyChoice;
@@ -80,6 +94,9 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
   const [code, setCode] = useState(choice.join_code ?? null);
   const now = useNow();
   const turn = useRef(0);
+  // Rows put in place while a load was under way: a load that began before them would put the old versions back.
+  const applied = useRef<{ n: number; row: RecordRow }[]>([]);
+  const appliedCount = useRef(0);
   // Yes, no, or not known yet: the records wait for billing's first answer.
   const open = recordsOpen(useBilling().view);
 
@@ -95,6 +112,7 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
 
   const reload = useCallback(async () => {
     const mine = ++turn.current;
+    const appliedBefore = appliedCount.current;
     setError(null);
     try {
       const people = await loadPeople();
@@ -109,7 +127,10 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
         }
       }
       if (mine !== turn.current) return;
-      setLoaded({ ...people, records, recordsError, recordsHeld: !open, loadedAt: Date.now() });
+      // What this page saved while the load was reading stays the version shown: the load may have read the one before it.
+      const since = applied.current.filter((a) => a.n > appliedBefore).map((a) => a.row);
+      applied.current = [];
+      setLoaded({ ...people, records: recordsError ? records : withRows(records, since), recordsError, recordsHeld: !open, loadedAt: Date.now() });
     } catch (e) {
       if (mine === turn.current) setError(messageOf(e));
       if (notAllowed(e)) void recheckRole();
@@ -120,6 +141,14 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
     const people = await loadPeople();
     setLoaded((had) => (had ? { ...had, ...people } : had));
   }, [loadPeople]);
+
+  const applyRecords = useCallback((rows: RecordRow[]) => {
+    if (rows.length === 0) return;
+    for (const row of rows) applied.current.push({ n: ++appliedCount.current, row });
+    // Only the last few matter: the ones a load under way has not seen.
+    if (applied.current.length > 200) applied.current = applied.current.slice(-200);
+    setLoaded((had) => (had ? { ...had, records: withRows(had.records, rows) } : had));
+  }, []);
 
   useEffect(() => {
     setLoaded(null);
@@ -154,6 +183,7 @@ export function CompanyProvider({ choice, me, recheckRole, children, loading, fa
     now,
     reload,
     reloadRoster,
+    applyRecords,
     setJoinCode: setCode,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

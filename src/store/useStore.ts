@@ -2,8 +2,9 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
-import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { checkCompany, normalMineId, type Company } from '../domain/company';
+import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
+import { savedCompany, type Company } from '../domain/company';
+import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { markSent, type Change, type Synced } from '../domain/sync';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
@@ -20,7 +21,6 @@ import type {
   DeniedPunch,
   Employee,
   Equipment,
-  EquipmentCategory,
   EquipmentStatus,
   GeoStamp,
   Inspection,
@@ -223,7 +223,7 @@ interface Actions {
   setEmployeeRole: (employeeId: string, role: Role) => void;
   /** A person's number in the company's payroll system, for the payroll hours file. Empty takes it off. */
   setPayrollId: (employeeId: string, payrollId: string) => Result;
-  addEquipment: (input: { unit: string; category: EquipmentCategory; make: string; model: string; meter: number }) => Result;
+  addEquipment: (input: UnitInput) => Result;
   removeEquipment: (equipmentId: string) => void;
 
   setRadius: (radiusM: number) => void;
@@ -907,37 +907,27 @@ export const useStore = create<Store>()(
         addAreaSheet: (title, rowsText, single) => {
           const { areaSheets } = get();
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
-          const sheet = makeSheet(title, rowsText, areaSheets.map((s) => s.id), single);
-          if (!sheet) return { ok: false, error: 'Give the sheet the name of its work area.' };
-          const same = areaSheets.find((s) => s.title.toLowerCase() === sheet.title.toLowerCase());
-          if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
-          set({ areaSheets: [...areaSheets, sheet] });
-          return { ok: true, sheet };
+          // The rules are the domain's (newSheet), so the office dashboard adds a sheet the same way.
+          const made = newSheet(areaSheets, title, rowsText, single);
+          if (!made.ok) return made;
+          set({ areaSheets: [...areaSheets, made.sheet] });
+          return { ok: true, sheet: made.sheet };
         },
 
         updateAreaSheet: (sheetId, title, rowsText, single) => {
           const { areaSheets } = get();
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
-          const current = areaSheets.find((s) => s.id === sheetId);
-          if (!current) return { ok: false, error: 'That area sheet is no longer on the list.' };
-          // With nothing said about the columns, the sheet keeps the ones it has.
-          const next = makeSheet(title, rowsText, [], single ?? !!current.single);
-          if (!next) return { ok: false, error: 'Give the sheet the name of its work area.' };
-          const same = areaSheets.find((s) => s.id !== sheetId && s.title.toLowerCase() === next.title.toLowerCase());
-          if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
-          // Exams already signed keep the lines, and the columns, they were made on.
-          const { single: _was, ...kept } = current;
-          set({
-            areaSheets: areaSheets.map((s) =>
-              s.id === sheetId ? { ...kept, title: next.title, rows: next.rows, ...(next.single ? { single: true } : null) } : s,
-            ),
-          });
+          // With nothing said about the columns, the sheet keeps the ones it has. Exams already
+          // signed keep the lines, and the columns, they were made on (changedSheet).
+          const made = changedSheet(areaSheets, sheetId, title, rowsText, single);
+          if (!made.ok) return made;
+          set({ areaSheets: areaSheets.map((s) => (s.id === sheetId ? made.sheet : s)) });
           return { ok: true };
         },
 
         setAreaSheetActive: (sheetId, active) => {
           if (!isSupervisor()) return;
-          set({ areaSheets: get().areaSheets.map((s) => (s.id === sheetId ? { ...s, active } : s)) });
+          set({ areaSheets: get().areaSheets.map((s) => (s.id === sheetId ? sheetInUse(s, active) : s)) });
         },
 
         // ---- Roster and fleet ------------------------------------------------------------
@@ -1004,25 +994,20 @@ export const useStore = create<Store>()(
           return { ok: true };
         },
 
-        addEquipment: ({ unit, category, make, model, meter }) => {
+        addEquipment: (input) => {
           if (!get().session) return signedOut;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the fleet.' };
-          const name = clean(unit).toUpperCase();
-          if (!name) return { ok: false, error: 'Enter a unit number.' };
+          // What makes a unit number taken, and how a new unit starts, are the domain's (newUnit).
           const { equipment } = get();
-          if (equipment.some((e) => e.unit.toUpperCase() === name)) return { ok: false, error: `Unit ${name} is already in the fleet.` };
-          const item: Equipment = {
-            id: uid('eq_'), unit: name, category, make: clean(make), model: clean(model),
-            status: 'ready', meter: Number.isFinite(meter) ? meter : 0,
-            meterUnit: category === 'light_vehicle' ? 'mi' : 'hrs',
-          };
-          set({ equipment: [...equipment, item] });
+          const made = newUnit(equipment, input);
+          if (!made.ok) return made;
+          set({ equipment: [...equipment, made.unit] });
           return { ok: true };
         },
 
         removeEquipment: (equipmentId) => {
           if (!isSupervisor()) return;
-          set({ equipment: get().equipment.filter((e) => e.id !== equipmentId) });
+          set({ equipment: withoutUnit(get().equipment, equipmentId) });
         },
 
         // ---- Settings ---------------------------------------------------------------------
@@ -1054,15 +1039,10 @@ export const useStore = create<Store>()(
         setCompany: (company) => {
           if (!get().session) return signedOut;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the company details.' };
-          const mineId = company.mineId ? normalMineId(company.mineId) : '';
-          const next: Company = { ...company, name: clean(company.name), place: company.place && clean(company.place) ? clean(company.place) : undefined, mineId };
-          if (!next.place) delete next.place;
-          if (!next.mineId) delete next.mineId;
-          if (next.timeClock !== false) delete next.timeClock;
-          if (!next.payCodes) delete next.payCodes;
-          const problem = checkCompany(next);
-          if (problem) return { ok: false, error: problem };
-          set({ settings: { ...get().settings, company: next } });
+          // How a company is tidied and checked before it is saved is the domain's (savedCompany).
+          const saved = savedCompany(company);
+          if (!saved.ok) return saved;
+          set({ settings: { ...get().settings, company: saved.company } });
           return { ok: true };
         },
 

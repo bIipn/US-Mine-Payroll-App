@@ -15,8 +15,11 @@ import { CompanyLogoPlate, MineMusterLogo } from '../ui/brand';
 import { Boundary } from '../ui/boundary';
 import { Button, Loading, Notice } from '../ui/kit';
 import { BillingPage, StatusPanel } from './BillingPage';
+import { CompanyPage } from './CompanyPage';
 import { DefectsPage } from './DefectsPage';
+import { ExamSheetPage, ExamSheetsPage } from './ExamSheetsPage';
 import { ExportsPage } from './ExportsPage';
+import { FleetPage } from './FleetPage';
 import { OverviewPage } from './OverviewPage';
 import { PayrollPage, PayrollPersonPage } from './PayrollPage';
 import { ChecklistPage, ExamPage, RecordsPage } from './RecordsPage';
@@ -112,6 +115,8 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
   const nav: NavItem[] = [
     { href: '/', label: 'Overview', owns: (p) => p === '/' },
     { href: '/roster', label: 'Roster', count: pending || undefined, counted: 'waiting', owns: (p) => p.startsWith('/roster') },
+    { href: '/fleet', label: 'Fleet', owns: (p) => p.startsWith('/fleet') },
+    { href: '/sheets', label: 'Exam sheets', owns: (p) => p.startsWith('/sheets') },
     { href: '/records', label: 'Checklists and exams', owns: (p) => p.startsWith('/records') || p.startsWith('/checklists') || p.startsWith('/exams') },
     {
       href: '/defects',
@@ -123,6 +128,7 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
     { href: '/requests', label: 'Maintenance requests', count: board.requests.length || undefined, owns: (p) => p.startsWith('/requests') },
     ...(timeKept ? [{ href: '/payroll', label: 'Time and payroll', owns: (p: string) => p.startsWith('/payroll') }] : []),
     { href: '/exports', label: 'Exports', owns: (p) => p.startsWith('/exports') },
+    { href: '/company', label: 'Company', owns: (p) => p.startsWith('/company') },
     { href: '/billing', label: 'Billing', owns: (p) => p.startsWith('/billing') },
   ];
 
@@ -130,6 +136,11 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
   let params: Record<string, string> | null;
   if (path === '/') page = <OverviewPage />;
   else if (path === '/roster') page = <RosterPage />;
+  else if (path === '/fleet') page = <FleetPage />;
+  else if (path === '/sheets') page = <ExamSheetsPage />;
+  else if (path === '/sheets/add') page = <ExamSheetPage />;
+  else if ((params = match('/sheets/sheet/:id', path))) page = <ExamSheetPage id={params.id} />;
+  else if (path === '/company') page = <CompanyPage />;
   else if (path === '/records') page = <RecordsPage day={query.get('day')} />;
   else if ((params = match('/checklists/:id', path))) page = <ChecklistPage id={params.id} />;
   else if ((params = match('/exams/:id', path))) page = <ExamPage id={params.id} />;
@@ -317,7 +328,7 @@ function NotFound({ timeKept, path }: { timeKept: boolean; path: string }) {
   );
 }
 
-/** The top of every page: what it is, and when the records last arrived. */
+/** The top of every page: what it is, and when the records last changed, from a phone or from here. */
 export function PageHead({ title, lede, crumb, actions }: { title: string; lede?: ReactNode; crumb?: ReactNode; actions?: ReactNode | false }) {
   const ctx = useCompany();
   const companyName = ctx.shaped.company.name || ctx.choice.name;
@@ -347,7 +358,7 @@ export function Arrived() {
         {ctx.recordsError
           ? 'Records not loaded.'
           : last
-            ? <>Records last arrived {fmtRelativeDay(last.at, ctx.now).toLowerCase() === 'today' ? `today at ${fmtTime(last.at)}` : fmtDateTime(last.at)}.</>
+            ? <>Records last changed {fmtRelativeDay(last.at, ctx.now).toLowerCase() === 'today' ? `today at ${fmtTime(last.at)}` : fmtDateTime(last.at)}.</>
             : 'No records have arrived from the phones yet.'}
         <br />
         <span className="small">Loaded at {fmtTime(ctx.loadedAt)}.</span>

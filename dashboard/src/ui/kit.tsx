@@ -8,7 +8,7 @@ import { onLink } from '../lib/router';
 
 type Kind = 'main' | 'ink' | 'line' | 'danger' | 'quiet' | 'ondark';
 
-export function Button({ kind = 'line', small, block, busy, children, className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
+export function Button({ kind = 'line', small, block, busy, children, className, onClick, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & {
   ref?: Ref<HTMLButtonElement>;
   kind?: Kind;
   small?: boolean;
@@ -17,8 +17,23 @@ export function Button({ kind = 'line', small, block, busy, children, className,
   busy?: boolean;
 }) {
   const cls = ['btn', `btn-${kind}`, small && 'btn-small', block && 'btn-block', className].filter(Boolean).join(' ');
+  // A busy button is not `disabled`: that would drop the keyboard focus to the top of the page. It ignores
+  // the press instead, a form's Enter included (which presses the form's button).
   return (
-    <button type="button" className={cls} disabled={rest.disabled || busy} aria-busy={busy || undefined} {...rest}>
+    <button
+      type="button"
+      className={cls}
+      aria-busy={busy || undefined}
+      aria-disabled={busy || undefined}
+      {...rest}
+      onClick={(event) => {
+        if (busy) {
+          event.preventDefault();
+          return;
+        }
+        onClick?.(event);
+      }}
+    >
       {children}
     </button>
   );
@@ -40,10 +55,13 @@ export function A({ href, children, className, current }: { href: string; childr
   );
 }
 
-export function TextField({ label, hint, error, value, onChange, type = 'text', autoComplete, required, inputMode, maxLength, placeholder, className, list, autoFocus, inputRef }: {
+export function TextField({ label, hint, error, invalid, describedBy, value, onChange, type = 'text', autoComplete, required, inputMode, maxLength, placeholder, className, list, autoFocus, inputRef }: {
   label: string;
   hint?: ReactNode;
   error?: string | null;
+  /** At fault, with the reason said once for several fields: `describedBy` is the id of where. */
+  invalid?: boolean;
+  describedBy?: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
@@ -78,8 +96,8 @@ export function TextField({ label, hint, error, value, onChange, type = 'text', 
         placeholder={placeholder}
         list={list}
         autoFocus={autoFocus}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={[hintId, errorId].filter(Boolean).join(' ') || undefined}
+        aria-invalid={error || invalid ? true : undefined}
+        aria-describedby={[hintId, errorId, describedBy].filter(Boolean).join(' ') || undefined}
       />
       {hint ? <p className="field-hint" id={hintId}>{hint}</p> : null}
       {error ? <p className="field-error" id={errorId} role="alert">{error}</p> : null}
@@ -98,34 +116,56 @@ export function AreaField({ label, hint, value, onChange, rows = 8 }: { label: s
   );
 }
 
-export function SelectField<T extends string>({ label, hint, value, onChange, options, className }: {
+export function SelectField<T extends string>({ label, hint, error, value, onChange, options, className, selectRef }: {
   label: string;
   hint?: ReactNode;
+  error?: string | null;
   value: T;
   onChange: (value: T) => void;
   options: { value: T; label: string }[];
   className?: string;
+  /** For a form to move to the field when it is the one at fault. */
+  selectRef?: Ref<HTMLSelectElement>;
 }) {
   const id = useId();
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
   return (
     <div className={['field', className].filter(Boolean).join(' ')}>
       <label className="field-label" htmlFor={id}>{label}</label>
-      <select id={id} className="select" value={value} onChange={(e) => onChange(e.target.value as T)} aria-describedby={hint ? `${id}-hint` : undefined}>
+      <select
+        id={id}
+        ref={selectRef}
+        className="select"
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={[hintId, errorId].filter(Boolean).join(' ') || undefined}
+      >
         {options.map((o) => (
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
-      {hint ? <p className="field-hint" id={`${id}-hint`}>{hint}</p> : null}
+      {hint ? <p className="field-hint" id={hintId}>{hint}</p> : null}
+      {error ? <p className="field-error" id={errorId} role="alert">{error}</p> : null}
     </div>
   );
 }
 
-export function Check({ label, checked, onChange, disabled }: { label: ReactNode; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
-  return (
+export function Check({ label, hint, checked, onChange, disabled }: { label: ReactNode; /** Said under the switch, and read out with it. */ hint?: ReactNode; checked: boolean; onChange: (checked: boolean) => void; disabled?: boolean }) {
+  const id = useId();
+  const box = (
     <label className="check">
-      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} aria-describedby={hint ? `${id}-hint` : undefined} />
       <span>{label}</span>
     </label>
+  );
+  if (!hint) return box;
+  return (
+    <div className="check-set">
+      {box}
+      <p className="field-hint" id={`${id}-hint`}>{hint}</p>
+    </div>
   );
 }
 
@@ -208,13 +248,35 @@ export function Seg<T extends string>({ label, value, onChange, options, showLab
 
 export type Tone = 'ok' | 'info' | 'warn' | 'bo' | 'neutral';
 
-export function Notice({ tone = 'neutral', title, children, live }: { tone?: Tone; title?: ReactNode; children?: ReactNode; live?: boolean }) {
+export function Notice({ tone = 'neutral', title, children, live, alert }: {
+  tone?: Tone;
+  title?: ReactNode;
+  children?: ReactNode;
+  live?: boolean;
+  /** Said at once whatever its tone: something was not done, and the person should know now. */
+  alert?: boolean;
+}) {
   return (
-    <div className={`notice notice-${tone}`} role={live ? (tone === 'bo' ? 'alert' : 'status') : undefined}>
+    <div className={`notice notice-${tone}`} role={live ? (alert || tone === 'bo' ? 'alert' : 'status') : undefined}>
       {title ? <p className="notice-title">{title}</p> : null}
       {children ? <div>{children}</div> : null}
     </div>
   );
+}
+
+/**
+ * Words for a screen reader that are already on the page when it opens, such
+ * as what the page before left to be said. A region that arrives with its
+ * words in it is not read out; this one is there first and takes them a moment
+ * after, once the page's heading has been read.
+ */
+export function Announce({ text }: { text?: string | null }) {
+  const [said, setSaid] = useState('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSaid(text ?? ''), 400);
+    return () => window.clearTimeout(timer);
+  }, [text]);
+  return <div className="sr-only" role="status">{said}</div>;
 }
 
 export function Tag({ tone = 'neutral', solid, children }: { tone?: Tone | 'ink'; solid?: boolean; children: ReactNode }) {
@@ -226,25 +288,58 @@ export function Plate({ unit, large }: { unit: string; large?: boolean }) {
 }
 
 /** A button that asks once more before it does something that cannot be taken back. */
-export function Confirm({ label, question, yes, kind = 'line', onYes, small }: {
+export function Confirm({ label, question, name, yes, kind = 'line', onYes, before, small, roomy }: {
   label: string;
   question: string;
+  /** A short name for the question, read out before it: "Take unit L-2 out of the fleet". Without one, the button's own words. */
+  name?: string;
   yes: string;
   kind?: Kind;
   small?: boolean;
+  /** The two answers at full height, 44 px, for a page worked on a phone as well. */
+  roomy?: boolean;
   onYes: () => unknown;
+  /** Run before the question is put, to bring what it says up to date. Answering false puts no question. */
+  before?: () => Promise<boolean | void>;
 }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [looking, setLooking] = useState(false);
+  const id = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const was = useRef(false);
+  // The question shut, with either answer: the focus goes back to the button that put it.
+  useEffect(() => {
+    if (was.current && !asking) trigger.current?.focus();
+    was.current = asking;
+  }, [asking]);
   if (!asking) {
-    return <Button kind={kind} small={small} onClick={() => setAsking(true)}>{label}</Button>;
+    return (
+      <Button
+        ref={trigger}
+        kind={kind}
+        small={small}
+        busy={looking}
+        onClick={async () => {
+          if (!before) return setAsking(true);
+          setLooking(true);
+          try {
+            if ((await before()) !== false) setAsking(true);
+          } finally {
+            setLooking(false);
+          }
+        }}
+      >
+        {label}
+      </Button>
+    );
   }
   return (
-    <span className="inline-confirm" role="group" aria-label={question}>
-      <span>{question}</span>
+    <span className="inline-confirm" role="group" aria-label={name ?? label} aria-describedby={id}>
+      <span id={id}>{question}</span>
       <Button
         kind={kind === 'danger' ? 'danger' : 'ink'}
-        small
+        small={!roomy}
         busy={busy}
         onClick={async () => {
           setBusy(true);
@@ -259,7 +354,7 @@ export function Confirm({ label, question, yes, kind = 'line', onYes, small }: {
         {yes}
       </Button>
       {/* The answer that changes nothing has the focus, so a second press of Enter cannot do the one-way thing. */}
-      <Button kind="quiet" small autoFocus onClick={() => setAsking(false)}>Keep it as it is</Button>
+      <Button kind="quiet" small={!roomy} autoFocus onClick={() => setAsking(false)}>Keep it as it is</Button>
     </span>
   );
 }
@@ -323,7 +418,8 @@ export function Ledger({ children, style }: { children: ReactNode; style?: CSSPr
       let col = 0;
       for (const cell of Array.from(tr.cells)) {
         const label = heads[col];
-        if (label && cell.tagName === 'TD' && !cell.classList.contains('ledger-empty')) cell.setAttribute('data-label', label);
+        // A cell that spans columns is not one column's figure: it takes the whole row when the rows are cards.
+        if (label && cell.tagName === 'TD' && !cell.classList.contains('ledger-empty') && (cell.colSpan || 1) === 1) cell.setAttribute('data-label', label);
         else cell.removeAttribute('data-label');
         col += cell.colSpan || 1;
       }

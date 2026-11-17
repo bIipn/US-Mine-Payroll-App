@@ -1,5 +1,6 @@
 import { checkPaySchedule, type PaySchedule } from './payPeriod';
 import type { PayCodes } from './payrollCsv';
+import { cleanText } from './roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from './site';
 import type { LatLng, SiteConfig } from './types';
 
@@ -98,6 +99,24 @@ export function checkCompany(company: Company): string | undefined {
     if (new Set(codes.map((c) => c.toUpperCase())).size !== codes.length) return 'Two kinds of hours have the same code. Give each its own.';
   }
   return undefined;
+}
+
+/**
+ * A company as it is saved, or what is wrong with it: the name and the place
+ * closed up, the mine ID as its seven digits, and nothing kept that says
+ * nothing (no place, no mine ID, a time clock that is on, no earning codes of
+ * its own). The app and the office dashboard save a company through here, so
+ * both write the same record.
+ */
+export function savedCompany(company: Company): { ok: true; company: Company } | { ok: false; error: string } {
+  const mineId = company.mineId ? normalMineId(company.mineId) : '';
+  const next: Company = { ...company, name: cleanText(company.name), place: company.place && cleanText(company.place) ? cleanText(company.place) : undefined, mineId };
+  if (!next.place) delete next.place;
+  if (!next.mineId) delete next.mineId;
+  if (next.timeClock !== false) delete next.timeClock;
+  if (!next.payCodes) delete next.payCodes;
+  const problem = checkCompany(next);
+  return problem ? { ok: false, error: problem } : { ok: true, company: next };
 }
 
 /** A point as the build writes it, or undefined when it is not a real latitude and longitude. */

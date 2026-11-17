@@ -183,6 +183,46 @@ export function withSheets(existing: AreaSheet[], configured: AreaSheet[]): Area
   return missing.length ? [...existing, ...missing] : existing;
 }
 
+export type SheetResult = { ok: true; sheet: AreaSheet } | { ok: false; error: string };
+
+const NO_AREA = 'Give the sheet the name of its work area.';
+
+/**
+ * A new sheet for the list, or why it cannot be added. Two sheets cannot have
+ * the same name, whatever its capitals. Its id is a slug of its name, so the
+ * same area typed on two phones, or on a phone and in the office, is one sheet.
+ */
+export function newSheet(sheets: readonly AreaSheet[], title: string, rowsText: string, single?: boolean): SheetResult {
+  const sheet = makeSheet(title, rowsText, sheets.map((s) => s.id), single);
+  if (!sheet) return { ok: false, error: NO_AREA };
+  const same = sheets.find((s) => s.title.toLowerCase() === sheet.title.toLowerCase());
+  if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
+  return { ok: true, sheet };
+}
+
+/**
+ * A sheet with its name, its lines and its columns changed, or why it cannot
+ * be. With nothing said about the columns (`single` left out) the sheet keeps
+ * the ones it has. Its id, and whether it is in use, stay as they are. Exams
+ * already signed keep the lines, and the columns, they were made on: a change
+ * here is for the exams made from now on.
+ */
+export function changedSheet(sheets: readonly AreaSheet[], sheetId: string, title: string, rowsText: string, single?: boolean): SheetResult {
+  const current = sheets.find((s) => s.id === sheetId);
+  if (!current) return { ok: false, error: 'That area sheet is no longer on the list.' };
+  const next = makeSheet(title, rowsText, [], single ?? !!current.single);
+  if (!next) return { ok: false, error: NO_AREA };
+  const same = sheets.find((s) => s.id !== sheetId && s.title.toLowerCase() === next.title.toLowerCase());
+  if (same) return { ok: false, error: `There is already a sheet called ${same.title}.` };
+  const { single: _was, ...kept } = current;
+  return { ok: true, sheet: { ...kept, title: next.title, rows: next.rows, ...(next.single ? { single: true } : null) } };
+}
+
+/** A sheet put on the list the crew picks from, or taken off it. Its exams stay on record either way. */
+export function sheetInUse(sheet: AreaSheet, active: boolean): AreaSheet {
+  return { ...sheet, active };
+}
+
 /**
  * Made-up sheets for the sample data: a plant that is nothing like the mine's
  * own. The real sheets list the mine's equipment and are not in this

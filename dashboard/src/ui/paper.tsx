@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { AREA_CONDITIONS, EXAM_COLUMNS, rowAnswer, shiftLabel } from '@app/domain/areaExam';
 import { CARD_COLUMNS, type CardColumn, type DailyCard, type DayClock } from '@app/domain/checklistCard';
 import { ANSWER_LEGEND, ANSWER_MARK, checklistFor, FUEL_LINE, onTheCard } from '@app/domain/templates';
-import type { Answer, AreaExam, Equipment, ExamCondition, ExamRow, Mrf } from '@app/domain/types';
+import type { Answer, AreaExam, AreaSheet, Equipment, ExamCondition, ExamRow, Mrf } from '@app/domain/types';
 import { fmtDate, fmtDateTime, fmtHrs, fmtMeter } from '@app/util/format';
 
 import { A } from './kit';
@@ -292,6 +292,56 @@ export function ExamPaper({ exam, examiner, nameOf, mrfNumber, mrfHref }: {
         </div>
       </Sheet>
     </div>
+  );
+}
+
+/**
+ * An area's sheet as the blank paper form: its lines against guarding,
+ * electrical and safe access, or against the one OK/BO column, with nothing
+ * marked. What a pre shift exam made on it from now on starts from.
+ */
+export function BlankSheetPaper({ sheet }: { sheet: Pick<AreaSheet, 'title' | 'rows' | 'single'> }) {
+  const span = sheet.single ? 2 : 4;
+  // A name not typed yet heads the sheet with what every sheet is called.
+  const heading = sheet.title ? `${sheet.title} pre shift exam` : 'Pre shift exam';
+  const blanks = sheet.single ? <td className="mark-wide" /> : EXAM_COLUMNS.map((c) => <td key={c.id} className="mark" />);
+  return (
+    <Sheet title={heading} label={`${heading}, the blank sheet`}>
+      <Lines>
+        <Line label="Employee:" wide />
+        <Line label="Date+shift:" wide />
+      </Lines>
+      <div className="sheet-scroll">
+        <table className="grid">
+          <thead>
+            <tr>
+              <th className="left" scope="col">{sheet.title ? `${sheet.title} areas:` : 'Areas:'}</th>
+              {sheet.single ? (
+                <th className="mark-wide" scope="col">OK/BO</th>
+              ) : (
+                EXAM_COLUMNS.map((c) => <th key={c.id} className="mark" scope="col">{c.label}</th>)
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {sheet.rows.length === 0 ? (
+              <tr><td colSpan={span} className="left muted">No lines of its own yet. An exam here is the conditions page alone.</td></tr>
+            ) : null}
+            {sheet.rows.map((row) => (
+              <tr key={row.id}>
+                <th scope="row">{row.label}</th>
+                {blanks}
+              </tr>
+            ))}
+            {/* The line the crew can write in on any sheet, for what the sheet does not list. */}
+            <tr>
+              <th scope="row"><span className="other">Other (specify):</span></th>
+              {blanks}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Sheet>
   );
 }
 

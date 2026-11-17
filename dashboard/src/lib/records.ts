@@ -53,6 +53,15 @@ export interface Shaped {
    * workweek, earning codes or time-clock switch of its own.
    */
   settingsFrom: 'phones' | 'server';
+  /**
+   * The clock-in site in the shared settings, as it was sent: an object, or null
+   * for none. It is set standing at the mine, on a phone; the dashboard shows it
+   * and never changes it. It is read from the settings record even when the rest
+   * of that record is set aside, so that settings saved in its place keep the pin.
+   */
+  site: unknown;
+  /** Whether the unanswered lines of a checklist or an exam can be marked OK in one tap: the app's default until the settings say. */
+  allowSectionAllOk: boolean;
   areaSheets: AreaSheet[];
   denied: DeniedPunch[];
   /**
@@ -244,6 +253,9 @@ export function shapeRecords(rows: RecordRow[], from: { company?: CompanyRow; ro
   }
 
   const settingsFrom: Shaped['settingsFrom'] = settings && isObj(settings.company) ? 'phones' : 'server';
+  // The settings record as it was sent, read or set aside: the site and the switch in it go back as they were.
+  const sentRow = [...latest.values()].find((row) => row.kind === 'settings' && row.id === 'company' && !row.deleted);
+  const sent = isObj(sentRow?.data) ? sentRow.data : undefined;
   const company = companyFrom(settings, from.company);
   const week = settings?.workweekStartsOn;
   const workweekStartsOn = isNum(week) && Number.isInteger(week) && week >= 0 && week <= 6 ? week : 0;
@@ -263,6 +275,8 @@ export function shapeRecords(rows: RecordRow[], from: { company?: CompanyRow; ro
     company,
     workweekStartsOn,
     settingsFrom,
+    site: isObj(sent?.site) ? sent.site : null,
+    allowSectionAllOk: typeof sent?.allowSectionAllOk === 'boolean' ? sent.allowSectionAllOk : true,
     areaSheets,
     denied,
     placeholders,

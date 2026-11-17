@@ -1,0 +1,110 @@
+import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitNumber, withoutUnit } from '../fleet';
+import type { Equipment } from '../types';
+
+const loader: Equipment = { id: 'eq_a', unit: 'L-2', category: 'loader', make: 'Test', model: 'One', status: 'ready', meter: 4250.5, meterUnit: 'hrs' };
+const truck: Equipment = { id: 'eq_b', unit: 'T-10', category: 'haul_truck', make: 'Test', model: 'Two', status: 'out_of_service', meter: 9120, meterUnit: 'hrs' };
+const pickup: Equipment = { id: 'eq_c', unit: 'P-4', category: 'light_vehicle', make: 'Test', model: 'Three', status: 'defect', meter: 61200, meterUnit: 'mi' };
+const fleet = [loader, truck, pickup];
+
+describe('adding a unit to the fleet', () => {
+  it('makes a unit that starts ready at the reading given, with the number in capitals and the words closed up', () => {
+    expect(newUnit(fleet, { unit: '  l-16 ', category: 'loader', make: ' Test   Make ', model: ' 980 m ', meter: 120.5 }, 'eq_new')).toEqual({
+      ok: true,
+      unit: { id: 'eq_new', unit: 'L-16', category: 'loader', make: 'Test Make', model: '980 m', status: 'ready', meter: 120.5, meterUnit: 'hrs' },
+    });
+  });
+
+  it('reads a light vehicle in miles and everything else in equipment hours', () => {
+    expect(meterUnitFor('light_vehicle')).toBe('mi');
+    expect(meterUnitFor('water_truck')).toBe('hrs');
+    const made = newUnit(fleet, { unit: 'P-9', category: 'light_vehicle', make: '', model: '', meter: 30 }, 'eq_p');
+    expect(made.ok && made.unit.meterUnit).toBe('mi');
+  });
+
+  it('needs a unit number', () => {
+    expect(newUnit(fleet, { unit: '   ', category: 'loader', make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: false, error: 'Enter a unit number.' });
+  });
+
+  it('takes a unit number as taken whatever its capitals or the spaces around it', () => {
+    expect(newUnit(fleet, { unit: ' t-10 ', category: 'haul_truck', make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: false, error: 'Unit T-10 is already in the fleet.' });
+    expect(unitNumber(' t-10 ')).toBe('T-10');
+  });
+
+  it('needs a type of equipment the app has', () => {
+    expect(newUnit(fleet, { unit: 'X-1', category: 'crane' as never, make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: false, error: 'Choose the type of equipment.' });
+  });
+
+  it('starts a reading that is not a number at zero, as the app always has', () => {
+    const made = newUnit(fleet, { unit: 'X-1', category: 'dozer', make: '', model: '', meter: Number.NaN }, 'eq_x');
+    expect(made.ok && made.unit.meter).toBe(0);
+  });
+
+  it('gives each new unit an id of its own, as the app gives its records', () => {
+    const [a, b] = [newUnitId(), newUnitId()];
+    expect(a).toMatch(/^eq_[a-z0-9]{12,}$/);
+    expect(a).not.toBe(b);
+    const made = newUnit(fleet, { unit: 'X-2', category: 'dozer', make: '', model: '', meter: 0 });
+    expect(made.ok && made.unit.id).toMatch(/^eq_/);
+  });
+});
+
+describe('changing a unit', () => {
+  it('changes its type, make and model and nothing else: the number, the status and the reading stay', () => {
+    expect(changedUnit(fleet, 'eq_b', { category: 'water_truck', make: ' New  Make ', model: ' 4000 ' })).toEqual({
+      ok: true,
+      unit: { id: 'eq_b', unit: 'T-10', category: 'water_truck', make: 'New Make', model: '4000', status: 'out_of_service', meter: 9120, meterUnit: 'hrs' },
+    });
+  });
+
+  it('keeps anything else the record holds', () => {
+    const withMore = { ...loader, note: 'kept' } as Equipment;
+    const made = changedUnit([withMore], 'eq_a', { category: 'loader', make: 'Test', model: 'One' });
+    expect(made.ok && made.unit).toEqual(withMore);
+  });
+
+  it('reads the unit in miles once it is a light vehicle, and in hours once it is not', () => {
+    const toPickup = changedUnit(fleet, 'eq_a', { category: 'light_vehicle', make: 'Test', model: 'One' });
+    expect(toPickup.ok && toPickup.unit.meterUnit).toBe('mi');
+    const toLoader = changedUnit(fleet, 'eq_c', { category: 'loader', make: 'Test', model: 'Three' });
+    expect(toLoader.ok && toLoader.unit.meterUnit).toBe('hrs');
+  });
+
+  it('turns back a unit that is no longer in the fleet, and a type the app does not have', () => {
+    expect(changedUnit(fleet, 'eq_gone', { category: 'loader', make: '', model: '' })).toEqual({ ok: false, error: 'That unit is no longer in the fleet.' });
+    expect(changedUnit(fleet, 'eq_a', { category: 'crane' as never, make: '', model: '' })).toEqual({ ok: false, error: 'Choose the type of equipment.' });
+  });
+});
+
+describe('taking a unit out of the fleet', () => {
+  it('leaves the others as they were', () => {
+    expect(withoutUnit(fleet, 'eq_b')).toEqual([loader, pickup]);
+    expect(withoutUnit(fleet, 'eq_gone')).toEqual(fleet);
+  });
+});
+
+describe('a reading as typed', () => {
+  it('reads hours with a comma and a tenth, and nothing typed as zero', () => {
+    expect(readMeter('4,250.5')).toBe(4250.5);
+    expect(readMeter(' 120 ')).toBe(120);
+    expect(readMeter('')).toBe(0);
+    expect(readMeter('   ')).toBe(0);
+  });
+
+  it('is not a reading when it is not a number a meter shows', () => {
+    for (const typed of ['abc', '-5', '12 hrs', '1e9', '4.2.1', '.5', '99999999']) expect(readMeter(typed)).toBeUndefined();
+  });
+});
+
+describe('the fleet as it is listed', () => {
+  it('goes by type, then by unit number, with 2 ahead of 10', () => {
+    const more: Equipment[] = [
+      { ...loader, id: 'l10', unit: 'L-10' },
+      pickup,
+      truck,
+      loader,
+    ];
+    expect(fleetOrder(more).map((e) => e.unit)).toEqual(['L-2', 'L-10', 'T-10', 'P-4']);
+    // The list handed in is left as it was.
+    expect(more[0].unit).toBe('L-10');
+  });
+});

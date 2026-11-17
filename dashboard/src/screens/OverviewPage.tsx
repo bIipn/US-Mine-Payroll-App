@@ -253,7 +253,7 @@ export function OverviewPage() {
           <section className="section" aria-labelledby="rec-title">
             <h2 className="h2" id="rec-title">Records on the server</h2>
             <dl className="facts">
-              <div><dt>Last arrived</dt><dd>{shaped.lastArrived ? fmtDateTime(shaped.lastArrived.at) : 'None yet'}</dd></div>
+              <div><dt>Last changed</dt><dd>{shaped.lastArrived ? fmtDateTime(shaped.lastArrived.at) : 'None yet'}</dd></div>
               <div><dt>Equipment checklists</dt><dd>{shaped.counts.inspection.toLocaleString('en-US')}</dd></div>
               <div><dt>Pre shift exams</dt><dd>{shaped.counts.exam.toLocaleString('en-US')}</dd></div>
               <div><dt>Maintenance requests</dt><dd>{shaped.counts.mrf.toLocaleString('en-US')}</dd></div>

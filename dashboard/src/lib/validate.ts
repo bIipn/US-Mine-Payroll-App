@@ -69,6 +69,7 @@ export function problemWith(kind: RecordKind, d: Obj): string | undefined {
         [company(d.company), 'a company that is not the shape the app writes'],
         [opt(d.workweekStartsOn, (w) => Number.isInteger(w) && (w as number) >= 0 && (w as number) <= 6), 'a workweek that starts on no day'],
         [d.site === undefined || d.site === null || isObj(d.site), 'a site that is not the shape the app writes'],
+        [opt(d.allowSectionAllOk, isBool), 'a switch that is not the shape the app writes'],
       );
     case 'employee':
       return first(
