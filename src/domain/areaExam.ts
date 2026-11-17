@@ -426,6 +426,16 @@ export function examFindings(exam: AreaExam): Finding[] {
   return [...fromRows, ...fromConditions];
 }
 
+/**
+ * What was found and when, as one line for a list: "Guard is loose. Found today."
+ * The note keeps its own full stop, question mark or exclamation mark and never
+ * gets a second one, however it was typed.
+ */
+export function foundLine(text: string, when: string): string {
+  const said = text.trim().replace(/\.+$/, '').trimEnd();
+  return `${said}${/[!?]$/.test(said) ? '' : '.'} Found ${when}.`;
+}
+
 /** Conditions that have no fix date yet: a danger first, then the newest. */
 export function openFindings(exams: AreaExam[], sheetId?: string): Finding[] {
   return exams

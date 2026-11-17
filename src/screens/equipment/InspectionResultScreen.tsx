@@ -116,7 +116,7 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
           ) : null}
 
           {inspection.result !== 'pass' && mrf ? (
-            <Notice tone="ok" icon={CircleCheck} title={`Maintenance request #${mrf.number} sent`} body="Maintenance and your supervisor can see it now. It stays open until the repair is signed off." />
+            <Notice tone="ok" icon={CircleCheck} title={`Maintenance request #${mrf.number} sent`} body="It is on the maintenance request list, and it stays open until the repair is signed off." />
           ) : null}
 
           {inspection.result === 'bad_order' && mrf ? (

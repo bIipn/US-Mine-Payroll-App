@@ -5,7 +5,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
 import { Button, Divider, EmptyState, Notice, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
-import { openFindings, shiftLabel } from '../../domain/areaExam';
+import { foundLine, openFindings, shiftLabel } from '../../domain/areaExam';
 import type { AreaExam } from '../../domain/types';
 import { employeeName, useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
@@ -128,7 +128,7 @@ export function AreaList({ now }: { now: number }) {
                     key={`${f.examId}-${f.key}`}
                     testID={`open-${f.key}`}
                     title={f.label}
-                    sub={`${f.note ?? f.where}. Found ${fmtRelativeDay(f.foundAt, now).toLowerCase()}.`}
+                    sub={foundLine(f.note ?? f.where, fmtRelativeDay(f.foundAt, now).toLowerCase())}
                     below={f.danger ? <Tag label="Danger" tone="bo" solid icon={Siren} /> : f.mrfId ? <Tag label="With maintenance" tone="bo" /> : undefined}
                     chevron
                     onPress={() => go(() => navigation.navigate('AreaExamDetail', { examId: f.examId }))}

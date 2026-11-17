@@ -4,7 +4,7 @@ import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Avatar, Divider, Panel, Row, Stat, Tag, TopBar, Txt, UnitPlate } from '../../components/ui';
-import { openFindings } from '../../domain/areaExam';
+import { foundLine, openFindings } from '../../domain/areaExam';
 import { keepsTime } from '../../domain/company';
 import { employeeName, useRules, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
@@ -126,7 +126,7 @@ export function CrewScreen() {
                 testID={`condition-${f.key}`}
                 left={f.danger ? <Siren color={color.red} size={28} /> : <Factory color={color.red} size={28} />}
                 title={`${f.area}: ${f.label}`}
-                sub={`${f.note ?? f.where}. Found ${fmtRelativeDay(f.foundAt, now).toLowerCase()}.`}
+                sub={foundLine(f.note ?? f.where, fmtRelativeDay(f.foundAt, now).toLowerCase())}
                 below={<Tag label={f.danger ? 'Danger' : f.mrfId ? 'With maintenance' : 'Open'} tone="bo" solid={f.danger} />}
                 onPress={() => navigation.navigate('AreaExamDetail', { examId: f.examId })}
               />

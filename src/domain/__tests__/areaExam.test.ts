@@ -18,8 +18,7 @@ import {
   withFix,
   withMrf,
   withSheets,
-  type ExamDraft,
-} from '../areaExam';
+  type ExamDraft, foundLine } from '../areaExam';
 import { STANDARDS } from '../standards';
 import type { AreaExam, AreaSheet, ShiftName } from '../types';
 
@@ -442,5 +441,18 @@ describe('conditions found', () => {
       ['Bagging plant', 'Lighting'],
     ]);
     expect(openFindings([older, fixed, elsewhere], 'bagging_plant')).toHaveLength(2);
+  });
+});
+
+describe('a finding and when it was found, as one line', () => {
+  it('ends the note with one full stop, whether or not it was typed with one', () => {
+    expect(foundLine('Guard is loose. Two bolts are missing.', 'today')).toBe('Guard is loose. Two bolts are missing. Found today.');
+    expect(foundLine('Lamp out over the conveyor', 'yesterday')).toBe('Lamp out over the conveyor. Found yesterday.');
+    expect(foundLine('  Berm washed out...  ', 'today')).toBe('Berm washed out. Found today.');
+  });
+
+  it('keeps a question mark or an exclamation mark as the note ends', () => {
+    expect(foundLine('Who took the guard off?', 'today')).toBe('Who took the guard off? Found today.');
+    expect(foundLine('Stay out!', 'today')).toBe('Stay out! Found today.');
   });
 });
