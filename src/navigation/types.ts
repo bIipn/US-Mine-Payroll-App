@@ -33,6 +33,8 @@ export type RootStackParamList = {
   Roster: undefined;
   Fleet: undefined;
   Company: undefined;
+  /** Signing this phone in to the company's server, and connecting it. Only in a build that names a server. */
+  CompanyAccount: undefined;
 };
 
 export type TabParamList = {

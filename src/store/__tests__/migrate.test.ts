@@ -157,17 +157,32 @@ describe('migratePersisted', () => {
     expect((migratePersisted(kept, 7, false, COMPANY, own, oldPin).settings as { site: unknown }).site).toBe(moved);
   });
 
+  it('starts a phone connected to no company, and keeps what it has to send', () => {
+    const v8 = { ...v1, leave: [], payRates: {}, exams: [], areaSheets: [], settings: { lunchReminders: false, company: COMPANY }, synced: {} };
+    const next = migratePersisted(v8, 8, false, COMPANY);
+    expect(next.connectedCompany).toBeNull();
+    expect(next.syncedWith).toBeNull();
+    expect(next.synced).toEqual({});
+    expect(next.shifts).toEqual([{ id: 's1' }]);
+    expect(next.session).toEqual({ accountId: 'a1', employeeId: 'e1' });
+    expect(next.seededAt).toBe(1_700_000_000_000);
+  });
+
   it('leaves data from the current version alone', () => {
     const v7 = {
       ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'crusher' }],
       mrfs: [{ id: 'm1', status: 'completed', history: [{ at: 5000, by: 'e6', status: 'completed', note: 'Done' }] }],
       settings: { lunchReminders: false, company: COMPANY },
       synced: { 'shift:s1': 'abc' },
+      syncedWith: 'c-a',
+      connectedCompany: { id: 'c-a', name: 'Test Pit A', role: 'employee' },
     };
-    expect(migratePersisted(v7, 8, true, COMPANY, null)).toEqual(v7);
+    expect(migratePersisted(v7, 9, true, COMPANY, null)).toEqual(v7);
   });
 
   it('copes with nothing saved', () => {
-    expect(migratePersisted(undefined, 1, false, COMPANY)).toEqual({ leave: [], payRates: {}, exams: [], areaSheets: [], synced: {} });
+    expect(migratePersisted(undefined, 1, false, COMPANY)).toEqual({
+      leave: [], payRates: {}, exams: [], areaSheets: [], synced: {}, syncedWith: null, connectedCompany: null, joinAsked: null,
+    });
   });
 });

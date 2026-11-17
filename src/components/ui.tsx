@@ -243,8 +243,14 @@ export function Panel({ title, action, children, style, flush }: {
   );
 }
 
-export function Row({ left, title, sub, below, right, onPress, chevron, testID, titleColor }: {
+export function Row({ left, title, sub, below, right, onPress, chevron, testID, titleColor, subColor, subLines = 2, titleLines = 2 }: {
   left?: React.ReactNode; title: string; sub?: string | null;
+  /** How many lines the title may take before it is cut short. */
+  titleLines?: number;
+  /** The line under the title in another colour, such as red for something only a person can put right. */
+  subColor?: string;
+  /** How many lines the line under the title may take before it is cut short. */
+  subLines?: number;
   /** Shown under the text, for a status tag too long to sit beside it. */
   below?: React.ReactNode;
   right?: React.ReactNode;
@@ -254,8 +260,8 @@ export function Row({ left, title, sub, below, right, onPress, chevron, testID, 
     <>
       {left}
       <View style={styles.rowText}>
-        <Txt v="strong" c={titleColor} numberOfLines={2}>{title}</Txt>
-        {sub ? <Txt v="small" c={color.silica} numberOfLines={2}>{sub}</Txt> : null}
+        <Txt v="strong" c={titleColor} numberOfLines={titleLines}>{title}</Txt>
+        {sub ? <Txt v={subColor ? 'smallStrong' : 'small'} c={subColor ?? color.silica} numberOfLines={subLines}>{sub}</Txt> : null}
         {below ? <View style={styles.rowBelow}>{below}</View> : null}
       </View>
       {right}
@@ -334,7 +340,7 @@ export function Field({ label, error, hint, right, style, ...input }: TextInputP
           }}
           style={[styles.input, input.multiline && styles.inputMulti, style]}
         />
-        {right}
+        {right ? <View style={styles.fieldRight}>{right}</View> : null}
       </View>
       {error ? <Txt v="small" c={color.red}>{error}</Txt> : hint ? <Txt v="small" c={color.silica}>{hint}</Txt> : null}
     </View>
@@ -657,7 +663,8 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
   },
   buttonText: { alignItems: 'center', flexShrink: 1 },
-  iconButton: { width: 48, height: 48, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  // A full tap target: hitSlop does not widen what a browser counts as the button.
+  iconButton: { width: TAP, height: TAP, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
 
   tag: {
     flexDirection: 'row',
@@ -724,6 +731,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
   },
   fieldMulti: { alignItems: 'flex-start', paddingVertical: space.md },
+  // A full-size button at the right of a field, such as Show password, without making the field taller.
+  fieldRight: { marginVertical: -2, marginRight: -(space.lg - 4) },
   fieldFocus: { borderColor: color.ink, borderWidth: 2.5, paddingHorizontal: space.lg - 1 },
   fieldError: { borderColor: color.red },
   input: {
@@ -747,7 +756,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.paper,
     overflow: 'hidden',
   },
-  segment: { flex: 1, minHeight: 46, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  segment: { flex: 1, minHeight: TAP, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   segmentNext: { borderLeftWidth: 2, borderLeftColor: color.ink },
   segmentOn: { backgroundColor: color.ink },
   chips: { gap: space.sm, paddingRight: space.xl },

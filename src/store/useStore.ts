@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, STARTING_COMPANY, STARTING_SITE } from '../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, examFindings, makeSheet, SAMPLE_AREA_SHEETS, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { checkCompany, normalMineId, type Company } from '../domain/company';
+import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { markSent, type Change, type Synced } from '../domain/sync';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
@@ -69,6 +70,28 @@ interface Data extends SeedData {
   seededAt: number | null;
   /** The version of each record the company's server has confirmed (`src/domain/sync.ts`). */
   synced: Synced;
+  /** The company whose server `synced` is about. A phone sends to one company only. */
+  syncedWith: string | null;
+  /** The company this phone is connected to and sends its records to, or none. */
+  connectedCompany: ConnectedCompany | null;
+  /**
+   * The last request to join a company made from this phone, so the person can
+   * check on it later without typing the code again. This phone's own: never sent.
+   */
+  joinAsked: JoinAsked | null;
+}
+
+/** A request to join a company: the code and the name it was made with. */
+export interface JoinAsked {
+  code: string;
+  firstName: string;
+  lastName: string;
+  companyName?: string;
+  /** Why it waits for a supervisor, as the server said. */
+  reason?: string;
+  /** The server account that asked. */
+  accountId: string;
+  at: number;
 }
 
 export interface SignUpInput {
@@ -217,8 +240,30 @@ interface Actions {
   /** The signed-in person's own hourly rate for their pay estimate. `null` clears it. */
   setMyRate: (cents: number | null) => Result;
 
-  /** Note the versions of records the company's server took. */
-  markSynced: (accepted: readonly Pick<Change, 'key' | 'rev'>[]) => void;
+  /**
+   * Note the versions of records the company's server took. `companyId` is the
+   * company that answered: an answer from any company but the one `synced` is
+   * about is not noted, such as one that comes back after the phone moved.
+   */
+  markSynced: (accepted: readonly Pick<Change, 'key' | 'rev'>[], companyId?: string | null) => void;
+  /**
+   * Send this phone's records to a company from now on, as the server account
+   * that joined it. A phone whose records already went to another company is
+   * turned back.
+   */
+  connectCompany: (company: ConnectedCompany, account?: { id: string; email: string }) => Result;
+  /** The signed-in account is on the connected company's roster, with this role: the phone sends as it from now on. */
+  confirmConnection: (found: { userId: string; email: string; role: Role; name: string }) => void;
+  /** Stop sending. The records stay on the phone, and what the server has is remembered for when it connects again. */
+  disconnectCompany: () => void;
+  /** Remember a request to join a company, or forget it. */
+  setJoinAsked: (asked: JoinAsked | null) => void;
+  /**
+   * Erase everything on this device and start it the way the build starts. In a
+   * preview anyone may; in a build that keeps real records only a supervisor
+   * may, because what has not reached the server yet is lost.
+   */
+  clearDevice: () => Result;
 }
 
 export type Store = Data & Actions;
@@ -262,6 +307,9 @@ const initialData = (): Data => ({
   settings: defaultSettings(DEMO_MODE, STARTING_COMPANY, STARTING_SITE),
   seededAt: null,
   synced: {},
+  syncedWith: null,
+  connectedCompany: null,
+  joinAsked: null,
 });
 
 /** Whether what this build saves on the device is the sample crew's history, rather than only what people entered. */
@@ -344,9 +392,21 @@ export const useStore = create<Store>()(
           if (roster !== employees || named !== areaSheets) set({ employees: roster, areaSheets: named });
         },
         resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER, samples = SAMPLE_CREW) => {
+          if (!DEMO_MODE) {
+            // A build that keeps real records starts the way a fresh install does: nothing in it but the build's own.
+            set({ ...initialData(), seededAt: null });
+            get().ensureSeeded(owner, sheets, people, samples);
+            return;
+          }
           const now = Date.now();
           const data = previewStart(now, owner, sheets, people, samples);
           set({ ...initialData(), ...data, employees: withBuildRoster(data.employees, people, owner), seededAt: now });
+        },
+
+        clearDevice: () => {
+          if (!DEMO_MODE && !isSupervisor()) return { ok: false, error: 'Only a supervisor can clear this device.' };
+          get().resetDemo();
+          return { ok: true };
         },
 
         // ---- Accounts ----------------------------------------------------------------
@@ -394,11 +454,20 @@ export const useStore = create<Store>()(
         },
 
         signInWithProvider: (provider, firstName, lastName) => {
+          // Apple, Google and Microsoft are not connected yet, so this sign-in proves nothing but a typed name.
+          // A build that sends to the company's server has none of it: there, what a session does is the company's record.
+          if (SERVER) return { ok: false, error: 'Sign in with your email and password.' };
           if (!clean(firstName) || !clean(lastName)) return { ok: false, error: 'Enter your first and last name.' };
           const match = rosterMatch(firstName, lastName);
           if (!match.ok) return match;
           const { employee } = match;
           const { accounts } = get();
+          if (employee.role === 'supervisor') {
+            return { ok: false, error: 'A supervisor signs in with an email and password. Create an account under your name, or sign in with it.' };
+          }
+          if (accounts.some((a) => a.employeeId === employee.id && a.passwordHash)) {
+            return { ok: false, error: `${employee.firstName} ${employee.lastName} has an account with a password. Sign in with your email and password.` };
+          }
           let account = accounts.find((a) => a.employeeId === employee.id);
           if (!account) {
             account = { id: uid('acct_'), employeeId: employee.id, email: standInEmail(employee), provider, createdAt: Date.now() };
@@ -488,6 +557,7 @@ export const useStore = create<Store>()(
         editShiftTimes: (shiftId, patch, reason) => {
           const { session, shifts } = get();
           if (!session) return { ok: false, error: 'You are signed out.' };
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can correct punch times.' };
           if (!clean(reason)) return { ok: false, error: 'Add a reason for the change. It is kept with the record.' };
           const shift = shifts.find((s) => s.id === shiftId);
           if (!shift) return { ok: false, error: 'That shift no longer exists.' };
@@ -545,6 +615,8 @@ export const useStore = create<Store>()(
         },
 
         demoRewindShift: (minutes) => {
+          // A preview control: a build that keeps real records never moves a punch without an edit and a reason.
+          if (!DEMO_MODE) return undefined;
           const { session, shifts } = get();
           if (!session) return undefined;
           const current = openShiftOf(shifts, session.employeeId, Date.now());
@@ -870,6 +942,8 @@ export const useStore = create<Store>()(
 
         // ---- Roster and fleet ------------------------------------------------------------
         addEmployee: (firstName, lastName, role = 'employee', title) => {
+          if (!get().session) return signedOut;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the roster.' };
           const first = titleCase(firstName);
           const last = titleCase(lastName);
           if (!first || !last) return { ok: false, error: 'Enter a first and last name.' };
@@ -900,11 +974,15 @@ export const useStore = create<Store>()(
           return { added, skipped };
         },
 
-        setEmployeeActive: (employeeId, active) =>
-          set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, active } : e)) }),
+        setEmployeeActive: (employeeId, active) => {
+          if (!isSupervisor()) return;
+          set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, active } : e)) });
+        },
 
-        setEmployeeRole: (employeeId, role) =>
-          set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, role } : e)) }),
+        setEmployeeRole: (employeeId, role) => {
+          if (!isSupervisor()) return;
+          set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, role } : e)) });
+        },
 
         setPayrollId: (employeeId, payrollId) => {
           if (!get().session) return signedOut;
@@ -927,6 +1005,8 @@ export const useStore = create<Store>()(
         },
 
         addEquipment: ({ unit, category, make, model, meter }) => {
+          if (!get().session) return signedOut;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the fleet.' };
           const name = clean(unit).toUpperCase();
           if (!name) return { ok: false, error: 'Enter a unit number.' };
           const { equipment } = get();
@@ -940,13 +1020,15 @@ export const useStore = create<Store>()(
           return { ok: true };
         },
 
-        removeEquipment: (equipmentId) =>
-          set({ equipment: get().equipment.filter((e) => e.id !== equipmentId) }),
+        removeEquipment: (equipmentId) => {
+          if (!isSupervisor()) return;
+          set({ equipment: get().equipment.filter((e) => e.id !== equipmentId) });
+        },
 
         // ---- Settings ---------------------------------------------------------------------
         setRadius: (radiusM) => {
           const { settings } = get();
-          if (!settings.site) return;
+          if (!settings.site || !isSupervisor()) return;
           const clamped = Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, Math.round(radiusM / 50) * 50));
           set({ settings: { ...settings, site: { ...settings.site, radiusM: clamped } } });
         },
@@ -961,9 +1043,14 @@ export const useStore = create<Store>()(
           set({ settings: { ...settings, site } });
           return { ok: true };
         },
-        setDemoLocation: (demoLocation) => set({ settings: { ...get().settings, demoLocation } }),
+        // Simulated GPS is a preview control. A build that keeps real records reads the phone's own.
+        setDemoLocation: (demoLocation) => set({ settings: { ...get().settings, demoLocation: DEMO_MODE ? demoLocation : 'gps' } }),
         setLunchReminders: (lunchReminders) => set({ settings: { ...get().settings, lunchReminders } }),
-        setAllowSectionAllOk: (allowSectionAllOk) => set({ settings: { ...get().settings, allowSectionAllOk } }),
+        setAllowSectionAllOk: (allowSectionAllOk) => {
+          // A company setting: it goes to the server with the others.
+          if (!isSupervisor()) return;
+          set({ settings: { ...get().settings, allowSectionAllOk } });
+        },
         setCompany: (company) => {
           if (!get().session) return signedOut;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the company details.' };
@@ -980,10 +1067,37 @@ export const useStore = create<Store>()(
         },
 
         // ---- The company's server ---------------------------------------------------------
-        markSynced: (accepted) => {
+        markSynced: (accepted, companyId) => {
+          if (companyId !== undefined && companyId !== get().syncedWith) return;
           const synced = markSent(get().synced, accepted);
           if (synced !== get().synced) set({ synced });
         },
+
+        connectCompany: (company, account) => {
+          const { synced, syncedWith } = get();
+          const problem = connectProblem(syncedWith, synced, company.id);
+          if (problem) return { ok: false, error: problem };
+          const linked: ConnectedCompany = {
+            id: company.id,
+            name: company.name,
+            role: company.role,
+            ...(account ? { userId: account.id, email: account.email } : null),
+          };
+          // What another company's server was told about counts for nothing here: everything is sent to this one.
+          set({ connectedCompany: linked, joinAsked: null, ...(syncedWith !== company.id ? { synced: {}, syncedWith: company.id } : null) });
+          return { ok: true };
+        },
+
+        confirmConnection: ({ userId, email, role, name }) => {
+          const linked = get().connectedCompany;
+          if (!linked) return;
+          if (linked.userId === userId && linked.email === email && linked.role === role && linked.name === name) return;
+          set({ connectedCompany: { ...linked, userId, email, role, name } });
+        },
+
+        disconnectCompany: () => set({ connectedCompany: null }),
+
+        setJoinAsked: (joinAsked) => set({ joinAsked }),
 
         // ---- Paid leave and the pay estimate ----------------------------------------------
         addLeave: ({ employeeId, day, type, hours, note }) => {
@@ -1043,8 +1157,8 @@ export const useStore = create<Store>()(
       version: STATE_VERSION,
       migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY, STARTING_SITE) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
-      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced }) => ({
-        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced,
+      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked }) => ({
+        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated();

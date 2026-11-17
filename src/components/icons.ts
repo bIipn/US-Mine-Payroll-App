@@ -31,6 +31,7 @@ export { default as HardHat } from 'lucide-react-native/icons/hard-hat';
 export { default as ListChecks } from 'lucide-react-native/icons/list-checks';
 export { default as LocateFixed } from 'lucide-react-native/icons/locate-fixed';
 export { default as LogIn } from 'lucide-react-native/icons/log-in';
+export { default as Link2 } from 'lucide-react-native/icons/link-2';
 export { default as LogOut } from 'lucide-react-native/icons/log-out';
 export { default as MapPin } from 'lucide-react-native/icons/map-pin';
 export { default as Menu } from 'lucide-react-native/icons/menu';

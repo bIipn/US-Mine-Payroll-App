@@ -16,6 +16,7 @@ import { SignalFrame } from './src/components/SignalStrip';
 import { keepsTime } from './src/domain/company';
 import { ToastHost } from './src/components/ui';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { watchConnection } from './src/services/connection';
 import { syncReminders } from './src/services/reminders';
 import { startSync } from './src/services/sync';
 import { openShiftOf, useStore } from './src/store/useStore';
@@ -47,8 +48,17 @@ export default function App() {
     if (session) void syncReminders(shift, settings.lunchReminders, rulesFor(settings.company.state));
   }, [hydrated, ensureSeeded]);
 
-  // Watch for signal, and send what the company's server does not have once there is some.
-  useEffect(() => (hydrated ? startSync() : undefined), [hydrated]);
+  // Watch for signal, and send what the company's server does not have once there is some,
+  // to the company this phone is connected to, if any.
+  useEffect(() => {
+    if (!hydrated) return undefined;
+    const stopSync = startSync();
+    const stopLink = watchConnection();
+    return () => {
+      stopLink();
+      stopSync();
+    };
+  }, [hydrated]);
 
   // If the fonts cannot load, carry on with the system font rather than a blank screen.
   const ready = hydrated && (fontsLoaded || !!fontError);

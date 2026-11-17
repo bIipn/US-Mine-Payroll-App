@@ -1,0 +1,176 @@
+import { create } from 'zustand';
+
+import { CAN_SEND } from '../config';
+import type { ConnectedCompany } from '../domain/server';
+import { useStore } from '../store/useStore';
+import type * as Server from './server';
+import { setSyncTransport, syncSettled, useSyncStatus } from './sync';
+
+/**
+ * Whether this build connects to a company server, and the connection itself.
+ *
+ * The server code, and supabase-js with it, is in a build only when the build
+ * names a server and is not a preview. The condition below is written with the
+ * settings themselves, so the bundler reads it as a constant: in a build
+ * without them it is false, the `require` is dropped before the bundle is made,
+ * and nothing of the server is in the app. (The public preview is one of those.)
+ *
+ * A preview build, and a build that holds the made-up sample crew, connects to
+ * nothing even with a server named (`CAN_SEND` in `config.ts`): what a preview
+ * makes up is never sent, and nor is anything else from it.
+ */
+const loaded: typeof Server | null =
+  process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_KEY && process.env.EXPO_PUBLIC_DEMO === '0'
+    ? require('./server')
+    : null;
+
+/** The server's calls, or null in a build that has no server, is a preview or holds the sample crew. */
+export const server: typeof Server | null = loaded?.configured && CAN_SEND ? loaded : null;
+
+/** Whether the Company account screen is there at all. */
+export const CAN_CONNECT = server != null;
+
+/** Who is signed in to the company server on this phone, as far as the phone knows. */
+export interface AccountState {
+  /** Whether the phone has looked for a saved session yet. */
+  known: boolean;
+  account: Server.ServerAccount | null;
+  /**
+   * The account signed in is not on the roster of the company this phone is
+   * connected to: another person signed in, or they were taken off it. Nothing
+   * is sent until the account that is on it signs in again.
+   */
+  notOnLinked: boolean;
+  /** Checking the signed-in account against the company's roster: the phone sends once it is confirmed. */
+  checking: boolean;
+  /** The last check could not reach the server. */
+  unchecked: boolean;
+  /** The company's join code, for a supervisor to hand out. Held in memory only, never saved. */
+  joinCode: string | null;
+}
+
+export const useServerAccount = create<AccountState>(() => ({
+  known: false,
+  account: null,
+  notOnLinked: false,
+  checking: false,
+  unchecked: false,
+  joinCode: null,
+}));
+
+/** Whether this account is the one the phone joined its company with. */
+const sameAccount = (linked: ConnectedCompany, account: Server.ServerAccount) => !!linked.userId && linked.userId === account.id;
+
+let recheck: (() => void) | null = null;
+
+/**
+ * Ask the server again whether the signed-in account is on the company's
+ * roster, and with what role and name: from the account screen, and once there
+ * is signal again. The answer comes back into the store and `useServerAccount`.
+ */
+export function checkAccount(): void {
+  recheck?.();
+}
+
+/**
+ * Send to the company the phone is connected to, from start-up on, while the
+ * account that joined it is signed in, and stop the moment it is disconnected,
+ * signed out or the device is cleared. Another account signed in is checked
+ * against the company's roster first, and sends once it is on it. Returns a
+ * function that stops watching.
+ */
+export function watchConnection(): () => void {
+  if (!server) return () => undefined;
+  const link = server;
+  let current: string | null = null;
+  let asked: string | null = null;
+  let live = true;
+
+  const apply = () => {
+    if (!live) return;
+    const linked = useStore.getState().connectedCompany;
+    const { known, account } = useServerAccount.getState();
+    const ready = !!linked && !!account && sameAccount(linked, account);
+    // Connected, but not sending: its account is signed out, another account is signed in that is not on
+    // the company's roster, or the phone is still finding out which. The records row says what to do.
+    const why = !linked || ready ? null : known && !account ? 'signed_out' : useServerAccount.getState().notOnLinked ? 'not_member' : 'checking';
+    const key = !linked ? null : ready ? `send:${linked.id}:${account!.id}` : `${why}:${linked.id}`;
+    if (key !== current) {
+      current = key;
+      if (!linked) setSyncTransport(null);
+      else if (ready) setSyncTransport(link.pushTransport(linked.id));
+      else setSyncTransport(null, why);
+    }
+    if (linked && account && !sameAccount(linked, account)) verify(linked, account, false);
+  };
+
+  /** Whether the signed-in account is on the roster of the company the phone sends to. */
+  const verify = (linked: ConnectedCompany, account: Server.ServerAccount, again: boolean) => {
+    const question = `${linked.id}:${account.id}`;
+    if (asked === question && !again) return;
+    asked = question;
+    useServerAccount.setState({ checking: true, unchecked: false });
+    void link.myCompanies().then((result) => {
+      const now = useStore.getState().connectedCompany;
+      const who = useServerAccount.getState().account;
+      if (!live || now?.id !== linked.id || who?.id !== account.id) return;
+      if (!result.ok) {
+        // No answer: asked again once there is signal, or from the account screen.
+        asked = null;
+        useServerAccount.setState({ checking: false, unchecked: true });
+        return;
+      }
+      const found = result.companies.find((c) => c.id === linked.id);
+      useServerAccount.setState({ checking: false, unchecked: false, notOnLinked: !found, joinCode: found?.joinCode ?? null });
+      if (found) useStore.getState().confirmConnection({ userId: account.id, email: account.email, role: found.role, name: found.name });
+      apply();
+    });
+  };
+
+  recheck = () => {
+    const linked = useStore.getState().connectedCompany;
+    const { account } = useServerAccount.getState();
+    if (linked && account) verify(linked, account, true);
+  };
+
+  /** What was learnt about one account and company counts for nothing about another. */
+  const forget = () => {
+    asked = null;
+    useServerAccount.setState({ notOnLinked: false, checking: false, unchecked: false, joinCode: null });
+  };
+  const stopAccount = link.onAccountChange((account) => {
+    if (useServerAccount.getState().account?.id !== account?.id) forget();
+    useServerAccount.setState({ known: true, account });
+    apply();
+  });
+  const stopStore = useStore.subscribe((now, before) => {
+    if (now.connectedCompany === before.connectedCompany) return;
+    if (now.connectedCompany?.id !== before.connectedCompany?.id) forget();
+    apply();
+  });
+  // Back in range: ask again about an account the phone could not check with no signal.
+  const stopSignal = useSyncStatus.subscribe((now, before) => {
+    if (now.online && !before.online && asked == null) apply();
+  });
+  apply();
+  return () => {
+    live = false;
+    recheck = null;
+    stopAccount();
+    stopStore();
+    stopSignal();
+    current = null;
+    setSyncTransport(null);
+  };
+}
+
+/**
+ * Stop sending, forget the company and sign this phone out of the server. The
+ * records stay on the phone. A round that was sending stops at once, and is
+ * over before the phone signs out.
+ */
+export async function disconnect(): Promise<void> {
+  useStore.getState().disconnectCompany();
+  await syncSettled();
+  await server?.signOut();
+}

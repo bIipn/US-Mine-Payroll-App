@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CompanyLogoPlate, MineMusterLogo, ProviderMark } from '../../components/Brand';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
-import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW } from '../../config';
+import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
 import type { AuthProvider, Role } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
@@ -19,6 +19,13 @@ const PROVIDERS: { id: Provider; name: string }[] = [
   { id: 'google', name: 'Google' },
   { id: 'microsoft', name: 'Microsoft' },
 ];
+
+/**
+ * Apple, Google and Microsoft are not connected yet: their buttons only ask for
+ * a name. A build that sends to the company's server does not offer them, so
+ * everyone there signs in with a password.
+ */
+const OFFER_PROVIDERS = !SERVER;
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
@@ -163,13 +170,15 @@ export function AuthScreen() {
             onPress={submit}
           />
 
-          <View style={styles.or}>
-            <View style={styles.orLine} />
-            <Txt v="small" c={color.silica}>or</Txt>
-            <View style={styles.orLine} />
-          </View>
+          {OFFER_PROVIDERS ? (
+            <View style={styles.or}>
+              <View style={styles.orLine} />
+              <Txt v="small" c={color.silica}>or</Txt>
+              <View style={styles.orLine} />
+            </View>
+          ) : null}
 
-          {PROVIDERS.map((p) => (
+          {(OFFER_PROVIDERS ? PROVIDERS : []).map((p) => (
             <Pressable
               key={p.id}
               testID={`provider-${p.id}`}

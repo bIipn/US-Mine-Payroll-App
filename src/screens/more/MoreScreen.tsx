@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { Banknote, BookOpen, Building2, ClipboardList, CloudCheck, CloudUpload, LogOut, MapPin, RotateCcw, Scale, WifiOff } from '../../components/icons';
+import { Banknote, BookOpen, Building2, ClipboardList, CloudCheck, CloudUpload, Link2, LogOut, MapPin, RotateCcw, Scale, WifiOff } from '../../components/icons';
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -10,6 +10,7 @@ import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
 import { keepsTime } from '../../domain/company';
 import { syncWords } from '../../domain/sync';
 import { deadlineWords } from '../../domain/time';
+import { CAN_CONNECT, disconnect, useServerAccount } from '../../services/connection';
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { useSyncStatus } from '../../services/sync';
@@ -45,7 +46,9 @@ export function MoreScreen() {
   const settings = useStore((s) => s.settings);
   const rules = useRules();
   const rate = useStore((s) => (s.session ? s.payRates[s.session.employeeId] : undefined));
-  const { setLunchReminders, setAllowSectionAllOk, signOut, resetDemo, showToast } = useStore.getState();
+  const linked = useStore((s) => s.connectedCompany);
+  const server = useServerAccount();
+  const { setLunchReminders, setAllowSectionAllOk, signOut, clearDevice, showToast } = useStore.getState();
   const [chart, setChart] = useState(false);
   const [rateOpen, setRateOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -56,6 +59,17 @@ export function MoreScreen() {
   if (!me) return null;
   const records = syncWords(sync, fmtTime);
   const RecordsIcon = !sync.online ? WifiOff : records.done ? CloudCheck : CloudUpload;
+  // Where this phone stands with its company: said here, not only on the account screen, so a
+  // phone that has stopped sending says so where the person looks.
+  const serverLine = !linked
+    ? { sub: 'Sign in to send records to your company', warn: false }
+    : server.known && !server.account
+      ? { sub: `Signed out. Sign in to keep sending to ${linked.name}.`, warn: true }
+      : server.notOnLinked
+        ? { sub: `This account is not on ${linked.name}’s roster. Nothing is sent.`, warn: true }
+        : { sub: `Connected to ${linked.name}`, warn: false };
+  // Clearing a device that keeps real records is a supervisor's to do: what has not reached the server is lost.
+  const canClear = DEMO_MODE || (CAN_CONNECT && me.role === 'supervisor');
 
   const toggleReminders = async (on: boolean) => {
     setLunchReminders(on);
@@ -110,7 +124,29 @@ export function MoreScreen() {
         </Panel>
 
         <Panel title="Records on this phone" flush>
-          <Row testID="more-sync" left={<RecordsIcon color={color.ink} size={24} />} title={records.title} sub={records.sub} />
+          <Row
+            testID="more-sync"
+            left={<RecordsIcon color={color.ink} size={24} />}
+            title={records.title}
+            sub={records.sub}
+            subColor={records.warn ? color.red : undefined}
+            subLines={4}
+          />
+          {CAN_CONNECT ? (
+            <>
+              <Divider inset={space.lg} />
+              <Row
+                testID="more-server"
+                left={<Link2 color={color.ink} size={24} />}
+                title="Company account"
+                sub={serverLine.sub}
+                subColor={serverLine.warn ? color.red : undefined}
+                subLines={3}
+                chevron
+                onPress={() => navigation.navigate('CompanyAccount')}
+              />
+            </>
+          ) : null}
         </Panel>
 
         {time ? (
@@ -160,8 +196,8 @@ export function MoreScreen() {
           </Panel>
         ) : null}
 
-        {DEMO_MODE ? (
-          <Panel title="Preview" flush>
+        {canClear ? (
+          <Panel title={DEMO_MODE ? 'Preview' : 'This phone'} flush>
             <Row
               testID="reset-demo"
               left={<RotateCcw color={color.ink} size={24} />}
@@ -182,12 +218,27 @@ export function MoreScreen() {
       <RateSheet visible={rateOpen} onClose={() => setRateOpen(false)} />
       <Sheet testID="reset-sheet" visible={confirmReset} onClose={() => setConfirmReset(false)} title={RESET.ask}>
         <Txt v="body" c={color.inkSoft}>{RESET.warning}</Txt>
+        {linked ? <Txt v="body" c={color.inkSoft}>This also disconnects the phone from {linked.name} and signs it out of the company server.</Txt> : null}
         {sync.server && sync.waiting > 0 ? (
           <Txt v="strong" c={color.red} testID="reset-unsent">
             {sync.waiting} {sync.waiting === 1 ? 'record has' : 'records have'} not reached the company’s server yet and would be lost.
           </Txt>
         ) : null}
-        <Button testID="confirm-reset" label={RESET.button} kind="red" onPress={() => { setConfirmReset(false); resetDemo(); }} />
+        <Button
+          testID="confirm-reset"
+          label={RESET.button}
+          kind="red"
+          onPress={() => {
+            setConfirmReset(false);
+            // The device forgets the company it sent to and signs out of the server, along with everything else.
+            const result = clearDevice();
+            if (!result.ok) {
+              showToast(result.error, 'bo');
+              return;
+            }
+            if (CAN_CONNECT) void disconnect();
+          }}
+        />
       </Sheet>
     </View>
   );

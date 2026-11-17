@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 
+import { DEMO_MODE } from '../config';
 import { destination, type RawFix } from '../domain/geofence';
 import { awayFromSite } from '../domain/site';
 import type { DemoLocation, GeoStamp, SiteConfig } from '../domain/types';
@@ -17,7 +18,10 @@ const GPS_TIMEOUT_MS = 15_000;
  * anyone in the background: a position is read when a button is pressed,
  * stamped on that punch, and that is all.
  */
-export async function locate(site: SiteConfig | null, demo: DemoLocation): Promise<LocateResult> {
+export async function locate(site: SiteConfig | null, setting: DemoLocation): Promise<LocateResult> {
+  // Simulated GPS is for a preview only. A build that keeps real records reads the phone's own,
+  // whatever a preview once left in the settings on this device.
+  const demo: DemoLocation = DEMO_MODE ? setting : 'gps';
   // With no site set there is nowhere for the preview to pretend to be, so the phone's own GPS is read.
   if (site && demo === 'at_mine') {
     // A spot by the plant, a little off the pin, as a phone would report it.

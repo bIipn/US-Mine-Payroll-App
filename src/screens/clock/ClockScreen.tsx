@@ -182,9 +182,9 @@ export function ClockScreen() {
   const lastLunch = shift?.lunches[shift.lunches.length - 1];
   const lastGeo = shift?.clockIn.geo;
   const gpsLine =
-    settings.demoLocation === 'at_mine'
+    DEMO_MODE && settings.demoLocation === 'at_mine'
       ? 'Demo GPS: at the mine'
-      : settings.demoLocation === 'in_town'
+      : DEMO_MODE && settings.demoLocation === 'in_town'
         ? 'Demo GPS: in town'
         : lastGeo
           ? `Punched in on site, ${fmtDistance(lastGeo.distanceM)} from the pin`

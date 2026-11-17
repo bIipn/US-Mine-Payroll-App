@@ -35,10 +35,21 @@ import { PayrollScreen } from '../screens/supervisor/PayrollScreen';
 import { RosterScreen } from '../screens/supervisor/RosterScreen';
 import { SafetyLogScreen } from '../screens/supervisor/SafetyLogScreen';
 import { TimeLogsScreen } from '../screens/supervisor/TimeLogsScreen';
+import { CAN_CONNECT } from '../services/connection';
 import { haptic } from '../services/haptics';
 import { useMe, useStore } from '../store/useStore';
 import { color, font } from '../theme/theme';
-import type { RootStackParamList, TabParamList } from './types';
+import type { RootStackParamList, ScreenProps, TabParamList } from './types';
+
+/**
+ * The Company account screen is in a build only when the build names a company server and is not a
+ * preview, the same way the server code is (`src/services/connection.ts`): in any other build, this is
+ * dropped before bundling.
+ */
+const CompanyAccountScreen: React.ComponentType<ScreenProps<'CompanyAccount'>> | null =
+  process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_KEY && process.env.EXPO_PUBLIC_DEMO === '0'
+    ? require('../screens/more/CompanyAccountScreen').CompanyAccountScreen
+    : null;
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<TabParamList>();
@@ -134,6 +145,7 @@ export function RootNavigator() {
           <Stack.Screen name="Roster" component={RosterScreen} />
           <Stack.Screen name="Fleet" component={FleetScreen} />
           <Stack.Screen name="Company" component={CompanyScreen} />
+          {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
         </>
       )}
     </Stack.Navigator>

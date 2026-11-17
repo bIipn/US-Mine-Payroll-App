@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { SiteMap } from '../../components/SiteMap';
 import { Button, Divider, IconButton, Notice, Page, Panel, Txt } from '../../components/ui';
+import { DEMO_MODE } from '../../config';
 import { checkFix, circleAcres, MAX_ACCURACY_M, type FixCheck, type RawFix } from '../../domain/geofence';
 import { MAX_RADIUS_M, MIN_RADIUS_M, townGap } from '../../domain/site';
 import type { ScreenProps } from '../../navigation/types';
@@ -105,7 +106,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
                   ? 'The GPS signal is too weak to place you'
                   : 'The phone reported a simulated location'
           }
-          body={`${fmtDistance(check.distanceM)} from the mine pin${settings.demoLocation !== 'gps' ? '. This is the demo GPS setting, not your real position.' : fix?.accuracyM ? `, accurate to about ${fmtDistance(fix.accuracyM)}.` : '.'}`}
+          body={`${fmtDistance(check.distanceM)} from the mine pin${DEMO_MODE && settings.demoLocation !== 'gps' ? '. This is the demo GPS setting, not your real position.' : fix?.accuracyM ? `, accurate to about ${fmtDistance(fix.accuracyM)}.` : '.'}`}
         />
       ) : null}
       {failed ? <Notice tone="warn" title="No position" body={failed} /> : null}

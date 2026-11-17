@@ -2,7 +2,7 @@
 
 Time clock, the equipment checklist, the pre shift exam of each work area, maintenance requests and payroll hours for a mine crew. One codebase builds the iPhone app, the Android app and a web version.
 
-Any mine can use it. Each company sets its own name, the state whose hours rules apply, its logo and its pay periods (or none). It was built first from the paper forms of U.S. Mine Corp.'s plant in Ione, California, and that company's version is kept as a company setting in a private build.
+Any mine can use it. Each company sets its own name, the state whose hours rules apply, its logo and its pay periods (or none). It was built first from the paper forms of U.S. Mine Corp.'s plant, and that company's version is kept as a company setting in a private build.
 
 It replaces the paper time sheet, the Operator Equipment Checklist card, the Pre Shift Exam sheets and the Maintenance Request form, and it does the hours math so nobody has to.
 
@@ -37,7 +37,7 @@ The Excel exports look like this ([payroll sample](docs/samples/Sample-Mining-Co
 - **Hours the way the timesheet does them.** Minutes become hundredths of an hour (15 min = .25, 45 min = .75). 6:15 AM to 7:00 PM with a 30-minute lunch is 12.75 − 0.50 = **12.25**.
 - **Pay periods the way the company cuts its checks, or none.** A supervisor sets the schedule: every week, every two weeks, twice a month or once a month, paid a day of the month or so many days after the period ends. The clock screen then shows the hours so far and the next payday. A company that sets none sees hours by the workweek and the month. My hours splits each into straight time, overtime and double time, the same lines as the pay stub. Every figure is before taxes.
 - **What the check should come to.** Enter your hourly rate once and the app estimates gross pay for the period. The rate stays on your phone.
-- **The Operator Equipment Checklist, the same card for every machine.** The 21 lines of the paper card, in its order and its wording, marked OK, BO or N/A with one big tap each. It takes the equipment hours at the start and the end, the gallons added and the comments. Each line shows the MSHA standard behind it, with the matching OSHA rule.
+- **The Operator Equipment Checklist, the same card for every machine.** The 21 lines of the paper card, in its order and its wording, marked OK, BO or N/A with one big tap each. It takes the equipment hours at the start and the end, the gallons added and the comments. Where a standard applies to a line, the line cites it: the MSHA standard, and the matching OSHA rule where there is one.
 - **Your card for the day.** Every unit you check gets a numbered column, laid out the way the paper is, with the total daily hours worked filled in from the time clock.
 - **Bad Order guidance.** A Bad Order on a safety item red tags the unit, shows the steps to take with the standard for each one, and pre-fills the maintenance request.
 - **The Pre Shift Exam of your work area.** The area's own sheet, each line checked for guarding, electrical and safe access, then the 20 conditions of the second page, with room for "Other (specify)" lines. Anything found stays open on the area until the date it was fixed is recorded.
@@ -70,9 +70,9 @@ This is a working preview. Every flow above runs, on sample data.
 | **Settled with the crew** | The safety items that always red tag a unit: fire extinguisher, steering, brakes, backup alarm / horn, seatbelts and controls. N/A stays on the pre shift exam. The one spelling the app puts right on the conditions page stays put right. There is a swing shift as well as day and night |
 | **To confirm with the mine** | The hours each shift runs (see Pre Shift Exam under The paper forms for what the app assumes until then). What "DROPS" on the card stands for (it is shown as printed). Whose name goes on "Completed by" when a supervisor closes out a request for a mechanic (the app asks). What the "Lead Check" blank on some area sheets is for and who fills it in (it is not built yet) |
 | **To confirm with payroll** | Which way a pay date moves when the 5th or 20th is a weekend or bank holiday (the app moves it to the banking day before), and which holidays are paid |
-| **Kept on the device** | All data lives on the phone or browser it was entered on. Two phones do not see each other's punches yet. The app already works out what a company server would need from each phone: every record it does not have yet, by a version of each record, sent in batches whenever there is signal and tried again until it gets through. The hourly rate, accounts, passwords and the sample crew's records are never sent. What it sends to is the server step |
+| **Kept on the device, sent where a build names a server** | Every record is saved on the phone or browser it was entered on. A build that names a company server (see [Connecting a phone to the company server](#connecting-a-phone-to-the-company-server)) lets a person sign in, join their company with its join code and send the phone's records there: every record the server does not have yet, by a version of each record, sent in batches whenever there is signal and tried again until it gets through. The hourly rate, accounts, passwords and the sample crew's records are never sent, and a preview build sends nothing. Until the server's record store (`push_records`, `my_companies`) is on the Supabase project, a person cannot connect a phone: joining says the company server is not ready for this yet, and every record stays on the phone. Two phones do not see each other's punches yet: the office dashboard reads what the phones send |
 | **Keep the paper for now** | The standard asks for exam records to be kept for a year and shown to MSHA on request. Until the shared backend holds them, a record made in this preview lives on one device, so it does not replace the paper yet |
-| **Not connected yet** | The shared cloud database and real Apple, Google and Microsoft sign-in. The buttons and the account screens are built; they need the backend behind them |
+| **Not connected yet** | Real Apple, Google and Microsoft sign-in, and signing in to the app itself with the server's account. The buttons and the account screens are built; they need the backend behind them. Signing in to the company server with an email and a password is built (More → Company account) |
 | **Not yet tried on a phone** | The iPhone and Android bundles build cleanly, and the app has been driven end to end in a browser. It has not been installed on a physical phone yet |
 | **Notifications** | On a phone, the lunch reminders and the lunch-is-over notice are handed to the operating system, so they arrive with the app closed or the phone locked. In a browser they only arrive while the page is open. Delivery on a real phone has not been tried yet |
 
@@ -84,7 +84,7 @@ Going live for the whole crew needs the cloud backend first, so a supervisor's p
 npm install
 npm run web        # opens in a browser
 npm start          # then scan the QR code with Expo Go on a phone
-npm test           # 570 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel, the inspector PDF, what is sent to the server, the payroll hours file
+npm test           # 653 unit tests: hours, lunch rules, overtime, pay periods, the company, roster, GPS, the checklist, exams, Excel, the inspector PDF, what is sent to the server and connecting to it, the payroll hours file
 npm run typecheck
 npm run build:preview   # packs the whole app into one HTML file in preview/ that opens anywhere
 ```
@@ -279,6 +279,7 @@ Only standards whose text has been checked are cited. The summaries in the app a
 | Roster | In the app (Crew → Roster), or `EXPO_PUBLIC_ROSTER` in `.env.local` |
 | Standards and the steps after a Bad Order | `src/domain/standards.ts` |
 | Company name, state, place and pay periods | In the app (More → Company), or `EXPO_PUBLIC_COMPANY` in `.env.local` |
+| The company server the phones send to | `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_KEY` in `.env.local` (see [Connecting a phone to the company server](#connecting-a-phone-to-the-company-server)) |
 | Lunch and overtime rules for each state | `src/domain/stateRules.ts`, built from `CA_RULES` and `FEDERAL_RULES` in `src/domain/time.ts` |
 | How pay periods and paydays are worked out, and bank holidays | `src/domain/payPeriod.ts` |
 | Boundary | `src/domain/site.ts`, or in the app |
@@ -300,6 +301,43 @@ EXPO_PUBLIC_COMPANY='{"name": "Example Aggregates Co.", "state": "NV", "place": 
 
 `frequency` is `weekly`, `biweekly`, `semimonthly` or `monthly`; `payday` is `{"daysAfter": n}` or `{"dayOfMonth": [20, 5]}` (one day for each half of a twice-a-month schedule); `ifBankClosed` is `before`, `after` or `stay`. Leave out `pay` for no pay periods. `"mineId": "0400123"` prints the MSHA mine ID on the PDF for an inspector, and `"timeClock": false` starts the company on the safety forms only. A build that names no company starts with the made-up Sample Mining Co. when it has the sample crew, and with nothing filled in when it does not.
 
+## Connecting a phone to the company server
+
+The company's server is a Supabase project: the database in `supabase/`, with the companies, their rosters and join codes, and the records the phones send. A build is pointed at it with two settings in `.env.local`, which is not committed:
+
+```
+EXPO_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+EXPO_PUBLIC_SUPABASE_KEY=sb_publishable_...
+```
+
+The key is the project's publishable key, the one made to be in an app; the server's row level security is what guards the data. A secret key is refused: it would get past every rule the server keeps. With either setting empty the build has no server at all: the code that talks to one, and supabase-js with it, is left out of the bundle (`src/services/connection.ts`), nothing about a server is shown, and every record stays on the phone. The public preview is built that way.
+
+**A build that connects is not a preview.** It needs `EXPO_PUBLIC_DEMO=0`, and a roster of its own or `EXPO_PUBLIC_SAMPLE_CREW=0`. A preview's controls make punches up (simulated GPS, "Move my clock-in back", opening as the owner with no account), and a build with the sample crew starts with a made-up company and site, so neither connects to anything even with a server named; the build warns when it is made. A build that connects also offers no sign-in with Apple, Google or Microsoft, which are not connected yet and would only ask for a name: everyone signs in to the app with an email and a password, and only a supervisor can correct punches, change the roster, the fleet or the company's settings, or clear the device. It starts with no fleet: a supervisor adds the units.
+
+**How a phone connects.** On More, under Records on this phone, Company account:
+
+- **Sign in, or create an account,** with an email and a password. The server asks a new account to confirm its email first: the app says to check for the link (and sends it again on request), and the person signs in once they have opened it. **Forgot password?** sends a link to set a new one in the browser; the project's Site URL should be the office dashboard, which takes that link. The password goes to the server and nowhere else; the session it hands back is kept on the phone, so the phone stays signed in.
+- **Join the company** with the join code a supervisor gives out and the name the way it is on the roster (filled in from the person signed in to the app). The server matches the name to the roster by the same rules as the app, and the app says what its answer means (the table below). A request that waits for a supervisor is remembered on the phone, so Check again needs no code typed a second time. An account already on a company's roster, such as a supervisor who started the company on the dashboard, sees it listed and connects with one tap; a supervisor sees the join code to hand out once connected.
+- **Connected,** the screen shows the company, the person's role there and where the records stand, and the More screen and the no-signal strip count what is still waiting. Records go when there is signal, at start-up too, and are tried again until they get through. When they cannot go, the screen says why: no signal, signed out (sign in again), an account not on the company's roster (see a supervisor), or what the server said. The phone sends only as the account that joined: signed out, it holds the records and says so on More; another account is checked against the company's roster first. **Disconnect this phone** stops the sending at once, forgets the company and signs this phone (only this one) out of the server, with or without signal; the records stay on the phone, and what the server already has is remembered for when it connects again. Clearing the device disconnects it as well. The server account belongs to the phone: the app's own Sign out leaves it connected.
+
+| The server says | The app tells the person |
+|---|---|
+| `joined`, `already_member` | They are on the company's roster: the phone connects and starts sending |
+| `pending` | It waits for a supervisor, and why (not on the roster yet, already claimed, a supervisor's row, taken off the roster, released, or a name several people share). Check again asks once more |
+| `ambiguous` | More than one person fits: type the name the way it is on the roster |
+| `denied` | A supervisor has turned the request down: speak to one |
+| `no_company` | No company has that code: check it with the supervisor |
+
+**What is sent:** punches and their corrections, turned-down punches, paid leave, equipment checklists and equipment use, pre shift exams, maintenance requests, the roster, the fleet, the area sheets and the company's settings (its name, state, pay periods, clock-in site and checklist setting). The server takes the roster, the area sheets, paid leave and the company's settings from a supervisor only, and a person's punches, checklists and exams from that person or a supervisor; what it will not take from an account is counted as sent, so the phone does not keep sending it.
+
+**What is never sent:** the hourly rate a person entered for their own pay estimate, the accounts and passwords on the phone, the phone's own settings (lunch reminders, the preview controls), and anything of the made-up sample crew.
+
+**A phone sends to one company.** Once its records have gone to one company, the phone will not connect to another until a supervisor clears the device (More, This phone), so one company's punches never end up with another's. What has not been sent is lost when it is cleared, and the app says how many records that is first.
+
+**One bad record holds up nothing else.** A record the server cannot take (an id over 120 characters, or more than 256 KB) is never sent, and one a call is turned down for is found and held back; the rest still go, and the records row says how many cannot be sent. Calls carry 100 records, half the 200 the server takes, to suit weak signal.
+
+On iOS and Android supabase-js needs no URL polyfill: Expo's runtime puts a standard `URL` and `fetch` on both (`expo/src/winter`). The session is kept in the app's own storage (`src/services/storage.ts`). supabase-js adds about 0.3 MB to a build that names a server, so that build's one-file preview comes out over the 2 MB the Claude phone app opens as a preview; the public preview names none and stays under it.
+
 ## The logo
 
 MineMuster's own logo is the silver MM over MINE MUSTER. It is on the sign-in screen of a company with no logo of its own, the app icon (the MM mark on black), the black launch screen and the browser tab. Its two renders are kept in `assets/brand/source`, and `scripts/make-brand-assets.py` makes every size from them; the black in the renders becomes transparent, so the logo sits on any dark colour with its glow intact. It is made for dark backgrounds and is not put on a light one.
@@ -310,7 +348,18 @@ U.S. Mine Corp.'s logo is built in as traced artwork (`"logo": "us-mine"` in its
 
 ## The website
 
-minemuster.com shows a coming-soon page while MineMuster is built: `site/index.html`, one file with its styles inline and no script, served with the logo, the icons and the Barlow font from `site/`. It loads nothing from any other site.
+minemuster.com is MineMuster's own site: what it does, the features with screenshots of the app running on the made-up Sample Mining Co., the inspector PDF, payroll, how a company starts, about and a FAQ. It is plain static files in `site/`, with no build step, and it loads nothing from any other site: no fonts, scripts, analytics or trackers.
+
+| File | What it is |
+|---|---|
+| `site/index.html` | The page, with its meta tags. The FAQ is `<details>`, so it works without script |
+| `site/site.css` | The styles: the black stage and bands, the daylight ground, records drawn as paper |
+| `site/site.js` | The small-screen menu, keyboard focus for the rows of screens you swipe, and the hero's 3D logo |
+| `site/3d/logo3d.js`, `site/3d/three.module.min.js` | The interactive 3D logo and three.js r170, loaded through an import map, only where WebGL 2 works and only once the hero is near the screen. Its page options (no wheel or pinch zoom, a vertical swipe scrolls the page, no drawing off screen, a taller frame, a stiller logo with reduced motion, the flat logo back if WebGL is lost) all default to the logo as it is on its own page |
+| `site/brand/`, `site/apple-touch-icon.png`, `site/favicon.png` | The logo files, made by `scripts/make-brand-assets.py`. The flat logo stands in for the 3D one until it has drawn, and for good where it cannot |
+| `site/shots/` | Phone screenshots of the app, 585 px wide, lazy-loaded |
+| `site/fonts/` | Barlow and Barlow Condensed, self-hosted, with their licence |
+| `site/vercel.json` | Cache headers: three.js and the fonts for 30 days, the logo and the screenshots for a day |
 
 It is the Vercel project `minemuster`, linked to this repository with `site` as its root directory. A push builds it only when something in `site/` changed; the production site is deployed from a commit on purpose, and minemuster.com and www.minemuster.com (which redirects to it) point at the production deployment. The logo files in `site/brand` come from `scripts/make-brand-assets.py` with the app's.
 
@@ -320,12 +369,12 @@ It is the Vercel project `minemuster`, linked to this repository with `site` as 
 App.tsx                 fonts, storage, navigation
 src/domain/             the rules, with tests: hours, lunch, overtime, pay periods, GPS, the checklist, exams, standards
 src/store/              app state (saved on the device), its migrations and the sample data
-src/services/           GPS, notifications, Excel and PDF writers, reports, file sharing
+src/services/           GPS, notifications, Excel and PDF writers, reports, file sharing, sending to the company server
 src/components/         buttons, time card, the paper forms, day table, pay estimate, danger tag, site map
 src/screens/            auth, clock, equipment, exam, hours, more, supervisor
 assets/brand/           MineMuster's logo, and in source/ the renders every logo size is made from
 scripts/                the one-file preview, the brand assets, the preview fonts
-site/                   minemuster.com: the coming-soon page and its files
+site/                   minemuster.com: the website, static files with no build step
 supabase/               the server's database migrations and their tests (a draft, not deployed)
 ```
 

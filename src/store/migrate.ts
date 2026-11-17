@@ -4,7 +4,7 @@ import type { Lunch, SiteConfig } from '../domain/types';
 import { sha256 } from '../util/hash';
 
 /** Version of the saved app state. Raise it when the shape of the data changes. */
-export const STATE_VERSION = 8;
+export const STATE_VERSION = 9;
 
 type Saved = Record<string, unknown>;
 type SavedEvent = { at?: number; by?: string; status?: string; note?: string };
@@ -33,6 +33,11 @@ type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; r
  * in. A saved site still on the pin that used to be built in takes the site
  * this build starts with (`site`), or none until a supervisor sets it. A site a
  * supervisor moved is kept.
+ * Version 9 lets a phone connect to its company's server. It notes the company
+ * the phone sends to (`connectedCompany`) and the company `synced` is about
+ * (`syncedWith`), with the server account that joined it, and the last request
+ * to join that waits for a supervisor (`joinAsked`). A phone starts connected
+ * to none, so nothing is sent until someone signs in on it and joins their company.
  *
  * A build keeps every record that people entered. A preview that holds the
  * sample crew (`samples`) clears its "sample data loaded" marker instead, so
@@ -91,6 +96,11 @@ export function migratePersisted(
     if (pin && sha256(`${pin.lat},${pin.lng}`) === oldPin) {
       state.settings = { ...(state.settings as Saved), site };
     }
+  }
+  if (fromVersion < 9) {
+    state.connectedCompany = null;
+    state.syncedWith = null;
+    state.joinAsked = null;
   }
   if (fromVersion < STATE_VERSION && samples && 'seededAt' in state) {
     state.seededAt = null;

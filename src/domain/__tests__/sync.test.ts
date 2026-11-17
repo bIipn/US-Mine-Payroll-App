@@ -1,6 +1,24 @@
 import { buildDemoData, SAMPLE_CREW_IDS } from '../../store/seed';
 import { SAMPLE_COMPANY } from '../company';
-import { changesToSend, DELETED, markSent, retryDelay, revOf, sendWaiting, stableJson, syncWords, type Change, type SyncData, type Synced } from '../sync';
+import { SAMPLE_SITE } from '../site';
+import {
+  BATCH,
+  changesToSend,
+  DELETED,
+  fitsServer,
+  markSent,
+  retryDelay,
+  revOf,
+  sendError,
+  sendWaiting,
+  SERVER_LIMITS,
+  stableJson,
+  syncWords,
+  type Change,
+  type SyncData,
+  type SyncStatus,
+  type Synced,
+} from '../sync';
 import type { Settings } from '../types';
 
 const now = new Date(2026, 10, 13, 10, 42).getTime();
@@ -89,7 +107,10 @@ describe('what a phone sends to the company’s server', () => {
       expect(sampleIds).not.toContain(r.requestedBy);
     }
     expect(changes.some((c) => c.kind === 'shift')).toBe(false);
-    expect(changes.some((c) => c.kind === 'settings')).toBe(true);
+    // Nor the made-up company these samples work for.
+    expect(changes.some((c) => c.kind === 'settings')).toBe(false);
+    const own = { ...data, settings: { ...settings, company: { ...SAMPLE_COMPANY, name: 'Test Pit A' } } };
+    expect(changesToSend(own, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(true);
   });
 });
 
@@ -122,25 +143,25 @@ describe('sending what is waiting', () => {
   it('sends in batches and notes each batch the server took', async () => {
     const server = taking();
     let synced: Synced = {};
-    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, 100);
+    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, { batch: 100 });
     expect(server.batches).toEqual([100, 100, 50]);
-    expect(result).toEqual({ sent: 250, failed: false });
+    expect(result).toMatchObject({ sent: 250, failed: false, stuck: [], stopped: false });
     expect(Object.keys(synced)).toHaveLength(250);
   });
 
   it('stops at a batch that does not get through, and keeps the ones that did', async () => {
     const server = taking((n) => n === 2);
     let synced: Synced = {};
-    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, 100);
+    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, { batch: 100 });
     expect(server.batches).toEqual([100, 100]);
-    expect(result).toEqual({ sent: 100, failed: true });
+    expect(result).toMatchObject({ sent: 100, failed: true, trouble: 'unreachable' });
     expect(changesToSend(data, synced, none).length).toBe(changesToSend(data, {}, none).length - 100);
   });
 
   it('leaves a record the server turned down waiting', async () => {
     const server = taking(undefined, (c) => c.kind !== 'settings');
     let synced: Synced = {};
-    await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, 100);
+    await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, { batch: 100 });
     expect(synced['settings:company']).toBeUndefined();
   });
 
@@ -151,26 +172,56 @@ describe('sending what is waiting', () => {
 });
 
 describe('what a person is told about their records', () => {
-  const base = { online: true, server: true, waiting: 0, sending: false, lastSentAt: null, failed: false };
+  const base: SyncStatus = { online: true, server: true, waiting: 0, sending: false, lastSentAt: null, failed: false, trouble: null, problem: null, stuck: 0 };
   const at = () => '2:14 PM';
 
   it('says records stay on the phone when the build has no server, signal or not', () => {
-    expect(syncWords({ ...base, server: false }, at)).toEqual({ title: 'Saved on this phone', sub: 'Works with no signal. Not connected to a company server.', done: false });
+    expect(syncWords({ ...base, server: false }, at)).toEqual({ title: 'Saved on this phone', sub: 'Works with no signal. Not connected to a company server.', done: false, warn: false });
     expect(syncWords({ ...base, server: false, online: false }, at).title).toBe('No signal');
     expect(syncWords({ ...base, server: false, online: false }, at).sub).toMatch(/^Everything is saved on this phone/);
   });
 
   it('says what is waiting with no signal, and that it sends once back in range', () => {
-    expect(syncWords({ ...base, online: false, waiting: 1 }, at)).toEqual({ title: 'No signal', sub: '1 record saved on this phone. They send when you are back in range.', done: false });
+    expect(syncWords({ ...base, online: false, waiting: 1 }, at)).toEqual({ title: 'No signal', sub: '1 record saved on this phone. They send when you are back in range.', done: false, warn: false });
   });
 
   it('says when everything is sent, and when it last was', () => {
-    expect(syncWords({ ...base, lastSentAt: 1 }, at)).toEqual({ title: 'Everything is sent', sub: 'Last sent at 2:14 PM.', done: true });
+    expect(syncWords({ ...base, lastSentAt: 1 }, at)).toEqual({ title: 'Everything is sent', sub: 'Last sent at 2:14 PM.', done: true, warn: false });
   });
 
   it('says a round that did not get through is tried again by itself', () => {
     expect(syncWords({ ...base, waiting: 3, failed: true }, at).sub).toMatch(/tries again by itself/);
     expect(syncWords({ ...base, waiting: 3, sending: true }, at).title).toBe('Sending 3 records');
+  });
+
+  it('says what the server said, not that it could not be reached, when it answered', () => {
+    const said = syncWords({ ...base, waiting: 3, failed: true, trouble: 'server', problem: 'The company server is not ready to take records yet.' }, at);
+    expect(said.sub).toBe('The company server is not ready to take records yet. The phone tries again by itself.');
+    expect(said.sub).not.toMatch(/could not be reached/);
+  });
+
+  it('says to sign in again when the phone is signed out, with records waiting or not', () => {
+    const out = syncWords({ ...base, waiting: 2, trouble: 'signed_out' }, at);
+    expect(out).toMatchObject({ title: '2 records waiting', warn: true, done: false });
+    expect(out.sub).toMatch(/^Signed out of the company server. Sign in again/);
+    expect(out.sub).not.toMatch(/could not be reached/);
+    // Even with nothing waiting it is not "Everything is sent": nothing more will go until someone signs in.
+    expect(syncWords({ ...base, trouble: 'signed_out', lastSentAt: 1 }, at)).toEqual({
+      title: 'Signed out of the company server',
+      sub: 'Sign in again on Company account to keep sending. Nothing is lost.',
+      done: false,
+      warn: true,
+    });
+  });
+
+  it('says an account taken off the roster needs a supervisor', () => {
+    const off = syncWords({ ...base, waiting: 1, failed: true, trouble: 'not_member', problem: 'This account is not on the company’s roster any more.' }, at);
+    expect(off).toMatchObject({ title: '1 record waiting', warn: true });
+    expect(off.sub).toBe('This account is not on the company’s roster any more. See your supervisor. Nothing is lost.');
+  });
+
+  it('says when records cannot be sent as they are', () => {
+    expect(syncWords({ ...base, waiting: 1, stuck: 1 }, at)).toMatchObject({ title: '1 record cannot be sent', warn: true });
   });
 });
 
@@ -207,9 +258,130 @@ describe('what the review of sending found', () => {
     expect(all.every((c) => c.base === undefined)).toBe(true);
   });
 
-  it('counts a send that never answers as one that did not get through', async () => {
-    const hung = { push: () => new Promise<never>(() => undefined) };
-    const result = await sendWaiting(changesToSend(data, {}, none).slice(0, 3), hung, () => undefined, 100, 20);
-    expect(result).toEqual({ sent: 0, failed: true });
+  it('counts a send that never answers as one that did not get through, and gives up on the request', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const hung = { push: (_c: readonly Change[], signal?: AbortSignal) => (signals.push(signal), new Promise<never>(() => undefined)) };
+    const result = await sendWaiting(changesToSend(data, {}, none).slice(0, 3), hung, () => undefined, { timeoutMs: 20 });
+    expect(result).toMatchObject({ sent: 0, failed: true, trouble: 'unreachable' });
+    // The request itself is aborted, so a hung one does not stay open behind the next try.
+    expect(signals[0]?.aborted).toBe(true);
+  });
+});
+
+describe('a round of sending that the phone stops', () => {
+  const changes = changesToSend(data, {}, none).slice(0, 350);
+  /** A server that answers each call only when the test lets it. */
+  const held = () => {
+    const calls: { size: number; signal?: AbortSignal; answer: () => void }[] = [];
+    const transport = {
+      push: (sent: readonly Change[], signal?: AbortSignal) =>
+        new Promise<readonly Pick<Change, 'key' | 'rev'>[]>((resolve) => {
+          calls.push({ size: sent.length, signal, answer: () => resolve(sent.map(({ key, rev }) => ({ key, rev }))) });
+        }),
+    };
+    return { calls, transport };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it('sends nothing more once the phone is disconnected, and notes no late answer', async () => {
+    const { calls, transport } = held();
+    let connected = true;
+    const noted: string[] = [];
+    const round = sendWaiting(changes, transport, (accepted) => noted.push(...accepted.map((c) => c.key)), { still: () => connected });
+    await settle();
+    expect(calls).toHaveLength(1);
+    connected = false;
+    calls[0].answer();
+    const result = await round;
+    expect(calls).toHaveLength(1);
+    expect(noted).toEqual([]);
+    expect(result).toMatchObject({ sent: 0, stopped: true, failed: false });
+  });
+
+  it('aborts the call under way when told to stop', async () => {
+    const { calls, transport } = held();
+    const stop = new AbortController();
+    const round = sendWaiting(changes, transport, () => undefined, { signal: stop.signal });
+    await settle();
+    stop.abort();
+    const result = await round;
+    expect(calls).toHaveLength(1);
+    expect(calls[0].signal?.aborted).toBe(true);
+    expect(result).toMatchObject({ stopped: true, sent: 0 });
+  });
+});
+
+describe('what the server will take', () => {
+  const all = changesToSend(data, {}, none);
+
+  it('never puts more in a call than the server takes', async () => {
+    expect(BATCH).toBeLessThanOrEqual(SERVER_LIMITS.changes);
+    const sizes: number[] = [];
+    const server = { push: async (sent: readonly Change[]) => (sizes.push(sent.length), sent.map(({ key, rev }) => ({ key, rev }))) };
+    await sendWaiting(all.slice(0, 450), server, () => undefined, { batch: 500 });
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(SERVER_LIMITS.changes);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(450);
+  });
+
+  it('holds back a record the server could not take, and sends the rest', async () => {
+    const shift = all.find((c) => c.kind === 'shift')!;
+    const longId = { ...shift, id: 'x'.repeat(121), key: `shift:${'x'.repeat(121)}` };
+    const big = { ...shift, id: 'big', key: 'shift:big', record: { ...(shift.record as object), note: 'é'.repeat(140_000) } };
+    expect(fitsServer(shift)).toBe(true);
+    expect(fitsServer(longId)).toBe(false);
+    expect(fitsServer({ ...shift, id: 'a\nb' })).toBe(false);
+    expect(fitsServer(big)).toBe(false);
+    expect(fitsServer({ ...shift, rev: DELETED, record: null })).toBe(true);
+    const sent: string[] = [];
+    const server = { push: async (part: readonly Change[]) => (sent.push(...part.map((c) => c.key)), part.map(({ key, rev }) => ({ key, rev }))) };
+    const result = await sendWaiting([longId, shift, big], server, () => undefined);
+    expect(sent).toEqual([shift.key]);
+    expect(result.stuck.map((c) => c.key)).toEqual([longId.key, big.key]);
+    expect(result.failed).toBe(false);
+  });
+
+  it('finds the one change a call was turned down for, and sends every other', async () => {
+    const changes = all.slice(0, 120);
+    const bad = changes[37];
+    let calls = 0;
+    const server = {
+      push: async (part: readonly Change[]) => {
+        calls += 1;
+        if (part.some((c) => c.key === bad.key)) throw sendError('refused', 'The server would not take a record as it is.');
+        return part.map(({ key, rev }) => ({ key, rev }));
+      },
+    };
+    let synced: Synced = {};
+    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); });
+    expect(result.stuck.map((c) => c.key)).toEqual([bad.key]);
+    expect(result.sent).toBe(119);
+    expect(result.failed).toBe(false);
+    expect(Object.keys(synced)).toHaveLength(119);
+    expect(bad.key in synced).toBe(false);
+    // A handful of calls to find it, not one for every record.
+    expect(calls).toBeLessThan(20);
+  });
+
+  it('stops at once when the phone is signed out, and says so', async () => {
+    let calls = 0;
+    const server = { push: async () => { calls += 1; throw sendError('signed_out', 'You are signed out of the company server.'); } };
+    const result = await sendWaiting(all.slice(0, 250), server, () => undefined);
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ failed: true, trouble: 'signed_out', problem: 'You are signed out of the company server.' });
+  });
+
+  it('holds back the made-up company and site along with the sample crew', () => {
+    const sample = { ...data, settings: { ...settings, company: SAMPLE_COMPANY, site: SAMPLE_SITE } };
+    expect(changesToSend(sample, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(false);
+    const ownSite = { ...sample, settings: { ...sample.settings, company: { ...SAMPLE_COMPANY, name: 'Test Pit A' } } };
+    // The site is still the sample one: it would take the place of the company's own pin.
+    expect(changesToSend(ownSite, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(false);
+    const own = { ...data, settings: { ...settings, company: { ...SAMPLE_COMPANY, name: 'Test Pit A' } } };
+    expect(changesToSend(own, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(true);
+    // A pin a supervisor moved is the company's own, whatever the site is called; so is a site of the company's own at the same spot.
+    const moved = { ...ownSite, settings: { ...ownSite.settings, site: { ...SAMPLE_SITE, center: { lat: 38.1, lng: -117.2 } } } };
+    expect(changesToSend(moved, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(true);
+    const named = { ...ownSite, settings: { ...ownSite.settings, site: { ...SAMPLE_SITE, name: 'Test Pit A' } } };
+    expect(changesToSend(named, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(true);
   });
 });

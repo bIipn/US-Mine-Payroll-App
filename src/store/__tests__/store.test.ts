@@ -44,11 +44,14 @@ describe('accounts', () => {
   it('stops a removed person from signing in', () => {
     s().signUp({ firstName: 'Jordan', lastName: 'Rivera', email: 'j@example.com', password: 'haulroad88' });
     s().signOut();
+    s().signInDemo('supervisor');
     s().setEmployeeActive('emp_demo', false);
+    s().signOut();
     expect(s().signIn('j@example.com', 'haulroad88')).toMatchObject({ ok: false });
   });
 
   it('reads pasted roster lists in either name order and skips repeats', () => {
+    s().signInDemo('supervisor');
     expect(s().addEmployeesBulk('Alex Carter\nMorgan, Riley\n3. sam ortiz\nJordan Rivera\nCher')).toEqual({ added: 3, skipped: 2 });
     expect(s().employees.some((e) => e.firstName === 'Riley' && e.lastName === 'Morgan')).toBe(true);
     expect(s().employees.some((e) => e.firstName === 'Sam' && e.lastName === 'Ortiz')).toBe(true);
@@ -840,6 +843,7 @@ describe('settings', () => {
   });
 
   it('keeps the boundary radius inside sane limits, in 50 m steps', () => {
+    s().signInDemo('supervisor');
     s().setRadius(1234);
     expect(s().settings.site!.radiusM).toBe(1250);
     s().setRadius(10);
@@ -966,6 +970,146 @@ describe('what the company’s server has', () => {
     s().markSynced(changesToSend(s(), {}, SAMPLE_CREW_IDS));
     s().resetDemo(null, [], [], true);
     expect(s().synced).toEqual({});
+  });
+
+  it('never sends the hourly rate, the accounts or the passwords on the phone', () => {
+    s().signInDemo('employee');
+    const before = JSON.stringify(changesToSend(s(), {}, new Set()));
+    expect(s().setMyRate(3125).ok).toBe(true);
+    const sent = JSON.stringify(changesToSend(s(), {}, new Set()));
+    // Entering a rate changes nothing the phone sends.
+    expect(sent).toBe(before);
+    for (const word of ['payRates', '"rate"', 'passwordHash', '"salt"', '"accounts"', 'lunchReminders', 'demoLocation']) {
+      expect(sent).not.toContain(word);
+    }
+  });
+});
+
+describe('the company the phone is connected to', () => {
+  // Made-up companies: the repository is public.
+  const PIT_A = { id: 'c-a', name: 'Test Pit A', role: 'employee' as const };
+  const PIT_B = { id: 'c-b', name: 'Test Pit B', role: 'supervisor' as const };
+
+  it('starts connected to none, and sends everything to the first company it connects to', () => {
+    expect(s().connectedCompany).toBeNull();
+    s().markSynced(changesToSend(s(), {}, new Set()));
+    expect(Object.keys(s().synced).length).toBeGreaterThan(0);
+    // What was noted before the phone knew its company counts for nothing there.
+    expect(s().connectCompany(PIT_A)).toEqual({ ok: true });
+    expect(s().connectedCompany).toEqual(PIT_A);
+    expect(s().syncedWith).toBe('c-a');
+    expect(s().synced).toEqual({});
+  });
+
+  it('remembers what the server has when it is disconnected and connected again', () => {
+    s().connectCompany(PIT_A);
+    s().markSynced(changesToSend(s(), s().synced, new Set()));
+    const sent = s().synced;
+    s().disconnectCompany();
+    expect(s().connectedCompany).toBeNull();
+    expect(s().synced).toBe(sent);
+    expect(s().connectCompany(PIT_A)).toEqual({ ok: true });
+    expect(s().synced).toBe(sent);
+    expect(changesToSend(s(), s().synced, new Set())).toEqual([]);
+  });
+
+  it('will not send one company’s records to another', () => {
+    s().connectCompany(PIT_A);
+    s().markSynced(changesToSend(s(), s().synced, new Set()));
+    s().disconnectCompany();
+    expect(s().connectCompany(PIT_B)).toMatchObject({ ok: false, error: expect.stringMatching(/one company only/) });
+    expect(s().connectedCompany).toBeNull();
+    expect(s().syncedWith).toBe('c-a');
+    // Once the device is cleared, it can.
+    s().resetDemo(null, [], [], false);
+    expect(s().syncedWith).toBeNull();
+    expect(s().connectCompany(PIT_B)).toEqual({ ok: true });
+    expect(s().connectedCompany).toEqual(PIT_B);
+  });
+
+  it('keeps only the id, the name and the role of the company', () => {
+    s().connectCompany({ ...PIT_A, state: 'NV', joinCode: 'ABCD2345' } as typeof PIT_A);
+    expect(s().connectedCompany).toEqual(PIT_A);
+  });
+
+  it('is forgotten when the device is cleared', () => {
+    s().connectCompany(PIT_A);
+    s().resetDemo();
+    expect(s().connectedCompany).toBeNull();
+    expect(s().syncedWith).toBeNull();
+  });
+
+  it('remembers the server account that joined, and takes the role and name the server gives', () => {
+    expect(s().connectCompany(PIT_A, { id: 'u-avery', email: 'avery@example.com' })).toEqual({ ok: true });
+    expect(s().connectedCompany).toEqual({ ...PIT_A, userId: 'u-avery', email: 'avery@example.com' });
+    s().confirmConnection({ userId: 'u-blake', email: 'blake@example.com', role: 'supervisor', name: 'Test Pit A North' });
+    expect(s().connectedCompany).toEqual({ id: 'c-a', name: 'Test Pit A North', role: 'supervisor', userId: 'u-blake', email: 'blake@example.com' });
+  });
+
+  it('notes an answer only from the company its record of what was sent is about', () => {
+    s().connectCompany(PIT_A);
+    const all = changesToSend(s(), s().synced, new Set());
+    // A late answer from another company, after the phone moved: not noted.
+    s().markSynced(all.slice(0, 5), 'c-b');
+    expect(s().synced).toEqual({});
+    s().markSynced(all.slice(0, 5), 'c-a');
+    expect(Object.keys(s().synced)).toHaveLength(5);
+  });
+
+  it('remembers a request to join until the phone connects', () => {
+    s().setJoinAsked({ code: 'WXYZ2345', firstName: 'Blake', lastName: 'Rook', companyName: 'Test Pit B', reason: 'not_on_roster', accountId: 'u-blake', at: 1 });
+    expect(s().joinAsked).toMatchObject({ code: 'WXYZ2345' });
+    // It is this phone's own: nothing about it is sent.
+    expect(JSON.stringify(changesToSend(s(), {}, new Set()))).not.toContain('WXYZ2345');
+    s().connectCompany(PIT_B);
+    expect(s().joinAsked).toBeNull();
+  });
+
+  it('lets anyone clear a preview, signed in or not', () => {
+    s().connectCompany(PIT_A);
+    expect(s().clearDevice()).toEqual({ ok: true });
+    expect(s().connectedCompany).toBeNull();
+  });
+});
+
+describe('what only a supervisor may do, in the store and not only on the screen', () => {
+  it('turns a crew member away from correcting punches, the roster, the fleet and the company’s settings', () => {
+    s().signInDemo('employee');
+    const { shift } = s().clockIn(onSite) as { ok: true; shift: { id: string; clockIn: { at: number } } };
+    expect(s().editShiftTimes(shift.id, { clockIn: shift.clockIn.at - 2 * 3_600_000 }, 'forgot to clock in')).toMatchObject({ ok: false, error: 'Only a supervisor can correct punch times.' });
+    expect(s().shifts.find((x) => x.id === shift.id)?.edits).toBeUndefined();
+    const people = s().employees;
+    expect(s().addEmployee('Pat', 'Nobody')).toMatchObject({ ok: false });
+    s().setEmployeeRole('emp_demo', 'supervisor');
+    s().setEmployeeActive('e06', false);
+    expect(s().employees).toBe(people);
+    const fleet = s().equipment;
+    expect(s().addEquipment({ unit: 'T-99', category: 'haul_truck', make: 'Test', model: 'One', meter: 0 })).toMatchObject({ ok: false });
+    s().removeEquipment(fleet[0].id);
+    expect(s().equipment).toBe(fleet);
+    const settings = s().settings;
+    s().setRadius(1500);
+    s().setAllowSectionAllOk(!settings.allowSectionAllOk);
+    expect(s().settings).toBe(settings);
+  });
+
+  it('lets a supervisor do all of it', () => {
+    s().signInDemo('supervisor');
+    expect(s().addEmployee('Pat', 'Nobody')).toEqual({ ok: true });
+    s().setEmployeeRole('e06', 'supervisor');
+    expect(s().employees.find((e) => e.id === 'e06')?.role).toBe('supervisor');
+    expect(s().addEquipment({ unit: 'T-99', category: 'haul_truck', make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: true });
+    s().setAllowSectionAllOk(false);
+    expect(s().settings.allowSectionAllOk).toBe(false);
+  });
+
+  it('opens no session by a typed name for a supervisor, or for anyone with a password', () => {
+    expect(s().signInWithProvider('google', 'Casey', 'Morgan')).toMatchObject({ ok: false, error: expect.stringMatching(/supervisor signs in with an email and password/) });
+    expect(s().session).toBeNull();
+    s().signUp({ firstName: 'Jordan', lastName: 'Rivera', email: 'j@example.com', password: 'haulroad88' });
+    s().signOut();
+    expect(s().signInWithProvider('apple', 'Jordan', 'Rivera')).toMatchObject({ ok: false, error: expect.stringMatching(/has an account with a password/) });
+    expect(s().session).toBeNull();
   });
 });
 

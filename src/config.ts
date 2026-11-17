@@ -1,6 +1,7 @@
 import { parseAreaSheets } from './domain/areaExam';
 import { companyOrDefault, parseCompany } from './domain/company';
 import { parsePersonName, parseRoster, startsWithSamples } from './domain/roster';
+import { parseServer, type ServerConfig } from './domain/server';
 import { SAMPLE_SITE } from './domain/site';
 import type { SiteConfig } from './domain/types';
 
@@ -8,8 +9,8 @@ import type { SiteConfig } from './domain/types';
  * App-wide configuration.
  *
  * DEMO_MODE keeps every account and record on the device and unlocks the demo
- * tools (simulated GPS, sample crew, time travel). Set EXPO_PUBLIC_DEMO=0 once
- * the cloud backend is connected.
+ * tools (simulated GPS, sample crew, time travel). A build that connects to the
+ * company's server needs EXPO_PUBLIC_DEMO=0: a preview never sends (`CAN_SEND`).
  */
 export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO !== '0';
 
@@ -89,5 +90,38 @@ export const STARTING_COMPANY = companyOrDefault(BUILD_COMPANY.company, SAMPLE_C
  * else none until a supervisor sets the pin on the mine.
  */
 export const STARTING_SITE: SiteConfig | null = BUILD_COMPANY.site ?? (SAMPLE_CREW ? SAMPLE_SITE : null);
+
+/**
+ * The company server this build sends its records to: a Supabase project's
+ * address and its publishable key (one made to be in an app; the server's row
+ * level security is what guards the data).
+ *
+ *     EXPO_PUBLIC_SUPABASE_URL=https://example.supabase.co
+ *     EXPO_PUBLIC_SUPABASE_KEY=sb_publishable_...
+ *
+ * With either one empty the build has no server: nothing about one is loaded
+ * or shown, and every record stays on the phone. A preview build, and one that
+ * starts with the sample crew, sends nothing even with one (`CAN_SEND`).
+ *
+ * Set them in `.env.local`, which is not committed.
+ */
+const BUILD_SERVER = parseServer(process.env.EXPO_PUBLIC_SUPABASE_URL, process.env.EXPO_PUBLIC_SUPABASE_KEY);
+if (BUILD_SERVER.error) console.warn(BUILD_SERVER.error);
+
+/**
+ * Whether this build may send records to a company server at all. A preview
+ * never does: its controls make punches up (the simulated GPS, moving a
+ * clock-in back, opening as the owner with no account), and a build that starts
+ * with the sample crew or the sample company holds records and settings that
+ * are not anyone's. So a build that connects needs EXPO_PUBLIC_DEMO=0, and a
+ * roster of its own or EXPO_PUBLIC_SAMPLE_CREW=0.
+ */
+export const CAN_SEND = !DEMO_MODE && !SAMPLE_CREW;
+if (BUILD_SERVER.server && !CAN_SEND) {
+  console.warn(
+    'A preview build, or one with the sample crew, sends nothing to a company server. Set EXPO_PUBLIC_DEMO=0, and EXPO_PUBLIC_SAMPLE_CREW=0 or a roster, for a build that connects.',
+  );
+}
+export const SERVER: ServerConfig | null = CAN_SEND ? BUILD_SERVER.server : null;
 
 export const APP_NAME = 'MineMuster';
