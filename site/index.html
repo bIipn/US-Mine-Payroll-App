@@ -3,285 +3,502 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MineMuster: coming soon</title>
-<meta name="description" content="MineMuster is shift software for mine crews: the time clock, the equipment checklist, the pre shift exam, maintenance requests and payroll hours, on the crew's phones. Coming soon.">
+<title>MineMuster: shift software for mine crews</title>
+<meta name="description" content="Shift software for mine crews: the equipment checklist, pre shift exams, maintenance requests and an optional time clock, on the phone. Works with no signal and makes a PDF of the records an MSHA inspector asks to see.">
 <meta name="theme-color" content="#000000">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <link rel="canonical" href="https://minemuster.com/">
 <link rel="icon" type="image/png" sizes="48x48" href="favicon.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="MineMuster">
 <meta property="og:url" content="https://minemuster.com/">
-<meta property="og:title" content="MineMuster: coming soon">
-<meta property="og:description" content="Shift software for mine crews: the time clock, the equipment checklist, the pre shift exam, maintenance requests and payroll hours, on the phone. Coming soon.">
+<meta property="og:title" content="MineMuster: shift software for mine crews">
+<meta property="og:description" content="The equipment checklist, pre shift exams, maintenance requests and an optional time clock, on the crew's phones. Works with no signal.">
 <meta property="og:image" content="https://minemuster.com/brand/og-image.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="MineMuster">
+<meta property="og:image:alt" content="The MineMuster logo: a steel MM over the words Mine Muster, on black">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="MineMuster: coming soon">
-<meta name="twitter:description" content="Shift software for mine crews: the time clock, the equipment checklist, the pre shift exam, maintenance requests and payroll hours, on the phone. Coming soon.">
+<meta name="twitter:title" content="MineMuster: shift software for mine crews">
+<meta name="twitter:description" content="The equipment checklist, pre shift exams, maintenance requests and an optional time clock, on the crew's phones. Works with no signal.">
 <meta name="twitter:image" content="https://minemuster.com/brand/og-image.png">
-<meta name="twitter:image:alt" content="MineMuster">
-<style>
-@font-face{font-family:"Barlow";src:url("fonts/barlow-500.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
-@font-face{font-family:"Barlow Condensed";src:url("fonts/barlow-condensed-600.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
-@font-face{font-family:"Barlow Condensed";src:url("fonts/barlow-condensed-700.woff2") format("woff2");font-weight:700;font-style:normal;font-display:swap}
-
-:root{
-  --black:#000;
-  --panel:#0b0b0b;
-  --ink-1:#f4f4f2;   /* headings, 19:1 on black */
-  --ink-2:#cfd3d8;   /* body, 14:1 on black */
-  --ink-3:#a4aab2;   /* small print, 9:1 on black */
-  --steel:#cfd2d5;
-  --rule:#34373a;
-  --yellow:#ffc400;  /* the app's action colour, used here only for the status light */
-  --gutter:clamp(1rem,5vw,4rem);
-  --text:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --cond:"Barlow Condensed","Arial Narrow","Roboto Condensed",sans-serif;
-  --logo-ratio:2.1563; /* the logo is 1600 x 742 */
-  --reserve:20rem;     /* height kept free under the logo for the words above the fold */
-  color-scheme:dark;
-}
-*,*::before,*::after{box-sizing:border-box}
-html{background:var(--black);-webkit-text-size-adjust:100%;text-size-adjust:100%}
-body{margin:0;background:var(--black);color:var(--ink-2);font:500 1.125rem/1.55 var(--text);font-synthesis:none;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-img{display:block;max-width:100%;height:auto}
-h1,h2,h3,p,ol,ul{margin:0}
-::selection{background:var(--yellow);color:#1c1b19}
-:focus-visible{outline:3px solid var(--yellow);outline-offset:3px}
-
-.wrap{width:100%;max-width:72rem;margin-inline:auto;padding-inline:var(--gutter)}
-
-/* ---------- The sign: the logo, what it is, and that it is coming ---------- */
-.hero{position:relative;text-align:center;padding:clamp(2.5rem,8vh,6rem) 0 clamp(3rem,8vh,5.5rem)}
-.hero::after{ /* a rule that fades out at both ends, like the lines beside MINE MUSTER */
-  content:"";position:absolute;left:0;right:0;bottom:0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(207,210,213,.5) 50%,transparent)}
-
-/* The logo takes the width of a phone and never grows so tall that the words under it fall below the fold. */
-.logo{margin-inline:auto;line-height:0;
-  width:min(100%,47.5rem,max(17.5rem,(100vh - var(--reserve)) * var(--logo-ratio)));
-  width:min(100%,47.5rem,max(17.5rem,(100svh - var(--reserve)) * var(--logo-ratio)))}
-.logo img{width:100%}
-
-.lede{max-width:24ch;margin:clamp(1.25rem,3.5vh,2.25rem) auto 0;color:var(--ink-1);font-size:clamp(1.5rem,1.05rem + 1.9vw,2.375rem);line-height:1.22;letter-spacing:-.005em;text-wrap:balance}
-.sub{max-width:36rem;margin:1rem auto 0;color:var(--ink-2);font-size:clamp(1.0625rem,1rem + .3vw,1.1875rem);line-height:1.5;text-wrap:balance}
-.status{margin-top:clamp(1.5rem,4vh,2.5rem)}
-.soon{display:inline-flex;align-items:center;gap:.7rem;color:var(--yellow);font-family:var(--cond);font-weight:700;font-size:1.25rem;line-height:1;text-transform:uppercase;letter-spacing:.14em}
-.lamp{flex:none;width:.75rem;height:.75rem;border-radius:50%;background:var(--yellow);box-shadow:0 0 0 3px rgba(255,196,0,.18),0 0 16px 2px rgba(255,196,0,.5)}
-.building{margin-top:.6rem;color:var(--ink-3);font-size:1rem}
-
-/* A phone on its side: the words close up so the logo keeps a readable size. */
-@media (max-height:34rem) and (orientation:landscape){
-  :root{--reserve:13.5rem}
-  .hero{padding-top:1rem}
-  .lede{font-size:1.25rem;margin-top:.75rem;max-width:none}
-  .sub{font-size:1rem;margin-top:.4rem;max-width:44rem}
-  .status{margin-top:.9rem}
-}
-
-/* ---------- One shift ---------- */
-.shift{padding:clamp(3.5rem,9vw,7rem) 0 clamp(3rem,7vw,5.5rem)}
-.shift-grid{display:grid;gap:2.25rem}
-.kicker{display:block;margin-bottom:.8rem;color:var(--ink-3);font-family:var(--cond);font-weight:600;font-size:1.0625rem;letter-spacing:.14em;text-transform:uppercase}
-h2{color:var(--ink-1);font-family:var(--cond);font-weight:700;text-transform:uppercase;letter-spacing:.035em;font-size:clamp(2rem,1.35rem + 2.6vw,3.25rem);line-height:1.02;text-wrap:balance}
-.intro p{margin-top:1rem;max-width:26rem}
-
-/* An example of the day's time sheet, worked out the way the paper is: shown on wide screens. */
-.card{display:none;margin:2.5rem 0 0;max-width:20rem;border:1px solid var(--rule);background:var(--panel)}
-.card>div{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;padding:.7rem 1rem;border-top:1px solid #1f2123}
-.card>div:first-child{border-top:0}
-.card dt{color:var(--ink-3);font-family:var(--cond);font-weight:600;font-size:1rem;letter-spacing:.12em;text-transform:uppercase}
-.card dd{margin:0;color:var(--ink-1);font-family:var(--cond);font-weight:600;font-size:1.125rem;letter-spacing:.05em;text-transform:uppercase;font-variant-numeric:tabular-nums;text-align:right}
-.card .card-head{background:#141516}
-.card .card-head dt{color:var(--ink-1);font-weight:700}
-.card .card-head dd{color:var(--ink-3)}
-.card .card-total{border-top:1px solid var(--rule)}
-.card .card-total dd{font-weight:700;font-size:2rem;line-height:1;letter-spacing:.02em}
-
-.day{list-style:none;padding:0;--lx:.6875rem;--dy:.6875rem}
-.day li{position:relative;display:grid;grid-template-columns:1.375rem minmax(0,1fr);column-gap:1rem;padding-bottom:clamp(1.85rem,3.4vw,2.6rem)}
-.day li:last-child{padding-bottom:0}
-.day li::before{content:"";position:absolute;left:var(--lx);top:var(--dy);bottom:calc(-1 * var(--dy));width:1px;transform:translateX(-50%);background:linear-gradient(var(--rule),#25272a)}
-.day li:last-child::before{display:none}
-.when{grid-column:2;grid-row:1;color:var(--steel);font-family:var(--cond);font-weight:600;font-size:1.125rem;line-height:1.25;letter-spacing:.06em;text-transform:uppercase}
-.dot{grid-column:1;grid-row:1;justify-self:center;width:.8125rem;height:.8125rem;margin-top:calc(var(--dy) - .40625rem);border-radius:50%;background:var(--black);border:2px solid var(--steel);position:relative;z-index:1}
-.day li:last-child .dot{background:var(--steel)}
-.what{grid-column:2;grid-row:2;margin-top:.2rem}
-.what h3{color:var(--ink-1);font-family:var(--cond);font-weight:700;font-size:1.5rem;line-height:1.15;text-transform:uppercase;letter-spacing:.045em}
-.what p{margin-top:.4rem;max-width:34rem}
-
-@media (min-width:40rem){
-  .day{--lx:10.375rem;--dy:.875rem}
-  .day li{grid-template-columns:9rem 2.75rem minmax(0,1fr);column-gap:0}
-  .when{grid-column:1;grid-row:1;text-align:right;font-size:1.125rem;line-height:1.55}
-  .dot{grid-column:2;grid-row:1}
-  .what{grid-column:3;grid-row:1;margin-top:0}
-  .what h3{font-size:1.625rem;line-height:1.08}
-}
-@media (min-width:64rem){
-  .shift-grid{grid-template-columns:minmax(0,22rem) minmax(0,1fr);gap:4.5rem}
-  body{font-size:1.1875rem}
-  .intro{position:sticky;top:3rem;align-self:start}
-  .card{display:block}
-}
-
-/* ---------- The paper it replaces, each company, and who it is for ---------- */
-.more{background:var(--panel);border-top:1px solid #1d1f21;border-bottom:1px solid #1d1f21;padding:clamp(3.25rem,8vw,6rem) 0}
-.more-grid{display:grid;gap:3rem}
-.more h2{font-size:clamp(1.75rem,1.35rem + 1.6vw,2.375rem)}
-.more p{margin-top:1rem;max-width:32rem}
-/* Ruled lines, like the lines of a printed form: nothing to press. */
-.forms{list-style:none;padding:0;margin-top:1.4rem;border-top:1px solid var(--rule)}
-.forms li{padding:.75rem 0;border-bottom:1px solid var(--rule);color:var(--ink-1);font-family:var(--cond);font-weight:700;font-size:1.25rem;line-height:1.2;text-transform:uppercase;letter-spacing:.05em}
-@media (min-width:56rem){
-  .more-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:3.5rem}
-}
-
-/* ---------- Close ---------- */
-.close{padding:clamp(3.5rem,9vw,6rem) 0 clamp(3rem,7vw,4.5rem);text-align:center}
-.foot{border-top:1px solid #1d1f21;padding:1.5rem 0 2rem;color:var(--ink-3);font-size:.9375rem;text-align:center}
-
-@media (prefers-contrast:more){
-  :root{--ink-2:#e2e3e3;--ink-3:#c6c8c8;--rule:#6a6e72}
-}
-
-/* The sign comes up out of the dark once, by opacity only: nothing is ever laid over the logo. */
-@media screen and (prefers-reduced-motion:no-preference){
-  .logo{animation:come-up 1.4s cubic-bezier(.25,.6,.3,1) both}
-  .lede,.sub{animation:come-up 1s .5s ease-out both}
-  .status{animation:come-up 1s .8s ease-out both}
-}
-@keyframes come-up{from{opacity:0}to{opacity:1}}
-</style>
+<meta name="twitter:image:alt" content="The MineMuster logo: a steel MM over the words Mine Muster, on black">
+<link rel="preload" href="fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="site.css">
+<script>document.documentElement.classList.add('js')</script>
+<script type="importmap">{"imports":{"three":"./3d/three.module.min.js"}}</script>
+<script type="module" src="site.js"></script>
 </head>
-<body>
-<main>
-  <section class="hero" aria-label="MineMuster">
+<body id="top">
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="top dark">
+  <div class="wrap top-bar">
+    <a class="mark" href="#top" aria-label="MineMuster, back to the top"><img src="brand/minemuster-mark-header.webp" width="228" height="144" alt=""></a>
+    <nav class="nav" aria-label="Main">
+      <button class="menu-button" type="button" aria-expanded="false" aria-controls="menu"><span class="menu-icon" aria-hidden="true"></span>Menu</button>
+      <ul class="menu" id="menu">
+        <li><a href="#what">What it does</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#inspector">Inspector PDF</a></li>
+        <li><a href="#payroll">Payroll</a></li>
+        <li><a href="#start">How it starts</a></li>
+        <li><a href="#about">About</a></li>
+        <li><a href="#faq">FAQ</a></li>
+        <li class="menu-cta"><a class="button button-primary" href="https://app.minemuster.com">Open the dashboard</a></li>
+      </ul>
+    </nav>
+    <a class="button button-primary top-cta" href="https://app.minemuster.com">Open the dashboard</a>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- The hero: the MineMuster logo in 3D, on its own black stage. -->
+  <section class="hero dark" aria-labelledby="hero-title">
+    <div class="stage" data-logo-stage>
+      <img class="stage-flat" src="brand/minemuster-logo-800.webp" srcset="brand/minemuster-logo-800.webp 800w, brand/minemuster-logo-1200.webp 1200w, brand/minemuster-logo.webp 1600w" sizes="min(83vw, calc(1.295 * clamp(15rem, min(52vh, 62vw), 40rem)))" width="800" height="371" alt="MineMuster" fetchpriority="high">
+      <canvas tabindex="0" role="img" aria-label="The MineMuster logo in 3D. Drag it, or use the arrow keys, to turn it." hidden></canvas>
+    </div>
+    <p class="stage-hint" data-logo-hint hidden>
+      <svg viewBox="0 0 28 16" aria-hidden="true" focusable="false"><path d="M2 8h24M7 3 2 8l5 5M21 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Drag to turn the logo
+    </p>
+    <div class="wrap hero-copy">
+      <h1 id="hero-title">Shift software for mine crews</h1>
+      <p class="hero-sub">The equipment checklist, pre&nbsp;shift exams, maintenance requests and an optional time clock, on the phone the crew already carries. Every record is saved on the phone the moment it is signed, signal or not.</p>
+      <div class="actions">
+        <a class="button button-primary" href="https://app.minemuster.com">Open the dashboard</a>
+        <a class="button button-line" href="#what">See what it does</a>
+      </div>
+      <p class="hero-note">Built for iPhone, Android and the web. In early access, and not in the App Store or Google Play yet.</p>
+    </div>
+  </section>
+
+  <!-- What it does -->
+  <section class="section" id="what" aria-labelledby="what-title">
     <div class="wrap">
-      <h1 class="logo">
-        <img src="brand/minemuster-logo-800.webp" srcset="brand/minemuster-logo-800.webp 800w, brand/minemuster-logo.webp 1600w" sizes="(min-width: 51rem) 47.5rem, calc(100vw - 2rem)" width="800" height="371" alt="MineMuster" fetchpriority="high">
-      </h1>
-      <p class="lede">Shift software for mine crews and the people who run them.</p>
-      <p class="sub">The time clock, the equipment checklist, the pre&nbsp;shift&nbsp;exam, maintenance requests and payroll hours, on the phone the crew carries all shift.</p>
-      <div class="status">
-        <p class="soon"><span class="lamp" aria-hidden="true"></span>Coming soon</p>
-        <p class="building">MineMuster is still being built.</p>
+      <div class="split">
+        <div>
+          <h2 id="what-title">The paper forms, on the phone</h2>
+          <p class="lede">MineMuster was built from a working mine&rsquo;s own forms, in their own words: the operator equipment card with its 21&nbsp;lines, the pre shift exam with its 20&nbsp;conditions, the maintenance request and the time sheet. Each work area&rsquo;s exam sheet is the company&rsquo;s own, typed in by a supervisor.</p>
+        </div>
+        <table class="paper">
+          <thead><tr><th scope="col">The paper</th><th scope="col">On the phone</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Operator equipment checklist</th><td>The same 21 lines for every machine. OK or N/A is one tap; a Bad Order asks what is wrong.</td></tr>
+            <tr><th scope="row">Pre shift exam</th><td>Each work area&rsquo;s own sheet, then the 20 conditions.</td></tr>
+            <tr><th scope="row">Maintenance request</th><td>The form&rsquo;s own boxes, assigned by a supervisor and closed out with remarks.</td></tr>
+            <tr><th scope="row">Time sheet</th><td>Optional. Punches, a one-tap lunch, and hours to the hundredth.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="for">
+        <div>
+          <h3>For the crew</h3>
+          <p>Large buttons for gloved hands, and large type with strong contrast for working in the sun. Nothing is signed with a line left blank.</p>
+        </div>
+        <div>
+          <h3>For supervisors, safety and payroll</h3>
+          <p>The office dashboard brings together what the crew&rsquo;s phones send: units down, open conditions and maintenance requests, every checklist and exam by day, and payroll. It makes the Excel exports, the PDF for an inspector and the payroll hours file.</p>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="shift" aria-labelledby="shift-title">
-    <div class="wrap shift-grid">
-      <div class="intro">
-        <span class="kicker">One shift</span>
-        <h2 id="shift-title">From the gate to payroll</h2>
-        <p>A crew member&rsquo;s day, the way MineMuster keeps it.</p>
-        <dl class="card" aria-label="An example day on the time sheet">
-          <div class="card-head"><dt>Time sheet</dt><dd>Example day</dd></div>
-          <div><dt>In</dt><dd>5:45 AM</dd></div>
-          <div><dt>Lunch</dt><dd>0.50</dd></div>
-          <div><dt>Out</dt><dd>4:15 PM</dd></div>
-          <div class="card-total"><dt>Hours</dt><dd>10.00</dd></div>
-        </dl>
+  <!-- Features -->
+  <section class="section" id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <h2 id="features-title">What it can do</h2>
+      <p class="lede">The screens below are the app, running with a made-up company, Sample Mining&nbsp;Co.</p>
+
+      <article class="feature split" aria-labelledby="f-checklist">
+        <div class="prose">
+          <h3 id="f-checklist">Operator equipment checklist</h3>
+          <p>One card for every machine: the same 21 lines, each marked OK, BO (Bad&nbsp;Order) or N/A. It takes the equipment hours at the start and the end, the gallons added and the comments.</p>
+          <ul class="lines">
+            <li>A Bad Order on a safety item red tags the unit and shows the steps to take.</li>
+            <li>Where a standard applies to a line, the line cites it: the MSHA standard, and the matching OSHA rule where there is one.</li>
+            <li>A Bad Order has to say what is wrong before it can be signed.</li>
+            <li>The day is laid out as the paper card, a column for each unit checked.</li>
+          </ul>
+        </div>
+        <div>
+          <div class="shots shots-many" role="group" aria-label="Equipment checklist screens">
+            <figure class="shot">
+              <div class="phone"><img src="shots/checklist.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The equipment checklist for haul truck HT-24, 2 of 21 lines checked: Fire extinguisher marked OK, citing MSHA 56.4230 and OSHA 1910.157(e)(2), and Steering marked OK, each a safety item with OK, BO and N/A buttons."></div>
+              <figcaption>The 21 lines of the card, OK, BO or N/A.</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="phone"><img src="shots/bad-order.webp" width="585" height="1266" loading="lazy" decoding="async" alt="A Bad Order: a loader is out of service, with a red Danger, Do Not Operate tag and what was found wrong with the brakes."></div>
+              <figcaption>A Bad Order on the brakes red tags the unit.</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="phone"><img src="shots/card.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The operator's equipment card for the day, laid out as the paper card: each unit's hours, and the checklist items marked OK or BO in a column for each unit."></div>
+              <figcaption>The day&rsquo;s card, as the paper lays it out.</figcaption>
+            </figure>
+          </div>
+          <p class="swipe-note">Swipe for more screens.</p>
+        </div>
+      </article>
+
+      <article class="feature split" aria-labelledby="f-exam">
+        <div class="prose">
+          <h3 id="f-exam">Pre shift exams</h3>
+          <p>Each work area is examined on its own sheet. Every line is checked for guarding, electrical and safe access, or marked once OK or BO where the sheet has one column. Then come the 20 conditions.</p>
+          <ul class="lines">
+            <li>A condition found stays open until the date it was fixed is recorded.</li>
+            <li>A danger shows first wherever its area appears.</li>
+            <li>A condition can go to the shop as a maintenance request. Completing the request records the date it was fixed.</li>
+          </ul>
+        </div>
+        <div class="shots shots-two">
+          <figure class="shot">
+            <div class="phone"><img src="shots/exam.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The crusher pre shift exam: the examiner, a choice of day, swing or night shift, a notice that one condition from an earlier exam is still open, and the first line with OK, BO and N/A buttons."></div>
+            <figcaption>An area&rsquo;s own sheet, for the shift.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="phone"><img src="shots/exam-result.webp" width="585" height="1266" loading="lazy" decoding="async" alt="A signed exam with one condition to fix: a guard on a feeder hanging by one bolt, with buttons to send it to maintenance or mark it fixed."></div>
+            <figcaption>What was found stays open until it is fixed.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="feature split" aria-labelledby="f-requests">
+        <div class="prose">
+          <h3 id="f-requests">Maintenance requests</h3>
+          <p>A request has the paper form&rsquo;s boxes: <span class="box">By</span>, <span class="box">Date</span>, <span class="box">Location</span> and <span class="box">Problem</span>, then <span class="box">Assigned to</span>, <span class="box">Date completed</span>, <span class="box">Time spent</span>, <span class="box">Completed by</span> and <span class="box">Remarks</span>. A supervisor assigns it, and it is not closed without remarks.</p>
+          <h3>The crew board</h3>
+          <p>On a supervisor&rsquo;s phone, the crew board shows who is on the clock, who is at lunch or due for one, which units are down and what needs a supervisor now, from the records on that phone. The office dashboard brings every phone&rsquo;s records together.</p>
+        </div>
+        <div class="shots shots-two">
+          <figure class="shot">
+            <div class="phone"><img src="shots/request.webp" width="585" height="1266" loading="lazy" decoding="async" alt="A completed maintenance request shown as the paper form: by, date, location, problem, assigned to, date completed, time spent, completed by and remarks."></div>
+            <figcaption>A request, completed with remarks.</figcaption>
+          </figure>
+          <figure class="shot">
+            <div class="phone"><img src="shots/crew.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The crew board: how many are working, at lunch and due for lunch, how many units are down, and a list of what needs a supervisor now."></div>
+            <figcaption>The crew board for a supervisor.</figcaption>
+          </figure>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- No signal -->
+  <section class="section dark" id="no-signal" aria-labelledby="signal-title">
+    <div class="wrap split split-wide-left">
+      <div>
+        <h2 id="signal-title">Works with no signal</h2>
+        <p class="lede">Pits and quarries often have no signal. Every punch, checklist, exam and request is saved on the phone the moment it is signed, and a strip across the top says when the phone has none.</p>
+        <p class="signal-strip">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.2-2.8M19 13a10 10 0 0 0-2.2-1.7M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 10.7 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="20" r="1.3" fill="currentColor"/></svg>
+          <span>No signal. Everything you do is saved on this phone.</span>
+        </p>
+        <div class="prose space-l">
+          <p>Once a company&rsquo;s crew is connected, the records go to the company&rsquo;s account when the phone is back in range. Joining the company and sending the records need signal. GPS does not need cell signal, only a view of the sky.</p>
+        </div>
       </div>
-      <ol class="day">
-        <li>
-          <p class="when">At the gate</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Clock in</h3>
-            <p>Punch in on the phone. It reads its location once, at the punch, to check you are on site.</p>
+      <div class="shots shots-one">
+        <figure class="shot">
+          <div class="phone"><img src="shots/no-signal.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The clock screen with a strip across the top that says there is no signal and everything is saved on this phone, while the person is on the clock."></div>
+          <figcaption>On the clock, with no signal.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- The inspector PDF -->
+  <section class="section" id="inspector" aria-labelledby="inspector-title">
+    <div class="wrap split split-wide-left">
+      <div>
+        <h2 id="inspector-title">The records an inspector asks to see, in one PDF</h2>
+        <p class="lede">One tap on Checklists and exams (the safety log) makes a PDF of the records an MSHA inspector asks to see, for the day or as far back as the last 12&nbsp;months. On a phone it holds that phone&rsquo;s records; the office dashboard makes it from every phone&rsquo;s.</p>
+        <div class="records-wrap">
+          <table class="paper records">
+            <caption>In the PDF</caption>
+            <tbody>
+              <tr><th scope="row">Equipment defects affecting safety, and when each was corrected</th><td class="cite">30 CFR 56.14100(d)</td></tr>
+              <tr><th scope="row">The pre-use equipment inspections</th><td class="cite">30 CFR 56.14100(a)</td></tr>
+              <tr><th scope="row">Every pre shift exam, and every condition it found with the date it was corrected</th><td class="cite">30 CFR 56.18002</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="prose space-m">
+          <p>Every record shows the date and time it was signed. The file says when it was made and in which time zone.</p>
+        </div>
+        <div class="covers">
+          <p>It covers surface metal and nonmetal mines, under Part&nbsp;56. It does not cover underground mines under Part&nbsp;57 or coal mines under Parts&nbsp;75 and&nbsp;77 yet.</p>
+          <p class="small">It records what the standards ask a mine to record: who examined or inspected, when, what was found and when it was corrected. The standards text in the app is a plain-language summary, not legal advice.</p>
+        </div>
+      </div>
+      <div class="shots shots-one">
+        <figure class="shot">
+          <div class="phone"><img src="shots/inspector.webp" width="585" height="1266" loading="lazy" decoding="async" alt="Checklists and exams: each person's equipment checklists with their units and results, a choice of today, 7 days, 30 days or 12 months, and buttons for the PDF for an MSHA inspector and the Excel safety log."></div>
+          <figcaption>Checklists and exams, with the PDF one tap away.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Time clock and payroll -->
+  <section class="section" id="payroll" aria-labelledby="payroll-title">
+    <div class="wrap">
+      <div class="split payroll-head">
+        <div>
+          <h2 id="payroll-title">Time clock and payroll hours</h2>
+          <p class="lede">Time tracking is optional. With it on, the same app keeps the crew&rsquo;s hours and figures them the way the paper time sheet does.</p>
+        </div>
+        <div class="alone">
+          <div class="phone"><img src="shots/safety-only.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The app with time tracking off: the crew board shows units down and areas examined, and there is no clock."></div>
+          <div>
+            <h3>Or the safety forms alone</h3>
+            <p>A company can run the equipment checklist, pre shift exams, maintenance requests and the inspector PDF with no clock, hours or payroll.</p>
           </div>
+        </div>
+      </div>
+
+      <article class="feature split" aria-labelledby="p-clock">
+        <div class="prose">
+          <h3 id="p-clock">Clock in at the mine</h3>
+          <ul class="lines">
+            <li>A clock-in goes through only inside the mine boundary. The location is read at the moment of the punch, never in the background.</li>
+            <li>Clocking out and starting lunch are never blocked by location.</li>
+            <li>Lunch is one tap, and it ends by itself after 30 minutes.</li>
+          </ul>
+        </div>
+        <div>
+          <div class="shots shots-many" role="group" aria-label="Time clock screens">
+            <figure class="shot">
+              <div class="phone"><img src="shots/clock-on.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The clock screen in yellow: on the clock since 6:15 AM, with a button to start lunch and one to clock out."></div>
+              <figcaption>On the clock at 6:15&nbsp;AM.</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="phone"><img src="shots/not-at-mine.webp" width="585" height="1266" loading="lazy" decoding="async" alt="A clock-in turned down: the phone is 1.5 miles from the mine pin, outside the clock-in boundary, shown on a small map."></div>
+              <figcaption>A clock-in turned down away from the mine.</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="phone"><img src="shots/lunch.webp" width="585" height="1266" loading="lazy" decoding="async" alt="At lunch: the time left on lunch counts down, and a note says the app puts you back on the clock by itself when lunch is over."></div>
+              <figcaption>Lunch counts down and ends by itself.</figcaption>
+            </figure>
+          </div>
+          <p class="swipe-note">Swipe for more screens.</p>
+        </div>
+      </article>
+
+      <article class="feature split" aria-labelledby="p-hours">
+        <div class="prose">
+          <h3 id="p-hours">Hours to the hundredth</h3>
+          <p>Minutes become hundredths of an hour, as on the paper time sheet.</p>
+          <figure class="paper timecard">
+            <div class="tc-head" aria-hidden="true"><span>Time card</span><span>Example day</span></div>
+            <dl class="tc-punches">
+              <div><dt>In</dt><dd>6:15 AM</dd></div>
+              <div><dt>Lunch</dt><dd>30 min</dd></div>
+              <div><dt>Out</dt><dd>7:00 PM</dd></div>
+            </dl>
+            <div class="tc-math">
+              <p><span class="tc-label">On site</span><span class="tc-num">12.75</span></p>
+              <span class="tc-op">&minus;</span>
+              <p><span class="tc-label">Lunch</span><span class="tc-num">0.50</span></p>
+              <span class="tc-op">=</span>
+              <p class="tc-paid"><span class="tc-label">Paid hours</span><span class="tc-num">12.25</span></p>
+            </div>
+            <figcaption>6:15&nbsp;AM to 7:00&nbsp;PM is 12.75&nbsp;hours. Less a 30&#8209;minute lunch, it is&nbsp;12.25.</figcaption>
+          </figure>
+          <ul class="lines">
+            <li>Overtime, double time and meal rules follow the company&rsquo;s state, for all 50 states and DC, where the app can apply them; the rest are shown as notes.</li>
+            <li>Pay periods are the company&rsquo;s own, or none at all.</li>
+            <li>Holiday, PTO and sick hours, kept apart from overtime.</li>
+            <li>A correction to a punch needs a reason, and it is kept in the shift&rsquo;s history.</li>
+          </ul>
+        </div>
+        <div>
+          <div class="shots shots-many" role="group" aria-label="Hours and payroll screens">
+            <figure class="shot">
+              <div class="phone"><img src="shots/day-done.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The end of the day: clocked in at 6:15, lunch from 11:00 to 11:30, out at 7:00 PM, and 12.75 on site less 0.50 lunch is 12.25 paid hours."></div>
+              <figcaption>The day, worked out as the paper does it.</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="phone"><img src="shots/my-hours.webp" width="585" height="1266" loading="lazy" decoding="async" alt="My hours for the pay period: hours so far, split into straight time, overtime and double time, with an estimate of gross pay."></div>
+              <figcaption>My hours, the same lines as the pay stub.</figcaption>
+            </figure>
+            <figure class="shot">
+              <div class="phone"><img src="shots/payroll.webp" width="585" height="1266" loading="lazy" decoding="async" alt="Payroll for the pay period: the crew's total hours, straight time, overtime and double time, paid leave, and each employee's hours."></div>
+              <figcaption>Payroll for the crew, by employee.</figcaption>
+            </figure>
+          </div>
+          <p class="swipe-note">Swipe for more screens.</p>
+        </div>
+      </article>
+
+      <article class="feature split" aria-labelledby="p-file">
+        <div class="prose">
+          <h3 id="p-file">The payroll hours file</h3>
+          <p>A plain CSV with each person&rsquo;s payroll ID, the company&rsquo;s own earning codes and the hours (no pay amounts), for the payroll system&rsquo;s import. There are Excel exports for payroll and the safety log too.</p>
+          <table class="paper systems">
+            <thead><tr><th scope="col">Payroll system</th><th scope="col">What to expect</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">QuickBooks Online</th><td>Imports it as time activities, mapping the columns from the first row.</td></tr>
+              <tr><th scope="row">Sage 100 and Sage 300 CRE</th><td>You set the import layout to match it.</td></tr>
+              <tr><th scope="row">ADP Workforce Now</th><td>Needs its own paydata layout, which MineMuster does not make yet.</td></tr>
+            </tbody>
+          </table>
+          <p class="small">Check an import against your own payroll account before you rely on it. QuickBooks, Sage and ADP are trademarks of their owners; MineMuster is not affiliated with them.</p>
+        </div>
+        <div class="shots shots-one">
+          <figure class="shot">
+            <div class="phone"><img src="shots/hours-file.webp" width="585" height="1266" loading="lazy" decoding="async" alt="The payroll hours file dialog: a CSV for the payroll system's import, as totals for the period or one line a day, with a warning that 13 people have no payroll ID yet."></div>
+            <figcaption>The hours file, for the period or by the day.</figcaption>
+          </figure>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- How a company starts -->
+  <section class="section dark" id="start" aria-labelledby="start-title">
+    <div class="wrap">
+      <h2 id="start-title">How a company starts</h2>
+      <ol class="steps">
+        <li>
+          <span class="step-n" aria-hidden="true">1</span>
+          <h3>Create the company</h3>
+          <p>A supervisor creates the company on the dashboard and gets a join code.</p>
         </li>
         <li>
-          <p class="when">Before work starts</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Pre shift exam</h3>
-            <p>Examine the work area and sign the exam. A condition you find stays open until the date it was fixed is written down.</p>
-          </div>
+          <span class="step-n" aria-hidden="true">2</span>
+          <h3>The crew joins</h3>
+          <p>Each person signs in to the app with an email and password, then types the code and their name as it is on the roster.</p>
         </li>
         <li>
-          <p class="when">Before you run it</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Equipment checklist</h3>
-            <p>Go down the operator equipment checklist for the machine. A Bad Order has to say what is wrong.</p>
-          </div>
+          <span class="step-n" aria-hidden="true">3</span>
+          <h3>Work the shift</h3>
+          <p>Checklists, exams, requests and punches are signed on the phone and saved there at once.</p>
         </li>
         <li>
-          <p class="when">When something is wrong</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Maintenance request</h3>
-            <p>Send the Bad Order to the shop. A supervisor assigns it, and it is closed out with remarks.</p>
-          </div>
-        </li>
-        <li>
-          <p class="when">Midday</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Lunch</h3>
-            <p>One tap starts a 30-minute lunch. It ends by itself, and the phone tells you.</p>
-          </div>
-        </li>
-        <li>
-          <p class="when">End of shift</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Clock out</h3>
-            <p>Punch out. The day is counted to the hundredth of an hour, the way a paper time sheet is figured.</p>
-          </div>
-        </li>
-        <li>
-          <p class="when">End of the pay period</p>
-          <span class="dot" aria-hidden="true"></span>
-          <div class="what">
-            <h3>Hours for payroll</h3>
-            <p>The hours come out as straight time, overtime and double time, figured by the rules of the company&rsquo;s state, before taxes.</p>
-          </div>
+          <span class="step-n" aria-hidden="true">4</span>
+          <h3>See it in the office</h3>
+          <p>When a phone has signal, it sends its records to the company&rsquo;s account, and supervisors see them on the dashboard.</p>
         </li>
       </ol>
-    </div>
-  </section>
-
-  <section class="more" aria-label="What it replaces, each company, and who it is for">
-    <div class="wrap more-grid">
-      <div>
-        <h2>It replaces the paper</h2>
-        <p>Four forms move from the clipboard to the phone.</p>
-        <ul class="forms">
-          <li>Time sheet</li>
-          <li>Equipment checklist card</li>
-          <li>Pre shift exam sheets</li>
-          <li>Maintenance request form</li>
-        </ul>
-      </div>
-      <div>
-        <h2>Set up for each company</h2>
-        <p>A company puts in its own name, logo, state and pay periods, and the app follows them. A website dashboard for each company is coming too.</p>
-      </div>
-      <div>
-        <h2>Who it is for</h2>
-        <p>Mine owners and superintendents, safety and HR people, and the crew members who work the shifts.</p>
+      <div class="start-cta">
+        <a class="button button-primary" href="https://app.minemuster.com">Open the dashboard</a>
+        <p>The dashboard is at app.minemuster.com.</p>
       </div>
     </div>
   </section>
 
-  <section class="close" aria-label="Status">
-    <div class="wrap">
-      <p class="soon"><span class="lamp" aria-hidden="true"></span>Coming soon</p>
-      <p class="building">MineMuster is still being built.</p>
+  <!-- About -->
+  <section class="section" id="about" aria-labelledby="about-title">
+    <div class="wrap split">
+      <h2 class="sticky-head" id="about-title">Built on a working mine</h2>
+      <div class="prose">
+        <p class="lede flush">MineMuster was built on a working mine, from the crew&rsquo;s own paper: the time sheet, the operator equipment card, the pre shift exam sheet and the maintenance request. It was made with the people who fill them in.</p>
+        <p>That is why it uses the paper&rsquo;s words, like equipment checklist, pre shift exam, Bad Order, red tag and equipment hours, and why the 21 lines of the equipment card are in the order and wording of the printed card.</p>
+        <div class="private">
+          <h3>What stays private</h3>
+          <ul class="lines">
+            <li>Location is read only at the moment of a punch, and kept with that punch.</li>
+            <li>An hourly rate a person enters for their own pay estimate stays on their phone and is never in any export.</li>
+            <li>Each company sees only its own records.</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq" aria-labelledby="faq-title">
+    <div class="wrap split">
+      <h2 class="sticky-head" id="faq-title">Frequently asked questions</h2>
+      <div class="faq-list">
+        <details>
+          <summary>Does the crew need a signal?</summary>
+          <div class="answer"><p>Not to work. Every punch, checklist, exam and request is saved on the phone the moment it is signed. Joining the company and sending the records need signal: once a company&rsquo;s crew is connected, the records go to the company&rsquo;s account when the phone is back in range.</p></div>
+        </details>
+        <details>
+          <summary>Do we have to use the time clock?</summary>
+          <div class="answer"><p>No. Time tracking is optional. A company can run the safety forms alone: the equipment checklist, pre shift exams, maintenance requests and the PDF for an inspector, with no clock, hours or payroll.</p></div>
+        </details>
+        <details>
+          <summary>Which phones is it for?</summary>
+          <div class="answer"><p>MineMuster is built for iPhone, Android and the web. It is in early access, and not in the App Store or Google Play yet.</p></div>
+        </details>
+        <details>
+          <summary>How does a company get started?</summary>
+          <div class="answer"><p>A supervisor creates the company on the dashboard at app.minemuster.com and gets a join code. Each person on the crew signs in to the app with an email and password, then types the code and their name as it is on the roster.</p></div>
+        </details>
+        <details>
+          <summary>Does it track where people are?</summary>
+          <div class="answer"><p>No. The phone&rsquo;s location is read only at the moment of a punch (clock in, start lunch, clock out) and kept with that punch. Only a clock-in has to be inside the mine boundary. It is never read in the background, and no location is read when lunch ends.</p></div>
+        </details>
+        <details>
+          <summary>Which state&rsquo;s hours rules does it follow?</summary>
+          <div class="answer"><p>The company&rsquo;s. Overtime, double time and meal rules follow the company&rsquo;s state, for all 50 states and DC, where the app can apply them; a rule it cannot apply is shown as a note. A bargaining agreement can change some of them. Holiday, PTO and sick hours never count toward overtime.</p></div>
+        </details>
+        <details>
+          <summary>Can the hours go into QuickBooks, ADP or Sage?</summary>
+          <div class="answer">
+            <p>MineMuster makes a payroll hours file for your payroll system&rsquo;s import: a plain CSV with each person&rsquo;s payroll ID, your own earning codes and the hours, with no pay amounts.</p>
+            <p>QuickBooks Online imports it as time activities, mapping the columns from the first row. Sage 100 and Sage 300 CRE let you set the import layout to match it. ADP Workforce Now needs its own paydata layout, which MineMuster does not make yet.</p>
+            <p>Check an import against your own payroll account before you rely on it.</p>
+          </div>
+        </details>
+        <details>
+          <summary>Can a supervisor fix a punch?</summary>
+          <div class="answer"><p>Yes, with a reason. A correction is added to the shift&rsquo;s edit history, and punch times are never changed silently. A shift with no clock-out counts no hours until a supervisor sets its end.</p></div>
+        </details>
+        <details>
+          <summary>Who sees a person&rsquo;s hourly rate?</summary>
+          <div class="answer"><p>Only that person. A rate is entered for their own pay estimate, stays on their phone and is never in any export. The estimate is of gross pay; the pay stub is the official figure.</p></div>
+        </details>
+        <details>
+          <summary>Which mines does the inspector PDF cover?</summary>
+          <div class="answer"><p>Surface metal and nonmetal mines, under 30 CFR Part&nbsp;56. It does not cover underground mines under Part&nbsp;57 or coal mines under Parts&nbsp;75 and&nbsp;77 yet.</p></div>
+        </details>
+        <details>
+          <summary>Is the standards text in the app legal advice?</summary>
+          <div class="answer"><p>No. Where a line cites a standard, the text beside it is a plain-language summary, not legal advice.</p></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
 </main>
-<footer class="foot">
-  <div class="wrap">&copy; 2026 MineMuster</div>
+
+<footer class="foot dark">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <img class="foot-logo" src="brand/minemuster-logo-800.webp" width="800" height="371" loading="lazy" decoding="async" alt="MineMuster">
+        <p class="foot-tag">Shift software for mine crews.<br>Made in California.</p>
+      </div>
+      <nav aria-label="Site">
+        <ul>
+          <li><a href="#what">What it does</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#no-signal">No signal</a></li>
+          <li><a href="#inspector">Inspector PDF</a></li>
+          <li><a href="#payroll">Payroll</a></li>
+          <li><a href="#start">How it starts</a></li>
+          <li><a href="#about">About</a></li>
+          <li><a href="#faq">FAQ</a></li>
+        </ul>
+      </nav>
+      <div class="foot-cta">
+        <a class="button button-primary" href="https://app.minemuster.com">Open the dashboard</a>
+        <p>The dashboard is at app.minemuster.com.</p>
+      </div>
+    </div>
+    <div class="foot-base">
+      <p>&copy; 2026 MineMuster</p>
+      <p>Screens show a made-up company and crew. All hours and pay figures are before taxes.</p>
+    </div>
+  </div>
 </footer>
 </body>
 </html>

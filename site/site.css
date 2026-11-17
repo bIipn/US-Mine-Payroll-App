@@ -1,0 +1,344 @@
+/* minemuster.com
+   The logo lives on a black stage; the work is shown in daylight, the way the app looks on a phone
+   in the sun. Records are drawn as the paper they replace: white, ruled in black, printed words in
+   condensed capitals. Equipment yellow is kept for what you can press. */
+
+@font-face{font-family:"Barlow";src:url("fonts/barlow-500.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
+@font-face{font-family:"Barlow Condensed";src:url("fonts/barlow-condensed-600.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"Barlow Condensed";src:url("fonts/barlow-condensed-700.woff2") format("woff2");font-weight:700;font-style:normal;font-display:swap}
+
+:root{
+  --black:#000;
+  --ground:#eceef0;      /* daylight: a cool steel-white, never cream */
+  --paper:#fff;
+  --ink:#111316;         /* 17:1 on the ground */
+  --ink-2:#434950;       /* 7.8:1 on the ground */
+  --rule:#c4c9cf;
+  --steel-1:#f4f4f2;     /* on black, 19:1 */
+  --steel-2:#cfd3d8;     /* on black, 14:1 */
+  --steel-3:#a4aab2;     /* on black, 9:1 */
+  --steel-rule:#30343a;
+  --yellow:#ffc400;      /* the app's action colour: buttons and focus only */
+  --yellow-hi:#ffd43b;
+  --frame:#1d2024;       /* the phone around a screenshot; the app's own no-signal strip */
+  --focus:var(--ink);
+
+  --gutter:clamp(1rem,4vw,3rem);
+  --max:76rem;
+  --section:clamp(4rem,9vw,7.5rem);
+  --phone-w:12.5rem;     /* the widest a screenshot's phone is drawn, in a row or on its own */
+  --shot-gap:clamp(.75rem,2vw,1.5rem);
+
+  --text:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --cond:"Barlow Condensed","Arial Narrow","Roboto Condensed",sans-serif;
+  --fs-body:clamp(1.0625rem,1rem + .25vw,1.1875rem);
+  --fs-small:.9375rem;
+  --fs-h3:clamp(1.5rem,1.3rem + .8vw,1.875rem);
+  --fs-h2:clamp(2.25rem,1.45rem + 3.1vw,3.75rem);
+  --fs-h1:clamp(2.5rem,1.6rem + 3.4vw,4.25rem);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--black);-webkit-text-size-adjust:100%;text-size-adjust:100%;scroll-padding-top:5rem}
+body{margin:0;background:var(--ground);color:var(--ink-2);font:500 var(--fs-body)/1.6 var(--text);font-synthesis:none;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow-x:clip}
+img{display:block;max-width:100%;height:auto}
+[hidden]{display:none!important}
+h1,h2,h3,p,ol,ul,dl,dd,figure{margin:0}
+ul,ol{padding:0}
+a{color:inherit;text-decoration-thickness:1px;text-underline-offset:.2em}
+a:hover{text-decoration-thickness:2px}
+::selection{background:var(--yellow);color:var(--ink)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+
+h1,h2,h3{color:var(--ink);font-family:var(--cond);font-weight:700;letter-spacing:.003em;text-wrap:balance}
+h2{font-size:var(--fs-h2);line-height:.98}
+h3{font-size:var(--fs-h3);line-height:1.08}
+p,li,td,th,figcaption,summary,.small{text-wrap:pretty}
+
+.wrap{width:100%;max-width:var(--max);margin-inline:auto;padding-inline:var(--gutter)}
+.vh{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* Dark ground: the stage, the bands and the footer. */
+.dark{background:var(--black);color:var(--steel-2);--focus:var(--yellow)}
+.dark h1,.dark h2,.dark h3{color:var(--steel-1)}
+
+.skip{position:absolute;left:var(--gutter);top:-4rem;z-index:30;padding:.75rem 1rem;background:var(--yellow);color:var(--ink);font-family:var(--cond);font-weight:700;font-size:1.125rem;text-decoration:none;border-radius:.375rem}
+.skip:focus{top:.75rem;outline-color:var(--steel-1)}
+
+/* ---------- Buttons ---------- */
+.button{display:inline-flex;align-items:center;justify-content:center;gap:.6rem;min-height:3.5rem;padding:.5rem 1.6rem;border:2px solid transparent;border-radius:.5rem;font:700 1.25rem/1.1 var(--cond);letter-spacing:.015em;text-decoration:none;text-align:center;cursor:pointer}
+.button-primary{background:var(--yellow);color:var(--ink)}
+.button-primary:hover{background:var(--yellow-hi)}
+.button-primary:active{background:#e8b200}
+.button-line{border-color:currentColor;color:var(--ink)}
+.button-line:hover{background:rgba(17,19,22,.06)}
+.dark .button-line{color:var(--steel-1);border-color:#6b727b}
+.dark .button-line:hover{border-color:var(--steel-1);background:rgba(244,244,242,.06)}
+.actions{display:flex;flex-wrap:wrap;gap:.75rem}
+
+/* ---------- Header ---------- */
+.top{position:sticky;top:0;z-index:20;background:var(--black);border-bottom:1px solid #16181b}
+.top-bar{display:flex;align-items:center;gap:1rem;min-height:4rem}
+.mark{flex:none;display:block;width:4.75rem;height:3rem;margin-left:-.4rem;border-radius:.375rem}
+.mark img{width:100%;height:100%}
+.nav{margin-left:auto;display:flex;align-items:center}
+.menu{list-style:none;display:flex;flex-wrap:wrap;gap:.25rem 1.25rem}
+.menu a{display:inline-flex;align-items:center;min-height:3rem;color:var(--steel-2);font-size:1rem;text-decoration:none;border-bottom:2px solid transparent}
+.menu a:hover{color:var(--steel-1);border-bottom-color:var(--steel-3)}
+.menu-cta{display:none}
+.top-cta{flex:none;min-height:2.75rem;padding:.35rem 1.1rem;font-size:1.125rem}
+.menu-button{display:none}
+
+/* With script, the small-screen menu folds behind a button. */
+@media (max-width:63.99rem){
+  .js .menu-button{display:inline-flex;align-items:center;gap:.6rem;min-height:3rem;padding:0 1rem;margin-right:-.25rem;background:none;border:2px solid #4a5058;border-radius:.5rem;color:var(--steel-1);font:700 1.125rem/1 var(--cond);letter-spacing:.02em;cursor:pointer}
+  .js .menu-button:hover{border-color:var(--steel-3)}
+  .menu-icon{position:relative;width:1.125rem;height:0;border-top:2px solid currentColor}
+  .menu-icon::before,.menu-icon::after{content:"";position:absolute;left:0;width:100%;height:0;border-top:2px solid currentColor}
+  .menu-icon::before{top:-8px}.menu-icon::after{top:4px}
+  .menu-icon::before,.menu-icon::after{visibility:visible}
+  .js [aria-expanded="true"] .menu-icon{visibility:hidden}
+  .js [aria-expanded="true"] .menu-icon::before{top:-2px;transform:rotate(45deg)}
+  .js [aria-expanded="true"] .menu-icon::after{top:-2px;transform:rotate(-45deg)}
+  .js .menu{display:none;position:absolute;left:0;right:0;top:100%;flex-direction:column;gap:0;padding:.5rem var(--gutter) 1.5rem;background:var(--black);border-bottom:1px solid var(--steel-rule);max-height:calc(100vh - 4rem);overflow-y:auto}
+  .js .menu.is-open{display:flex}
+  .js .menu li{border-top:1px solid #1d2024}
+  .js .menu li:first-child{border-top:0}
+  .js .menu a{display:flex;min-height:3.5rem;font-size:1.125rem;border-bottom:0}
+  .js .menu .menu-cta{display:block;border-top:0;padding-top:1rem}
+  .js .menu .menu-cta a{display:flex;justify-content:center;color:var(--ink)}
+  .top-cta{display:none}
+  html:not(.js) .top-bar{flex-wrap:wrap;padding-block:.5rem}
+  html:not(.js) .nav{margin-left:0;width:100%}
+}
+
+/* ---------- Hero: the 3D logo on its stage ---------- */
+.hero{text-align:center;padding:clamp(.25rem,1.5vh,1rem) 0 clamp(3.5rem,8vw,6rem)}
+/* The stage is taller than the logo face on, so it stays inside the stage as it turns (site.js
+   frames it with room above and below). On a phone the width sets the logo's size. */
+.stage{
+  --stage-h:clamp(15rem,min(52vh,62vw),40rem);
+  --stage-h:clamp(15rem,min(52svh,62vw),40rem);
+  position:relative;height:var(--stage-h)}
+@media (max-width:39.99rem){
+  .stage{--stage-h:clamp(15rem,min(50vh,74vw),30rem);--stage-h:clamp(15rem,min(50svh,74vw),30rem)}
+}
+/* The flat logo stands in until the 3D one has drawn, at the size and place of its first, face-on
+   frame (measured from it): 1.295 times the stage's height, or 83% of a phone's width. */
+.stage-flat{position:absolute;left:50%;top:50%;width:min(83%,calc(var(--stage-h) * 1.295));transform:translate(-50%,-57%);pointer-events:none}
+.stage canvas{position:absolute;top:0;bottom:0;left:0;right:0;margin-inline:auto;display:block;width:min(100%,calc(var(--stage-h) * 2.2));height:100%;opacity:0}
+.stage canvas:focus-visible{outline:3px solid var(--yellow);outline-offset:-3px}
+.stage.is-live canvas{opacity:1}
+.stage.is-live .stage-flat{opacity:0}
+@media (prefers-reduced-motion:no-preference){
+  .stage canvas,.stage-flat{transition:opacity .45s ease}
+}
+.stage-hint{display:flex;justify-content:center;align-items:center;gap:.6rem;min-height:1.5rem;margin-top:.75rem;color:var(--steel-3);font-size:var(--fs-small)}
+.stage-hint svg{flex:none;width:1.75rem;height:1rem;color:var(--steel-3)}
+.hero-copy{margin-top:clamp(1rem,3vh,2rem)}
+.hero h1{font-size:var(--fs-h1);line-height:.98;color:var(--steel-1)}
+.hero-sub{max-width:38rem;margin:1.1rem auto 0;color:var(--steel-2);font-size:clamp(1.0625rem,1rem + .35vw,1.25rem);line-height:1.55}
+.hero .actions{justify-content:center;margin-top:clamp(1.5rem,3.5vh,2.25rem)}
+.hero-note{margin-top:1rem;color:var(--steel-3);font-size:var(--fs-small)}
+
+/* ---------- Sections ---------- */
+.section{padding-block:var(--section)}
+.section + .section:not(.dark){border-top:1px solid var(--rule)}
+.dark + .section{border-top:0}
+.lede{margin-top:1.25rem;max-width:36rem;font-size:clamp(1.125rem,1.05rem + .3vw,1.3125rem);line-height:1.55;color:var(--ink-2)}
+.dark .lede{color:var(--steel-2)}
+.prose p + p{margin-top:1rem}
+.prose{max-width:36rem}
+.small{font-size:var(--fs-small);line-height:1.55}
+.space-m{margin-top:1.5rem}
+.space-l{margin-top:1.75rem}
+.lede.flush{margin-top:0}
+.prose .lede + p{margin-top:1.25rem}
+
+/* Two columns: words on the left, what they describe on the right. */
+.split{display:grid;gap:clamp(2rem,5vw,3rem)}
+@media (min-width:64rem){
+  .split{grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:4.5rem;align-items:start}
+  .sticky-head{position:sticky;top:6.5rem}
+  .split-wide-left{grid-template-columns:minmax(0,7fr) minmax(0,5fr)}
+}
+
+/* A list of specifics, ruled like the lines of a form. */
+.lines{list-style:none;margin-top:1.5rem;border-top:1px solid var(--rule)}
+.lines li{padding:.8rem 0 .8rem 1.5rem;border-bottom:1px solid var(--rule);position:relative;line-height:1.5}
+.lines li::before{content:"";position:absolute;left:.15rem;top:1.35rem;width:.55rem;height:.55rem;border:2px solid var(--ink);border-radius:1px}
+.dark .lines{border-top-color:var(--steel-rule)}
+.dark .lines li{border-bottom-color:var(--steel-rule)}
+.dark .lines li::before{border-color:var(--steel-3)}
+
+/* ---------- Paper: a record drawn as the form it replaces ---------- */
+.paper{background:var(--paper);color:var(--ink);border:2px solid var(--ink)}
+.box{font-family:var(--cond);font-weight:700;font-size:.9em;text-transform:uppercase;letter-spacing:.045em;color:var(--ink);white-space:nowrap}
+.printed{font-family:var(--cond);font-weight:700;text-transform:uppercase;letter-spacing:.045em;line-height:1.2;color:var(--ink)}
+table.paper{width:100%;border-collapse:collapse}
+table.paper th,table.paper td{padding:.85rem 1rem;text-align:left;vertical-align:top;border-top:1px solid var(--ink)}
+table.paper thead th{border-top:0;border-bottom:2px solid var(--ink);padding-block:.6rem;font-family:var(--cond);font-weight:700;font-size:.9375rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ink)}
+table.paper tbody tr:first-child > *{border-top:0}
+table.paper tbody th{font-family:var(--cond);font-weight:700;font-size:1.0625rem;text-transform:uppercase;letter-spacing:.045em;line-height:1.25;color:var(--ink)}
+table.paper td{color:var(--ink-2);line-height:1.5}
+table.paper .cite{white-space:nowrap;font-family:var(--cond);font-weight:600;font-size:1.0625rem;letter-spacing:.02em;color:var(--ink);font-variant-numeric:tabular-nums}
+@media (min-width:40rem){
+  table.paper tbody th{width:42%;border-right:1px solid var(--ink)}
+  table.paper thead th:first-child{border-right:1px solid var(--ink)}
+  table.paper.records tbody th{width:auto;font-family:var(--text);font-weight:500;font-size:inherit;text-transform:none;letter-spacing:0;color:var(--ink-2);line-height:1.5}
+  table.paper.records td{width:12rem;border-left:1px solid var(--ink)}
+  table.paper.records thead th:first-child{border-right:0}
+  table.paper.records thead th:last-child{border-left:1px solid var(--ink)}
+}
+/* On a phone a row becomes a block: the printed name over what it holds. */
+@media (max-width:39.99rem){
+  table.paper thead{display:none}
+  table.paper tr{display:block;border-top:1px solid var(--ink)}
+  table.paper tbody tr:first-child{border-top:0}
+  table.paper th,table.paper td{display:block;border-top:0}
+  table.paper tbody th{padding-bottom:.15rem}
+  table.paper td{padding-top:0}
+  table.paper.records tbody th{font-family:var(--text);font-weight:500;font-size:inherit;text-transform:none;letter-spacing:0;color:var(--ink-2);line-height:1.5;padding-bottom:.1rem}
+}
+/* The caption sits on the table like a form's title bar; the table's own top border is the rule under it. */
+table.paper caption{caption-side:top;text-align:left;padding:.6rem 1rem;background:var(--paper);border:2px solid var(--ink);border-bottom:0;font-family:var(--cond);font-weight:700;font-size:1.0625rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ink)}
+
+/* ---------- Phones: screenshots of the app ---------- */
+/* Every phone is drawn at most --phone-w wide, so a row of three, a pair and a single phone match. */
+.shots{display:grid;grid-template-columns:repeat(3,minmax(0,var(--phone-w)));gap:var(--shot-gap);align-items:start}
+.shots-two{grid-template-columns:repeat(2,minmax(0,var(--phone-w)));justify-content:center}
+.shots-one{grid-template-columns:minmax(0,var(--phone-w))}
+.shot figcaption{margin-top:.8rem;font-size:var(--fs-small);line-height:1.45;color:var(--ink-2)}
+.dark .shot figcaption{color:var(--steel-3)}
+.phone{border:clamp(5px,.7vw,7px) solid var(--frame);border-radius:clamp(1.4rem,3vw,2.1rem);background:var(--frame);overflow:hidden}
+.phone img{width:100%;border-radius:clamp(.95rem,2.2vw,1.6rem);background:#f6f7f8}
+.dark .phone{border-color:#2c3036;background:#2c3036;box-shadow:0 0 0 1px #3d424a}
+/* Three phones on a small screen: a row you swipe, with the next one showing at the edge. */
+@media (max-width:43.99rem){
+  .shots-many{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:min(62%,15.5rem);overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;margin-inline:calc(var(--gutter) * -1);padding:0 var(--gutter) .75rem;scroll-padding-inline:var(--gutter);scrollbar-width:thin}
+  .shots-many .shot{scroll-snap-align:start}
+  .shots-many:focus-visible{outline-offset:-3px}
+  .shots-two{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .shots-one{grid-template-columns:minmax(0,15rem)}
+}
+.swipe-note{display:none;margin-top:.25rem;font-size:var(--fs-small);color:var(--ink-2)}
+@media (max-width:43.99rem){.swipe-note{display:block}}
+/* A single phone beside its words, from a tablet up. */
+@media (min-width:44rem) and (max-width:63.99rem){
+  .split-wide-left{grid-template-columns:minmax(0,1fr) minmax(0,var(--phone-w));align-items:start}
+}
+@media (min-width:64rem){
+  .split-wide-left > .shots-one{justify-content:end}
+  .feature .shots-one{justify-content:center}
+}
+
+/* ---------- What it does ---------- */
+.what-grid{display:grid;gap:2.5rem}
+.for{display:grid;gap:2rem;margin-top:clamp(3rem,6vw,4.5rem)}
+.for h3{font-size:1.5rem}
+.for p{margin-top:.6rem;max-width:34rem}
+@media (min-width:48rem){.for{grid-template-columns:repeat(2,minmax(0,1fr));gap:3rem}}
+@media (min-width:64rem){.for{grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:4.5rem;padding-top:2.5rem;border-top:1px solid var(--rule)}}
+
+/* ---------- Features ---------- */
+.feature{padding-top:clamp(2.5rem,5vw,3.5rem);margin-top:clamp(2.5rem,5vw,3.5rem);border-top:2px solid var(--ink)}
+.feature:first-of-type{margin-top:clamp(2.5rem,6vw,4.5rem)}
+.feature .prose > p{margin-top:.9rem}
+.feature h3 + p{margin-top:.9rem}
+.feature .prose h3:not(:first-child){margin-top:2.25rem}
+
+/* ---------- No signal ---------- */
+/* The strip as the app draws it: a dark bar across the top of the screen, not a button. */
+.signal-strip{display:flex;align-items:center;gap:.75rem;margin-top:1.75rem;padding:.8rem 1rem;max-width:34rem;background:var(--frame);color:var(--steel-1);font-weight:500;line-height:1.35;border:1px solid var(--steel-rule)}
+.signal-strip svg{flex:none;width:1.4rem;height:1.4rem}
+
+/* ---------- Inspector ---------- */
+.records-wrap{margin-top:2rem}
+.covers{margin-top:1.5rem;padding:.15rem 0 .15rem 1.15rem;border-left:4px solid var(--ink);max-width:36rem}
+.covers p + p{margin-top:.5rem}
+
+/* ---------- Payroll ---------- */
+.alone{display:grid;grid-template-columns:minmax(0,7.5rem) minmax(0,1fr);gap:1.25rem;align-items:center;padding:1.25rem;border:2px solid var(--ink);background:var(--paper);max-width:34rem}
+@media (max-width:25.99rem){.alone{grid-template-columns:minmax(0,1fr)}.alone .phone{max-width:7.5rem}}
+@media (min-width:64rem){.alone{max-width:none}}
+.alone h3{font-size:1.375rem}
+.alone p{margin-top:.4rem;font-size:var(--fs-small);line-height:1.5}
+.alone .phone{border-width:4px;border-radius:1rem}
+.alone .phone img{border-radius:.75rem}
+@media (min-width:64rem){.payroll-head{align-items:end}}
+
+.timecard{margin-top:1.75rem;max-width:30rem}
+.tc-head{display:flex;justify-content:space-between;gap:1rem;padding:.55rem 1rem;border-bottom:2px solid var(--ink)}
+.tc-head span{font-family:var(--cond);font-weight:700;font-size:.9375rem;text-transform:uppercase;letter-spacing:.06em}
+.tc-head span + span{font-weight:600;color:var(--ink-2)}
+.tc-punches{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--ink)}
+.tc-punches > div{padding:.6rem 1rem .7rem;border-left:1px solid var(--ink)}
+.tc-punches > div:first-child{border-left:0}
+.tc-punches dt,.tc-label{display:block;font-family:var(--cond);font-weight:600;font-size:.875rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2)}
+.tc-punches dd{font-family:var(--cond);font-weight:700;font-size:1.5rem;line-height:1.15;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+@media (max-width:21.99rem){.tc-punches > div{padding-inline:.75rem}.tc-punches dd{font-size:1.25rem}}
+.tc-math{display:flex;align-items:stretch;justify-content:space-between;gap:.5rem;padding:.8rem 1rem 1rem}
+.tc-math p{display:flex;flex-direction:column;justify-content:space-between;gap:.35rem}
+.tc-op{align-self:flex-end}
+.tc-num{font-family:var(--cond);font-weight:700;font-size:clamp(1.75rem,1.4rem + 1.4vw,2.375rem);line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}
+.tc-paid .tc-num{font-size:clamp(2.25rem,1.8rem + 1.8vw,3rem)}
+.tc-op{font-family:var(--cond);font-weight:600;font-size:1.75rem;line-height:1;color:var(--ink-2);padding-bottom:.15rem}
+.timecard figcaption{padding:.7rem 1rem;border-top:1px solid var(--ink);font-size:var(--fs-small);line-height:1.5;color:var(--ink-2)}
+.systems{margin-top:1.75rem}
+.systems td{font-size:1rem}
+
+/* ---------- How a company starts ---------- */
+.steps{list-style:none;display:grid;gap:0;margin-top:clamp(2.5rem,5vw,3.5rem);counter-reset:step}
+.steps li{position:relative;display:grid;grid-template-columns:3rem minmax(0,1fr);column-gap:1rem;padding:1.5rem 0;border-top:1px solid var(--steel-rule)}
+.steps li:last-child{border-bottom:1px solid var(--steel-rule)}
+.step-n{grid-row:1 / span 2;font-family:var(--cond);font-weight:700;font-size:3rem;line-height:.85;color:var(--steel-3);font-variant-numeric:tabular-nums}
+.steps h3{font-size:1.5rem}
+.steps p{margin-top:.4rem;color:var(--steel-2)}
+@media (min-width:56rem){
+  .steps{grid-template-columns:repeat(4,minmax(0,1fr));gap:2rem}
+  .steps li{display:block;padding:1.25rem 0 0;border-top:2px solid var(--steel-3)}
+  .steps li:last-child{border-bottom:0}
+  .step-n{display:block;font-size:3.75rem;margin-bottom:1rem}
+}
+.start-cta{display:flex;flex-wrap:wrap;align-items:center;gap:1rem 1.5rem;margin-top:clamp(2.5rem,5vw,3.5rem)}
+.start-cta p{color:var(--steel-3);font-size:var(--fs-small)}
+
+/* ---------- About ---------- */
+.private{margin-top:clamp(2.5rem,5vw,3rem)}
+.private h3{font-size:1.5rem}
+
+/* ---------- FAQ ---------- */
+.faq-list{border-top:2px solid var(--ink)}
+.faq-list details{border-bottom:1px solid var(--rule)}
+.faq-list summary{display:flex;justify-content:space-between;align-items:center;gap:1.5rem;min-height:3.75rem;padding:1rem 0;cursor:pointer;list-style:none;color:var(--ink);font-family:var(--cond);font-weight:700;font-size:clamp(1.25rem,1.15rem + .4vw,1.5rem);line-height:1.2}
+.faq-list summary::-webkit-details-marker{display:none}
+.faq-list summary::after{content:"+";flex:none;width:1.25rem;text-align:center;font-size:2rem;font-weight:600;line-height:1}
+.faq-list details[open] summary::after{content:"\2212"}
+.faq-list summary:hover{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:.2em}
+.faq-list .answer{padding:0 2.5rem 1.4rem 0;max-width:42rem}
+.faq-list .answer p + p{margin-top:.75rem}
+
+/* ---------- Footer ---------- */
+.foot{padding:clamp(3.5rem,7vw,5rem) 0 2rem;border-top:1px solid #16181b}
+.foot-grid{display:grid;gap:2.5rem}
+.foot-logo{width:min(100%,17rem)}
+.foot-tag{margin-top:1rem;color:var(--steel-2);max-width:22rem}
+.foot nav ul{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,max-content));grid-template-rows:repeat(4,auto);grid-auto-flow:column;gap:0 2rem}
+.foot nav a{display:inline-flex;align-items:center;min-height:2.75rem;color:var(--steel-2);text-decoration:none}
+.foot nav a:hover{color:var(--steel-1);text-decoration:underline}
+.foot-cta{display:flex;flex-direction:column;align-items:flex-start;gap:.75rem}
+.foot-cta p{color:var(--steel-3);font-size:var(--fs-small)}
+.foot-base{margin-top:clamp(2.5rem,5vw,3.5rem);padding-top:1.5rem;border-top:1px solid var(--steel-rule);color:var(--steel-3);font-size:var(--fs-small);display:flex;flex-wrap:wrap;justify-content:space-between;gap:.5rem 2rem}
+@media (min-width:56rem){
+  .foot-grid{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,.8fr);gap:3rem;align-items:start}
+}
+
+@media (prefers-contrast:more){
+  :root{--ink-2:#24282d;--rule:#7d848c;--steel-2:#e2e3e3;--steel-3:#c6c8c8;--steel-rule:#6a6e72}
+}
+@media (forced-colors:active){
+  .button,.paper,.phone{border:2px solid CanvasText}
+  /* The steel logo is made for black: keep its stage black whatever the system colours are. */
+  .stage,.foot-logo,.mark img{forced-color-adjust:none;background:#000}
+}

@@ -16,7 +16,9 @@ Writes, in assets/:
 
 and, for the website in site/:
     brand/minemuster-logo.webp   the lockup, 1600 px wide, for large screens
+    brand/minemuster-logo-1200.webp the lockup, 1200 px wide, for phones at 3x
     brand/minemuster-logo-800.webp  the lockup, 800 px wide, for phones
+    brand/minemuster-mark-header.webp  the mark on black for the header, 228 x 144 (76 x 48 CSS px at 3x)
     brand/og-image.png           the link preview: the lockup on black, 1200 x 630
     apple-touch-icon.png         the mark on black, 180 square, for a phone's home screen
     favicon.png                  the same 48 px mark as the app's
@@ -98,6 +100,12 @@ def silhouette(width):
     return solid.resize((width, round(solid.height * width / solid.width)), Image.LANCZOS)
 
 
+def site_header_mark():
+    """The mark as the site's header shows it: the 180 px home-screen icon drawn 108 CSS px square
+    and seen through a 76 x 48 window, made here at 3x so it is sharp on a phone."""
+    return whole_mark((228, 144), round(820 / 1024 * 108 * 3))
+
+
 def main():
     lock = unscreen(LOCKUP.crop(LOCK_BOX))
     fit(lock, 840).save(os.path.join(ASSETS, 'brand', 'minemuster-logo.webp'), 'WEBP', quality=90, method=6)
@@ -127,7 +135,9 @@ def main():
     # The website.
     os.makedirs(os.path.join(SITE, 'brand'), exist_ok=True)
     fit(lock, 1600).save(os.path.join(SITE, 'brand', 'minemuster-logo.webp'), 'WEBP', quality=86, method=6)
+    fit(lock, 1200).save(os.path.join(SITE, 'brand', 'minemuster-logo-1200.webp'), 'WEBP', quality=87, method=6)
     fit(lock, 800).save(os.path.join(SITE, 'brand', 'minemuster-logo-800.webp'), 'WEBP', quality=88, method=6)
+    site_header_mark().save(os.path.join(SITE, 'brand', 'minemuster-mark-header.webp'), 'WEBP', quality=90, method=6)
     card = Image.new('RGBA', (1200, 630), (0, 0, 0, 255))
     shown = fit(lock, 860)
     card.alpha_composite(shown, ((1200 - shown.width) // 2, (630 - shown.height) // 2))
