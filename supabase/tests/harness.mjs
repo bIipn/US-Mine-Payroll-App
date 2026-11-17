@@ -4,7 +4,8 @@
 // any hosted database.
 //
 // Requests are made the way PostgREST makes them: as the role anon or
-// authenticated, with the signed-in account's id in request.jwt.claim.sub.
+// authenticated, with the signed-in account's id in request.jwt.claim.sub,
+// and, when a test gives them, the request's headers in request.headers.
 //
 // The names in these tests are made up, and the companies are "Test Pit A",
 // "Test Pit B" and so on. The repository is public: keep it that way.
@@ -28,7 +29,8 @@ export async function migrationFiles() {
  * By default the migrations run as PGlite's superuser. On Supabase they run as
  * `postgres`, which is not a superuser, so `owner` applies them as a
  * non-superuser role of that name instead, given what Supabase gives postgres
- * on the database, schema public and auth.users. `extensions` are PGlite
+ * on the database, schema public, auth.users and Vault's decrypted secrets.
+ * `extensions` are PGlite
  * extensions to load, and `before` is SQL run as that owner before the
  * migrations (to put an extension in public, say), so a statement that would
  * need a superuser on Supabase fails here too.
@@ -43,7 +45,9 @@ export async function startDatabase({ owner = null, extensions = {}, before = ''
       grant create on database postgres to ${owner};
       grant usage, create on schema public to ${owner};
       grant usage on schema auth to ${owner};
-      grant select, references on auth.users to ${owner};`);
+      grant select, references on auth.users to ${owner};
+      grant usage on schema vault to ${owner};
+      grant select on vault.decrypted_secrets to ${owner};`);
   }
   const asOwner = owner ? `set role ${owner};\n` : '';
   if (before) await pg.exec(`${asOwner}${before}\nreset role;`);
@@ -104,9 +108,13 @@ class Database {
     return new Session(this, 'authenticated', userId);
   }
 
-  /** Requests with the public key and nobody signed in. */
-  anon() {
-    return new Session(this, 'anon', null);
+  /**
+   * Requests with the public key and nobody signed in. `headers` are the
+   * request's headers as PostgREST hands them over (lower-case names), such
+   * as the x-forwarded-for Supabase's gateway sets.
+   */
+  anon({ headers = null } = {}) {
+    return new Session(this, 'anon', null, headers);
   }
 
   /** The authenticated role with no account id: what every function must refuse. */
@@ -119,16 +127,18 @@ class Database {
     return new Session(this, 'service_role', null);
   }
 
-  run(role, userId, sql, params) {
+  run(role, userId, sql, params, headers = null) {
     assert.ok(ROLES.has(role), `unknown role ${role}`);
     return this.#inTurn(async () => {
       await this.pg.query("select set_config('request.jwt.claim.sub', $1, false)", [userId ?? '']);
+      await this.pg.query("select set_config('request.headers', $1, false)", [headers ? JSON.stringify(headers) : '']);
       await this.pg.exec(`set role ${role}`);
       try {
         return await this.pg.query(sql, params);
       } finally {
         await this.pg.exec('reset role');
         await this.pg.query("select set_config('request.jwt.claim.sub', '', false)");
+        await this.pg.query("select set_config('request.headers', '', false)");
       }
     });
   }
@@ -146,15 +156,16 @@ function namedArguments(args) {
 }
 
 class Session {
-  constructor(db, role, userId) {
+  constructor(db, role, userId, headers = null) {
     this.db = db;
     this.role = role;
     this.userId = userId;
+    this.headers = headers;
   }
 
   /** The whole result: rows, and affectedRows for a write. */
   query(sql, params) {
-    return this.db.run(this.role, this.userId, sql, params);
+    return this.db.run(this.role, this.userId, sql, params, this.headers);
   }
 
   async rows(sql, params) {
@@ -214,8 +225,13 @@ export const LAST_SUPERVISOR = '23514';
 /**
  * A company started by a new account, which is its supervisor, with whoever
  * else is on its roster (not yet claimed). Rows are keyed "First Last".
+ *
+ * A supervisor reads the company's records only while it has MineMuster
+ * (migration 20261117000500), so the company is let in without paying, with a
+ * billing_overrides row, unless `comped` is false: the billing tests start
+ * with none.
  */
-export async function startCompany(db, { name = 'Test Pit A', state = 'CA', timezone = 'America/Los_Angeles', supervisor = ['Sam', 'Ortiz'], roster = [] } = {}) {
+export async function startCompany(db, { name = 'Test Pit A', state = 'CA', timezone = 'America/Los_Angeles', supervisor = ['Sam', 'Ortiz'], roster = [], comped = true } = {}) {
   const owner = await db.newAccount('supervisor');
   const [made] = await db.as(owner).callRows('create_company', {
     name,
@@ -225,6 +241,7 @@ export async function startCompany(db, { name = 'Test Pit A', state = 'CA', time
     last_name: supervisor[1],
     title: null,
   });
+  if (comped) await db.admin("insert into public.billing_overrides (company_id, reason) values ($1, 'A test company')", [made.company_id]);
   const [ownRow] = await db.adminRows('select id from public.roster where company_id = $1 and user_id = $2', [made.company_id, owner]);
   const rows = { [`${supervisor[0]} ${supervisor[1]}`]: ownRow.id };
   for (const person of roster) await addToRoster(db, owner, made.company_id, person, rows);

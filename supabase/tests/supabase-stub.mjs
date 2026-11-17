@@ -52,6 +52,27 @@ as $$
 $$;
 grant execute on function auth.jwt() to anon, authenticated, service_role;
 
+-- Supabase Vault, which every Supabase project has: secrets kept encrypted,
+-- read through the view vault.decrypted_secrets by the project's postgres
+-- role (and so by a security definer function it owns), and by no API role.
+-- PGlite has no Vault, so a table with the view's columns stands in for it.
+-- The migrations only ever read it (stripe_webhook_secret), and the tests put
+-- made-up secrets in it as postgres.
+create schema vault;
+create table vault.decrypted_secrets (
+  id uuid primary key default gen_random_uuid(),
+  name text unique,
+  description text,
+  secret text,
+  decrypted_secret text,
+  key_id uuid,
+  nonce bytea,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+revoke all on schema vault from public;
+revoke all on table vault.decrypted_secrets from public;
+
 -- Supabase's grants on schema public: every table, function and sequence made
 -- there is open to the API roles unless a migration takes it back. The
 -- migrations are tested against this, so a table or function they forget to

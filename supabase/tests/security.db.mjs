@@ -34,17 +34,31 @@ const CALLABLE_BY = {
   push_records: ['authenticated'],
   is_last_supervisor: ['service_role'],
   step_down_everywhere: ['service_role'],
+  // Billing (migration 20261117000500): the webhook applies Stripe's events and
+  // reads its signing secret with the server key; supervisors ask where their
+  // company stands; anyone may send the website's contact form.
+  apply_stripe_event: ['service_role'],
+  stripe_webhook_secret: ['service_role'],
+  company_billing: ['authenticated'],
+  submit_contact_request: ['anon', 'authenticated'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
   // The row level security policies call these as the signed-in account.
   member_company_ids: ['authenticated'],
   supervisor_company_ids: ['authenticated'],
+  // The companies whose records the caller reads: a supervisor's only while
+  // the company has MineMuster (migration 20261117000500).
+  records_open_company_ids: ['authenticated'],
 };
 
 const SECURITY_DEFINER = [
+  'apply_stripe_event',
   'approve_join_request',
+  'billing_standing',
   'companies_before_write',
+  'company_billing',
   'company_by_code',
+  'company_has_access',
   'create_company',
   'deny_join_request',
   'is_last_supervisor',
@@ -56,6 +70,7 @@ const SECURITY_DEFINER = [
   'my_companies',
   'my_join_requests',
   'push_records',
+  'records_open_company_ids',
   'release_roster_claim',
   'roster_after_reactivate',
   'roster_before_delete',
@@ -64,12 +79,19 @@ const SECURITY_DEFINER = [
   'roster_names_look_apart',
   'rotate_join_code',
   'step_down_everywhere',
+  'stripe_webhook_secret',
+  'submit_contact_request',
   'supervisor_company_ids',
 ];
 
 const TABLES = [
+  'billing_overrides',
+  'billing_subscriptions',
   'companies',
   'company_supervisor_guard',
+  'contact_requests',
+  'contact_sender_key',
+  'contact_senders',
   'join_holds',
   'join_requests',
   'notifications',
@@ -78,6 +100,7 @@ const TABLES = [
   'record_usage',
   'records',
   'roster',
+  'stripe_events',
 ];
 
 // What the authenticated role may do: whole-table privileges, and the columns it may insert and update.
@@ -99,6 +122,16 @@ const AUTHENTICATED = {
   // push_records' own counts: each company's seq, each account's sends today.
   record_counters: { table: [], insert: [], update: [] },
   record_usage: { table: [], insert: [], update: [] },
+  // Billing: a company's supervisors read its own rows; only apply_stripe_event
+  // and the owner in the SQL editor write them.
+  billing_subscriptions: { table: ['SELECT'], insert: [], update: [] },
+  billing_overrides: { table: ['SELECT'], insert: [], update: [] },
+  // Kept by apply_stripe_event and submit_contact_request; no API role reads them.
+  stripe_events: { table: [], insert: [], update: [] },
+  contact_requests: { table: [], insert: [], update: [] },
+  // The contact form's limit on each sender, kept by submit_contact_request alone.
+  contact_senders: { table: [], insert: [], update: [] },
+  contact_sender_key: { table: [], insert: [], update: [] },
 };
 const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 
@@ -159,6 +192,8 @@ describe('tables', () => {
     // Writes through the API are allowed only where a policy says who may make them.
     const commands = new Set((await db.adminRows("select tablename || ' ' || cmd as c from pg_policies where schemaname = 'public'")).map((p) => p.c));
     assert.deepEqual([...commands].sort(), [
+      'billing_overrides SELECT',
+      'billing_subscriptions SELECT',
       'companies SELECT',
       'companies UPDATE',
       'join_requests SELECT',
@@ -253,6 +288,10 @@ describe('what Supabase provides', () => {
       [/\b(create|alter|drop)\s+(or\s+replace\s+)?(table|function|view|trigger|index|type|policy|sequence)\s+(if\s+(not\s+)?exists\s+)?auth\./i, 'an auth object'],
       [/\b(alter|drop)\s+function\s+auth\./i, 'auth.uid()'],
       [/\bon\s+(table\s+|function\s+|schema\s+)?auth\b[.\s]/i, 'a grant, policy or trigger on auth'],
+      // Vault is only ever read, by stripe_webhook_secret.
+      [/\b(create|alter|drop)\s+(or\s+replace\s+)?(table|function|view|trigger|index|type|policy|sequence)\s+(if\s+(not\s+)?exists\s+)?vault\./i, 'a Vault object'],
+      [/\bon\s+(table\s+|function\s+|schema\s+|all\s+tables\s+in\s+schema\s+)?vault\b[.\s]/i, 'a grant, policy or trigger on Vault'],
+      [/\b(insert\s+into|update|delete\s+from)\s+vault\./i, 'a write to Vault'],
     ];
     for (const name of await migrationFiles()) {
       const sql = (await readFile(new URL(name, MIGRATIONS), 'utf8')).replace(/--.*$/gm, '');

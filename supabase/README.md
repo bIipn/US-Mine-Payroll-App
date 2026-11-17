@@ -1,10 +1,11 @@
 # MineMuster database
 
-This is step 1 of MineMuster, the version of the crew app that more than one company can use. It is the shared database underneath: the companies, the people on each company's roster, how a person's account joins their company, and who may see and change what. It is written for a Supabase project (PostgreSQL with Supabase Auth and its API). Step 2 adds the records the crew's phones send: see [The records](#the-records).
+This is step 1 of MineMuster, the version of the crew app that more than one company can use. It is the shared database underneath: the companies, the people on each company's roster, how a person's account joins their company, and who may see and change what. It is written for a Supabase project (PostgreSQL with Supabase Auth and its API). Step 2 adds the records the crew's phones send: see [The records](#the-records). Step 3 adds what a company pays through Stripe and the contact form on minemuster.com: see [Billing](#billing) and [The contact form](#the-contact-form).
 
-Nothing here is connected to the app yet, and nothing here has been applied to a Supabase project. Everything is tested on a local database on this machine, and the rules that only show when two requests overlap on a throwaway local PostgreSQL server.
+The app and the office dashboard (https://app.minemuster.com) connect to the MineMuster Supabase project, where these migrations are being applied in order: check which have run (`supabase migration list`, or the project's migrations page) before counting on one. Everything here is tested on a local database on this machine, and the rules that only show when two requests overlap on a throwaway local PostgreSQL server.
 
 - `migrations/` holds the SQL migrations, applied in order of their file names.
+- `functions/` holds the edge functions: `stripe-webhook`, where Stripe sends its events (see [The webhook](#the-webhook)).
 - `tests/` holds the tests, which run the migrations on a fresh local PostgreSQL ([PGlite](https://pglite.dev)) and try every rule as the API roles would.
 - `tools/` holds `make_name_skeleton_table.py`, which makes the table of look-alike characters in `20261116002500_lookalike_names.sql` from Unicode's `confusables.txt` (see [How a typed name is matched](#how-a-typed-name-is-matched)).
 
@@ -12,7 +13,7 @@ The names in the tests and on this page are made up. The repository is public: k
 
 ## The tables
 
-The four tables below are in schema `public`, and row level security is on for every one of them. Two more there hold what the functions keep for themselves, and neither `anon` nor `authenticated` may read or write them: `company_supervisor_guard`, the row the last-supervisor guard writes for each company whose supervisors change (see [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor)), and `join_holds`, the accounts a supervisor has acted on in a company (released, barred, or both, one row for each; see [How someone joins](#how-someone-joins)). The records the phones send are in two more, `records` and `record_history`, and `push_records` keeps its own counts in `record_counters` and `record_usage` (see [The records](#the-records)). None of the ten keeps planner statistics (see [What a count can tell](#what-a-count-can-tell)).
+The four tables below are in schema `public`, and row level security is on for every one of them. Two more there hold what the functions keep for themselves, and neither `anon` nor `authenticated` may read or write them: `company_supervisor_guard`, the row the last-supervisor guard writes for each company whose supervisors change (see [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor)), and `join_holds`, the accounts a supervisor has acted on in a company (released, barred, or both, one row for each; see [How someone joins](#how-someone-joins)). The records the phones send are in two more, `records` and `record_history`, and `push_records` keeps its own counts in `record_counters` and `record_usage` (see [The records](#the-records)). Billing is in `billing_subscriptions`, `billing_overrides` and `stripe_events` (see [Billing](#billing)), and the website's contact form in `contact_requests`, with `contact_senders` and `contact_sender_key` for its limit on each sender (see [The contact form](#the-contact-form)). None of the sixteen keeps planner statistics (see [What a count can tell](#what-a-count-can-tell)).
 
 ### companies
 
@@ -122,15 +123,15 @@ Guessing a code means searching a space of about 1.1 trillion (32^8). Every comp
 
 | | Read | Change |
 |---|---|---|
-| **Nobody signed in** (`anon`) | Nothing in any table. | Nothing. Can call `company_by_code` and no other function. |
+| **Nobody signed in** (`anon`) | Nothing in any table. | Nothing. Can call `company_by_code` and `submit_contact_request` (the website's contact form) and no other function. |
 | **A signed-in account** | Its own join requests, through `my_join_requests()` (the `join_requests` table itself is readable only by a company's supervisors, and the function never returns `decided_by` or `roster_id`). The companies it belongs to, through `my_companies()`. | Can start a company and join one with its code, unless it is an anonymous sign-in. |
 | **An employee** (an active row on the roster) | The company and its whole roster. The records the crew works from, and the shifts and denied punches its own account sent first as an employee (see [Reading records](#reading-records)). | Nothing in the tables. Sends records through `push_records`, as far as [who writes what](#sending-records-push_records) allows. |
-| **A supervisor** (an active row with the supervisor role) | The company, the roster, the company's join requests and notifications. Every record of the company and every version of each. | The company's name, state, time zone, logo and pay period. Rows on the roster: adding, changing (name, title, role, active) and deleting them. Marking notifications read. Approving and denying requests (with or without a bar), lifting a bar, rotating the code and releasing claims, through the functions. Every kind of record, through `push_records`. |
-| **The server key** (`service_role`) | Everything. | Everything, as Supabase gives it, and still within the rules below, including the last-supervisor guard. `TRUNCATE` on the six tables of step 1 is taken away from it, so the key cannot empty a table past the triggers. `records`, `record_history`, `record_counters` and `record_usage` it reads and never writes: only `push_records` does. It alone can call `is_last_supervisor` and `step_down_everywhere`. It is never put in the app. |
+| **A supervisor** (an active row with the supervisor role) | The company, the roster, the company's join requests and notifications. Every record of the company and every version of each, while the company has MineMuster (see [What a supervisor reads](#what-a-supervisor-reads)). The company's billing: its rows in `billing_subscriptions` and `billing_overrides`, and `company_billing`. | The company's name, state, time zone, logo and pay period. Rows on the roster: adding, changing (name, title, role, active) and deleting them. Marking notifications read. Approving and denying requests (with or without a bar), lifting a bar, rotating the code and releasing claims, through the functions. Every kind of record, through `push_records`. |
+| **The server key** (`service_role`) | Everything. | Everything, as Supabase gives it, and still within the rules below, including the last-supervisor guard. `TRUNCATE` on the six tables of step 1 is taken away from it, so the key cannot empty a table past the triggers. `records`, `record_history`, `record_counters` and `record_usage` it reads and never writes: only `push_records` does. `billing_subscriptions`, `billing_overrides` and `contact_requests` it reads and never writes, and `stripe_events`, `contact_senders` and `contact_sender_key` it neither reads nor writes. It alone can call `is_last_supervisor`, `step_down_everywhere`, `apply_stripe_event` and `stripe_webhook_secret`. It is never put in the app; the webhook holds it. |
 
 Membership is always worked out from the roster: `is_member(company_id)` and `is_supervisor(company_id)` look for the signed-in account on an active row, and only while Supabase Auth has neither soft-deleted the account (`deleted_at`) nor banned it (`banned_until` still to come), the same test the last-supervisor guard counts by. So an account that is banned or soft-deleted loses every power at once, in every company, even though an access token it already holds stays valid until it expires: it reads nothing, changes nothing and calls no supervisor function, and `join_company` and `create_company` refuse it (`42501`). The row level security policies compare each row's company with the caller's own companies (`member_company_ids()` and `supervisor_company_ids()`, by the same rule), worked out once per statement.
 
-These are never written through the API, by anyone, supervisors included: `user_id` and `claimed_at` on the roster, a row's `company_id`, a company's join code, id, creator and dates, anything in `join_requests` or `notifications` except `read_at`, and anything in `company_supervisor_guard`, `join_holds`, `records`, `record_history`, `record_counters` or `record_usage`. Column privileges refuse the write outright ("permission denied"), rather than quietly ignoring it.
+These are never written through the API, by anyone, supervisors included: `user_id` and `claimed_at` on the roster, a row's `company_id`, a company's join code, id, creator and dates, anything in `join_requests` or `notifications` except `read_at`, and anything in `company_supervisor_guard`, `join_holds`, `records`, `record_history`, `record_counters`, `record_usage`, `billing_subscriptions`, `billing_overrides`, `stripe_events`, `contact_requests`, `contact_senders` or `contact_sender_key`. Column privileges refuse the write outright ("permission denied"), rather than quietly ignoring it.
 
 A member of one company sees and changes nothing of another, in any table or through any function. A function asked about another company's request, row or company gives the same "not found" error as for an id that does not exist.
 
@@ -152,7 +153,7 @@ The guard holds even when two changes overlap. Before it counts, it writes a row
 
 ## The functions
 
-The app calls these through the API (`supabase.rpc('join_company', { code, first_name, last_name })`). Each one is `security definer` and searches `pg_catalog` first and the temporary schema last (`search_path = pg_catalog, pg_temp`), and refuses when nobody is signed in — and, for `join_company` and `create_company`, when the sign-in is anonymous or the account can no longer sign in — except `company_by_code`, which anyone may call, and `is_member`, `is_supervisor`, `member_company_ids` and `supervisor_company_ids`, which answer false (or no companies) when nobody is signed in because the row level security policies call them and must never raise. `is_last_supervisor` and `step_down_everywhere` are for the server key only.
+The app calls these through the API (`supabase.rpc('join_company', { code, first_name, last_name })`). Each one is `security definer` and searches `pg_catalog` first and the temporary schema last (`search_path = pg_catalog, pg_temp`), and refuses when nobody is signed in — and, for `join_company` and `create_company`, when the sign-in is anonymous or the account can no longer sign in — except `company_by_code` and `submit_contact_request`, which anyone may call, and `is_member`, `is_supervisor`, `member_company_ids` and `supervisor_company_ids`, which answer false (or no companies) when nobody is signed in because the row level security policies call them and must never raise. `is_last_supervisor`, `step_down_everywhere`, `apply_stripe_event` and `stripe_webhook_secret` are for the server key only.
 
 | Function | Who | Gives back |
 |---|---|---|
@@ -169,8 +170,13 @@ The app calls these through the API (`supabase.rpc('join_company', { code, first
 | `my_companies()` | signed in | the companies the caller belongs to: `id`, `name`, `state`, the caller's `role`, and `join_code` where they are a supervisor |
 | `is_member(company_id)`, `is_supervisor(company_id)` | signed in | true or false |
 | `member_company_ids()`, `supervisor_company_ids()` | signed in (the policies call them) | the ids of the caller's own companies, and of those it supervises |
+| `records_open_company_ids()` | signed in (the policies call it) | the ids of the caller's companies whose records it reads: all of them, but one it supervises only while that company has MineMuster |
 | `is_last_supervisor(user_id)` | the server key | true when that account is, in some company, the only active supervisor who can still sign in |
 | `step_down_everywhere(user_id)` | the server key | how many supervisor rows it made employee rows; refused (`23514`) while the account is the last supervisor who can sign in somewhere |
+| `company_billing(p_company_id)` | supervisors of the company | `{access, status, trial_end, current_period_end, cancel_at_period_end, running, had_trial}`; see [Where a company stands](#where-a-company-stands) |
+| `apply_stripe_event(p_event)` | the server key (the webhook) | `{applied: true, ...}` or `{applied: false, reason}`; see [Stripe's events](#stripes-events) |
+| `stripe_webhook_secret()` | the server key (the webhook) | the webhook's signing secret from Vault, or null |
+| `submit_contact_request(p_name, p_company, p_email, p_phone, p_message, p_website)` | anyone | `{ok: true}`; see [The contact form](#the-contact-form) |
 
 A time zone left empty in `create_company` is `America/Los_Angeles`. With `roster_id`, `approve_join_request` leaves the row's own role and title as they are: `role` and `title` are for a new row. With `replace_claim`, a row another account holds is let go of and given to the request's account in one step; that other account is held, as a released claim is.
 
@@ -179,10 +185,11 @@ When a function refuses, the error's code says why:
 | Code | Means |
 |---|---|
 | `42501` | Not signed in, an anonymous sign-in where an account is needed, an account Supabase Auth has banned or soft-deleted, or a write the API does not allow ("permission denied"). |
-| `22023` | Something typed is missing or not allowed: a blank name, a name with a control or invisible character or with letters of more than one alphabet, a name that only looks like one on the roster, a state that is not a postal code, an unknown time zone, a role that is not employee or supervisor, a logo path outside the company's own storage, a call to `push_records` whose changes are not a list or number more than 200. |
+| `22023` | Something typed is missing or not allowed: a blank name, a name with a control or invisible character or with letters of more than one alphabet, a name that only looks like one on the roster, a state that is not a postal code, an unknown time zone, a role that is not employee or supervisor, a logo path outside the company's own storage, a call to `push_records` whose changes are not a list or number more than 200, a contact form field that is missing or too long, or an `apply_stripe_event` call with something that is not a Stripe event. |
 | `P0002` | Not found, or not the caller's to act on. The two look the same on purpose. |
 | `55000` | Not in a state to do that: a request already decided, a row already claimed or taken off, a person already on the roster. |
 | `23514` | It would leave the company without an active supervisor. (Also a check constraint, such as a state that is not one of the 51, or a pay period over 16 KiB as text, over 64 KiB as stored, or holding a number no browser sends.) |
+| `PT429` | The contact form's limits: too many messages from one email address, from one sender, or from everyone in the last hour. PostgREST answers it with HTTP 429. |
 | `40001` | Two changes to the same company's supervisors overlapped at REPEATABLE READ or SERIALIZABLE. Try again. (PostgREST runs at READ COMMITTED, where the second waits and gets `23514` instead.) Also two `push_records` calls from one company at once, at those levels: the second has to try again. |
 
 ## The records
@@ -292,6 +299,7 @@ Through the tables (`supabase.from('records').select()`), by row level security:
 - A supervisor reads every record of the company and every version of each.
 - Any member reads the records the crew works from, `settings`, `employee`, `equipment`, `areaSheet`, `inspection`, `opLog`, `exam` and `mrf`, and every version of them.
 - A member reads the `shift` and `denied` records their own account sent first as an employee, and every version of those, a supervisor's corrections included, and nobody else's. Paid leave is entered by a supervisor, so a member reads none, their own included.
+- A supervisor reads the company's records only while the company has MineMuster (`company_has_access`); without it they read none, not even what the crew reads. What the crew reads does not depend on billing, and nobody's sending ever does. See [What a supervisor reads](#what-a-supervisor-reads).
 - Nobody reads another company's records. anon reads nothing. The server key reads the four tables and writes none.
 
 As every policy here does, the two compare a row's company with the caller's own companies (`member_company_ids()`, and `supervisor_company_ids()` for what a supervisor reads), worked out once per statement, and call no function on each row: a request reads no row of another company, and takes no longer for a company with more records. What a member may not read is filtered from their own company's rows only.
@@ -324,6 +332,197 @@ A company's calls take turns on its `record_counters` row, held until each commi
 - **Removing a version.** Nothing removes one version, a leaked field or a person's data included, short of deleting the company. Who may redact an audit trail, and how that is recorded, is still to be decided.
 - **Phones do not yet show** a `conflict`, a reason in `ignored`, or a `deferred` list; `readPushAnswer` reads `accepted` and `ignored` only.
 
+## Billing
+
+Step 3: what a company pays. MineMuster is $300 a month per company, the whole crew included, with a 14-day free trial. A supervisor starts the trial at a Stripe payment link from the office dashboard: the card is taken there, and Stripe charges it automatically when the trial ends, then every month until the company cancels in Stripe's billing portal. Cancelling stops the next charge, and the company keeps access to the end of the period already paid for. Prices are in US dollars. Stripe keeps the cards, the invoices and the charges; the server keeps only where each company's subscription stands, from what Stripe tells it. The migration is `20261117000500_billing.sql`.
+
+Stripe tells the server through a webhook: the edge function `functions/stripe-webhook` checks that a request really is from Stripe and hands the event to `apply_stripe_event` with the server key (see [The webhook](#the-webhook)). The office dashboard asks `company_billing` where its company stands, and opens its supervisor pages by that answer.
+
+The Stripe account is shared with another business, whose products and events reach the same webhook. Only MineMuster's events change anything:
+
+- A **checkout** is MineMuster's when the checkout session carries the metadata `app` = `minemuster` (Stripe copies a payment link's metadata onto every session it makes) and its `client_reference_id` is the id of a company on this server. The dashboard puts the company's id there when it builds the trial link. That is what ties a subscription to a company.
+- A **subscription event** is MineMuster's when the subscription carries the metadata `app` = `minemuster` (the payment link sets it on the subscriptions it makes), or when it is a subscription a MineMuster checkout already brought in.
+- Anything else is recorded as seen (its id, type and why it changed nothing) and changes nothing. Nothing else about another business is kept.
+- So is every event from Stripe's **test mode** (`livemode` not `true`), whatever it is: a checkout paid with a test card never opens a real company. Test the integration against another Supabase project.
+
+### billing_subscriptions
+
+One row for each MineMuster subscription in Stripe.
+
+| Column | What it is |
+|---|---|
+| `subscription_id` | Stripe's id for it (`sub_...`). The key. |
+| `company_id` | The company its checkout named. Null until that checkout is seen, since Stripe can send the subscription's own events first. Set once: the first link stands. Deleting the company deletes its rows. |
+| `customer_id` | Stripe's customer (`cus_...`). |
+| `status` | Stripe's status: `trialing`, `active`, `past_due`, `canceled`, `unpaid`, `paused`, `incomplete` or `incomplete_expired`. Null while only the checkout has been seen. |
+| `trial_end`, `current_period_end` | When the trial ends (and the first charge is made), and when the period already paid for ends. |
+| `cancel_at_period_end` | The company has cancelled: nothing more is charged, and the subscription ends at `current_period_end`. |
+| `event_at` | Stripe's `created` time of the newest event applied to the status. |
+| `created_at`, `updated_at` | When the row was made and last changed. |
+
+### billing_overrides
+
+A company the owner lets in without paying: a pilot, a friend of the business, a company whose card trouble is being sorted out. One row per company: `reason` (1 to 500 characters, required), `until` (null for good), `created_at`. The company's supervisors can read the row, reason included, so write the reason for them to see.
+
+### stripe_events
+
+Every event the webhook has handed over, MineMuster's or not: `id` (`evt_...`), `type`, `outcome` (`applied`, or why it changed nothing) and `received_at`. An event Stripe delivers twice is applied once. No API role reads it, the server key included. The owner can read it in the table editor to see what Stripe sent and what was done with it.
+
+### Stripe's events
+
+`apply_stripe_event(p_event)` takes one event, already checked against Stripe's signature, and answers what it did:
+
+| Event | What it does |
+|---|---|
+| `checkout.session.completed` | With `mode` = `subscription`, the MineMuster metadata and a `client_reference_id` that is a company here: ties `data.object.subscription` to that company (making the row if the subscription's own events have not yet). A subscription already tied to another company stays with it. |
+| `customer.subscription.created`, `.updated`, `.deleted` | For a MineMuster subscription: sets its status, trial end, period end (`current_period_end` on the subscription in older Stripe API versions, on its first item in newer ones), `cancel_at_period_end` and customer, unless the event is older than the one the subscription is at. |
+| anything else | Nothing. |
+
+Its answer is `{applied: true, type, subscription_id, ...}` when it changed a subscription, or `{applied: false, reason}`:
+
+| Reason | Means |
+|---|---|
+| `duplicate` | The event was handed over before. |
+| `test_mode` | An event from Stripe's test mode (`livemode` is not `true`). Set aside before anything in it is read. |
+| `ignored_type` | Not a kind of event MineMuster uses. |
+| `not_minemuster` | Another business's checkout or subscription. |
+| `not_subscription` | A MineMuster checkout that is not for a subscription. |
+| `no_company` | A MineMuster checkout whose `client_reference_id` is not a company here. Tie it by hand (below). |
+| `no_subscription` | The event names no subscription. |
+| `already_linked` | The subscription is already another company's. |
+| `unknown_status` | A status this migration does not know. Nothing changes; a new migration should learn it. |
+| `no_time` | A subscription event with no `created` time. |
+| `stale` | Older than the event the subscription is at. Stripe does not promise to send events in order. |
+| `ended` | The subscription has ended in Stripe (`canceled`, `incomplete_expired`), which never starts again; only another ending is taken. |
+
+It raises (`22023`) only for something that is not a Stripe event at all (not an object, or no id or type), and never for another business's event, so the webhook answers Stripe 200 and Stripe stops sending it. Times arrive as Unix seconds; one that is not a number between 1970 and the year 3000 is taken as none. Each event runs in one transaction, so a failure leaves nothing half done and Stripe's retry starts clean. Two deliveries of one event at once take turns, and the second finds the first; two events for one subscription at once take turns on its row, and the newer one stands (`billing_races.db.mjs`).
+
+### Where a company stands
+
+`company_billing(p_company_id)` is for the company's supervisors (an account Supabase Auth has banned or soft-deleted is none); anyone else is told there is no such company (`P0002`), as by every supervisor function. It answers:
+
+```json
+{ "access": "trial", "status": "trialing", "trial_end": "2026-12-01T17:00:00+00:00", "current_period_end": "2026-12-01T17:00:00+00:00", "cancel_at_period_end": false, "running": 1, "had_trial": true }
+```
+
+| `access` | When |
+|---|---|
+| `comped` | The company has a `billing_overrides` row with no `until`, or one still to come. |
+| `active` | A subscription is paid up. |
+| `past_due` | A charge failed and Stripe is trying the card again. Still let in. |
+| `trial` | The company's first free trial is running; or a checkout was done in the last hour and its subscription's own status has not come in yet. Checkout completes only once the card is taken, and the next event sets the real status, usually within seconds. |
+| `ended` | Every subscription has ended (`canceled`, `unpaid`, `paused`, `incomplete` or `incomplete_expired`), or the only one still running is a second free trial. |
+| `none` | No subscription, or only a checkout whose subscription never said its status (after that hour). |
+
+**One free trial for each company.** A `trialing` subscription counts only when no other subscription of the company that had a trial was made before it. So starting a trial, cancelling it and starting another gives no second 14 days: the second shows as `ended` with status `trialing`, and opens the dashboard once Stripe charges it at the end of that trial. A company that has had its trial starts again on a payment link with no trial (the dashboard's `RESTART_LINK`, which charges the card at checkout). Two trials started at once (two supervisors, two tabs) count once.
+
+**The subscription it goes by**, whose `status` and dates it gives (when the company is comped too), is the first of: one that is `active`, one that is `past_due`, the first trial, a checkout of the last hour, a second trial; and only when there is none of those, the newest (by `event_at`, then `updated_at`). So a company with a running subscription is never shut out by one that ended, such as a second checkout made by mistake and cancelled, and a checkout someone else made with the company's id (a payment link opened with it) cannot change what a paying company is told.
+
+`running` is how many of the company's subscriptions Stripe will charge again: `trialing`, `active` or `past_due` and not cancelled, and a checkout of the last hour. More than one means the company is charged more than once a month; the dashboard says so. `had_trial` is true when a subscription of the company has had a free trial, the one it goes by included, so a new checkout would get no trial that counts.
+
+The dashboard opens its supervisor pages on `trial`, `active`, `past_due` and `comped`, loads the records only then, and lets the supervisor in without an answer only when the server has no `company_billing` at all (`dashboard/src/lib/billing.ts`). To look for a company charged twice by hand:
+
+```sql
+select company_id, count(*) from public.billing_subscriptions
+where status in ('trialing', 'active', 'past_due') and not cancel_at_period_end
+group by company_id having count(*) > 1;
+```
+
+### What a supervisor reads
+
+What a company pays for is checked on the server, where the dashboard's own code cannot skip it. `company_has_access(company_id)` is true for `comped`, `trial`, `active` and `past_due` (it is `company_billing`'s answer, through `billing_standing`, which no API role calls). A restrictive policy on `records` and on `record_history` (`records_select_paid`, `record_history_select_paid`) lets a row be read only from the caller's `records_open_company_ids()`: every company they belong to, but one they supervise only while it has MineMuster. Like every policy here, it compares the row's company with an array worked out once per statement and calls no function on the row.
+
+- A supervisor of a company without MineMuster reads none of its records, through the table or PostgREST. They still read the company, its roster, its join requests and its billing, so the Billing page works.
+- Sending is never stopped: `push_records` does not look at billing, so a phone never loses a safety record, and they are all there once the company is let in again.
+- What a member who is not a supervisor reads is unchanged. No phone reads records today; whether the crew's reads should stop too is the owner's call, a change to `records_open_company_ids` alone.
+- There is no "billing not set up" exception on the server: billing arrives with this same migration, so wherever `company_has_access` exists, so does billing. A company that already uses the dashboard when this migration is applied reads its records again once it starts its trial, or once the owner adds its `billing_overrides` row (below), which is best done in the same sitting.
+
+### Letting a company in without paying
+
+In the SQL editor, which runs as the owner. Find the company's id first:
+
+```sql
+select id, name, state, created_at from public.companies order by name;
+```
+
+Let it in until a date, or for good with `until` left null:
+
+```sql
+insert into public.billing_overrides (company_id, reason, until)
+values ('<company id>', 'Pilot through the spring', '2027-04-01')
+on conflict (company_id) do update set reason = excluded.reason, until = excluded.until;
+```
+
+End it early with `delete from public.billing_overrides where company_id = '<company id>';`. Once `until` has passed, the row counts for nothing and the company goes by its subscription again.
+
+A checkout that came in with no company (`no_company` in `stripe_events`, say a payment link opened without the dashboard) can be tied by hand once you know whose it is, from the customer in Stripe:
+
+```sql
+update public.billing_subscriptions set company_id = '<company id>'
+where subscription_id = '<sub_...>' and company_id is null;
+```
+
+### The webhook
+
+`functions/stripe-webhook` is a Supabase edge function (Deno), in three files: `index.ts` starts it, `handler.ts` is what it does, and `verify.ts` checks Stripe's signature. They use nothing but Web Crypto and `fetch`: no Stripe SDK and no supabase-js.
+
+1. It takes `POST` only (405 otherwise).
+2. It reads the `Stripe-Signature` header and checks its time before anything else, so a request that is not from Stripe costs no call to the database: 400 for a header that is missing, is not one Stripe sends, or was signed more than 300 seconds from now either way.
+3. The signing secret is the function's `STRIPE_WEBHOOK_SECRET` when that is set, or else what `stripe_webhook_secret()` reads from Supabase Vault, kept for a minute.
+4. It checks the signature as Stripe documents it: each `v1` is the HMAC-SHA256 in hex of `t.body` (the raw bytes Stripe sent), any `v1` may match, compared in constant time. 400 when none does.
+5. It sends the event to `apply_stripe_event` through PostgREST with the server key, and answers Stripe 200 with what that answered, for an event set aside as well, so Stripe stops sending it. When the database cannot take the event (it cannot be reached, refuses the key, or does not have the function yet) it answers 500, and Stripe sends the event again later, for up to three days.
+
+The server key is the `default` entry of `SUPABASE_SECRET_KEYS` (an `sb_secret_...` key, sent as `apikey` only, as Supabase asks), or else the legacy `SUPABASE_SERVICE_ROLE_KEY` (a JWT, sent as `apikey` and as the bearer token). Supabase sets both for its edge functions (Edge Functions, Secrets lists them). The log says what failed and never a secret, a key or an event's body.
+
+**Where the signing secret lives.** In Supabase Vault, under the name `stripe_webhook_secret`, which keeps it encrypted in the database and out of the repository. The owner adds it once, in the SQL editor (or on the dashboard's Vault page):
+
+```sql
+select vault.create_secret('<whsec_... from the Stripe webhook endpoint>', 'stripe_webhook_secret', 'Signs the Stripe events MineMuster takes');
+```
+
+Only `stripe_webhook_secret()` reads it, and only the server key may call that. An edge function secret named `STRIPE_WEBHOOK_SECRET` (Edge Functions, Secrets) works as well and comes first when both are set. To roll the secret in Stripe, keep the old one valid for a while, put the new one in Vault (`select vault.update_secret(id, '<new whsec_...>') from vault.secrets where name = 'stripe_webhook_secret';`) or in the function's secret, and the webhook takes it within a minute. Never put a signing secret, a Stripe key or a server key in the repository.
+
+**Deploying it.** JWT verification has to be off, because Stripe sends no Supabase token; the signature is the check. With the CLI, from the repository root: `supabase functions deploy stripe-webhook --no-verify-jwt`. Through the Supabase MCP server or the dashboard, deploy the three files `index.ts`, `handler.ts` and `verify.ts` with `verify_jwt` off. In Stripe, add a webhook endpoint at `https://<project-ref>.supabase.co/functions/v1/stripe-webhook` for these events only: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Its signing secret is the one to keep in Vault.
+
+**What to check once.** That both payment links (the 14-day trial, and the one with no trial for a company starting again) carry the metadata `app` = `minemuster` and put the same metadata on the subscriptions they make (Stripe's payment link "subscription data"). Without it on the subscription, a subscription event that arrives before its checkout is set aside for good as `not_minemuster`, its cancellation included. Then that a live checkout shows up in `stripe_events` with the outcome `applied` and in `billing_subscriptions` with its company (cancel it in the portal afterwards). An event from Stripe's test mode only ever shows `test_mode` here, so a test card cannot show the whole path; test that against another Supabase project.
+
+`npx tsc -p supabase/functions` type checks the function as Deno runs it (`functions/tsconfig.json`). The app's own `npm run typecheck` leaves `supabase/functions` out, because the files import each other with their `.ts` extension, as Deno needs.
+
+## The contact form
+
+The contact form on minemuster.com sends what a visitor typed to `submit_contact_request(p_name, p_company, p_email, p_phone, p_message, p_website)`, with the publishable key and nobody signed in (`POST /rest/v1/rpc/submit_contact_request` with the six as a JSON object). It answers `{ok: true}`.
+
+- `p_website` is a field people never see. A form that fills it in is a bot: it is answered `{ok: true}` and nothing is kept.
+- A field far over its limit is turned back before anything else is done with it (a name over 1,000 bytes, an email over 1,500, a message over 20,000, a company over 1,000, a phone number over 500), with the hint of that limit. Cleaning costs time for each character, and a refused call counts toward no limit, so a huge request costs the database next to nothing.
+- Each field is trimmed and cleaned of control characters and of characters that show nothing: the same default-ignorable and format characters a name on the roster may not hold (zero-width spaces and joiners, direction marks, overrides and isolates, the soft hyphen, variation selectors, the Hangul and braille fillers, tag characters and the like). The message keeps its line breaks and tabs; the other fields are one line each, with runs of spaces closed up.
+- Then it is checked. A name of 1 to 120 characters, an email address that looks like one (a part before the `@`, a domain with a dot, at most 254 characters), a message of 1 to 4,000 characters, and a company of at most 160 and a phone number of at most 40, both optional.
+- The limits, so that one sender cannot shut the form for everyone and the table cannot be flooded: at most 3 messages from one email address (whatever its capitals) in 24 hours; at most 5 from one sender in an hour, the sender being the network address the request came from (the first entry of `X-Forwarded-For`, as Supabase documents the client's address); and at most 100 from everyone in an hour, a backstop for storage alone. Calls take turns from the counting to the commit, so two at once cannot both slip under a limit (at READ COMMITTED, as PostgREST runs).
+- The sender's address is never kept. `contact_senders` holds a hash of it made with a key of this server's own (`contact_sender_key`, made at random by the migration), so the hashes cannot be turned back into addresses by trying them all, and each row is deleted by the next message once it is an hour old. A call with no such header (the SQL editor, say) counts only toward the other two limits.
+
+When it turns a message back, the error's code and hint say why, and its message can be shown as it is:
+
+| Code | Hint | Message |
+|---|---|---|
+| `22023` | `name_missing` | Type your name. |
+| `22023` | `name_too_long` | Keep your name to 120 characters. |
+| `22023` | `email_invalid` | Type an email address we can write back to. |
+| `22023` | `message_missing` | Type a message. |
+| `22023` | `message_too_long` | Keep the message to 4,000 characters. |
+| `22023` | `company_too_long` | Keep the company name to 160 characters. |
+| `22023` | `phone_too_long` | Keep the phone number to 40 characters. |
+| `PT429` (HTTP 429) | `too_many` | Too many messages. Try again later. |
+
+**Reading them.** What it keeps is in `contact_requests` (`name`, `company`, `email`, `phone`, `message`, `created_at`, `handled`). No API role reads it but the server key, so no visitor reads anyone's message, their own included. The owner reads it in the dashboard's table editor, or in the SQL editor:
+
+```sql
+select created_at, name, company, email, phone, message
+from public.contact_requests where not handled order by created_at;
+
+update public.contact_requests set handled = true where id = '<id>';
+```
+
+Nothing tells the owner when a message arrives; check the table, or add a notification later. What is left: a script that writes a new `X-Forwarded-For` into each request, if Supabase's gateway passes the first entry on as the client sent it, counts as a new sender each time, and so could still fill the 100-an-hour backstop and hold off real messages for that hour. A challenge on the form (Cloudflare Turnstile, checked by a small edge function before the insert) closes that; it needs the site as well as the server. The website's privacy page should say that the server counts messages by the address they came from, keeping only a scrambled form of it for an hour.
+
 ## Running the tests
 
 They need Node 22 or newer, and nothing else: no Supabase account, no Docker, no network once installed.
@@ -334,9 +533,9 @@ npm install
 npm test
 ```
 
-`npm test` runs `node --test *.db.mjs`. Each test file starts a fresh PGlite database. It first makes stand-ins for what every Supabase project already has (`tests/supabase-stub.mjs`): the `auth` schema with `auth.users` (with the `deleted_at` and `banned_until` columns the guard reads), `auth.uid()` and `auth.jwt()`, the roles `anon`, `authenticated` and `service_role`, and Supabase's default grants on schema `public`. It then applies every migration in order and makes its requests the way the API does, as the role `anon` or `authenticated` with the account's id in `request.jwt.claim.sub`. Every test makes its own companies and accounts, so none depends on another. `startDatabase({ owner })` in `tests/harness.mjs` applies the migrations as a non-superuser owner instead, as Supabase's `postgres` is, so a statement that would need a superuser there fails here too.
+`npm test` runs `node --test *.db.mjs`. Each test file starts a fresh PGlite database. It first makes stand-ins for what every Supabase project already has (`tests/supabase-stub.mjs`): the `auth` schema with `auth.users` (with the `deleted_at` and `banned_until` columns the guard reads), `auth.uid()` and `auth.jwt()`, the roles `anon`, `authenticated` and `service_role`, Supabase's default grants on schema `public`, and a table standing in for Vault's `vault.decrypted_secrets` view, which PGlite does not have. It then applies every migration in order and makes its requests the way the API does, as the role `anon` or `authenticated` with the account's id in `request.jwt.claim.sub` (and, where a test gives them, the request's headers in `request.headers`). Every test makes its own companies and accounts, so none depends on another. A company made by `startCompany` is let in without paying (a `billing_overrides` row), since a supervisor reads records only while the company has MineMuster; the billing tests pass `comped: false` to start with none. `startDatabase({ owner })` in `tests/harness.mjs` applies the migrations as a non-superuser owner instead, as Supabase's `postgres` is, so a statement that would need a superuser there fails here too.
 
-There are 328 tests, in about a minute, and 21 more that need a real server (below):
+There are 411 tests, in about a minute, and 26 more that need a real server (below):
 
 | File | What it holds to |
 |---|---|
@@ -358,28 +557,32 @@ There are 328 tests, in about a minute, and 21 more that need a real server (bel
 | `row_reads.db.mjs` | No policy calls a function on each row, a request reads no row of another company, and how long it takes says nothing about another company's size, names or ids |
 | `extension_in_public.db.mjs` | The migrations apply as a non-superuser owner with an extension in `public`, and leave its functions alone |
 | `project_objects_in_public.db.mjs` | The migrations apply over the project's own procedure, aggregate and sign-up trigger function in `public`, and leave them alone, so sign-ups keep working |
-| `anon.db.mjs` | `anon` calls `company_by_code` and nothing else, and reads nothing |
+| `anon.db.mjs` | `anon` calls `company_by_code` and the contact form and nothing else, and reads nothing |
 | `names.db.mjs` | Name matching, against `findOnRoster` itself, Greek names in capitals included; one `todo` test shows what `roster.ts` still has to fold the same way |
 | `notifications.db.mjs` | One for each join and new request, seen by that company's supervisors only |
-| `security.db.mjs` | `search_path` (pg_catalog first, pg_temp last), EXECUTE grants, row level security, each role's privileges, no planner statistics on any column, and that the migrations leave Supabase's own schema and roles alone |
+| `security.db.mjs` | `search_path` (pg_catalog first, pg_temp last), EXECUTE grants, row level security, each role's privileges, no planner statistics on any column, and that the migrations leave Supabase's own schema and roles alone and only ever read Vault |
 | `records.db.mjs` | Sending a record and reading it back, sending it twice, who may write each kind (`supervisor_only`, `not_yours`), private fields, deleting, conflicts, malformed changes and the size limit, who reads what in each company, a history nobody changes or removes, and `my_companies` |
+| `billing.db.mjs` | Stripe's events: only MineMuster's change anything, another business's checkouts and subscriptions change nothing, an event delivered twice is applied once, a checkout ties a subscription to an existing company once, an older event never overwrites a newer one and an ended subscription stays ended, odd values never raise; `company_billing` from trial to active to past due to ended, comped with and without `until`, a running subscription before one that ended; one free trial for each company, two trials at once counted once and said to be running, a checkout with no status a trial for an hour only, another person's checkout changing nothing a paying company is told, a comped company told of a subscription still charged; Stripe's test mode set aside; a supervisor reads the records only while the company has MineMuster, the crew as before, and phones send either way; who reads the billing tables and calls the functions; the signing secret from Vault |
+| `billing_races.db.mjs` | Needs a real server: the same Stripe event delivered twice at once is applied once, two events for one subscription at once keep the newer, two contact messages at once cannot both slip under a limit |
+| `contact.db.mjs` | The contact form: kept for anyone, nothing kept for a bot, fields cleaned of every invisible character, each refusal with its hint, input far over a limit turned back before any cleaning, the limits per email address, per sender and per hour, one sender unable to shut the form for everyone, only a keyed hash of the sender kept and only for an hour, and nobody reads the tables through the API |
+| `stripe_webhook.db.mjs` | The edge function under Node: the signature checked against Node's own HMAC, as Stripe documents it (raw bytes, any `v1`, the 300-second tolerance, malformed headers); the handler's answers (405, 400, 500 and 200), which key it sends and how, the secret from Vault kept for a minute; and a signed request all the way to `company_billing` on a local database |
 | `record_rules.db.mjs` | A stale phone does not undo a supervisor's correction, deletion or date fixed; copies of the fleet and settings are set aside; what an employee may change in each kind; what an account sent as a supervisor; resent batches; one bad change does not stop the rest; huge numbers, size, duplicates, the per-call and per-day bounds, and the pay period's size; private fields at any depth; reading with no function called on each row; pulling by `seq` |
 
 `names.db.mjs` loads `src/domain/roster.ts` directly (Node strips its types), and Node prints one warning about the module type when it does. That warning is expected. If the file ever cannot be loaded, that one test is skipped and says why.
 
-The tests run on PGlite's PostgreSQL 18. One local database is one session, so two transactions at the same instant cannot be acted out in PGlite. `races.db.mjs` and `record_races.db.mjs` act them out on a real PostgreSQL server instead, and are skipped (saying why) unless `MINEMUSTER_TEST_DATABASE_URL` names one: a throwaway PostgreSQL 15 or newer server, as a superuser that may create databases and roles. Each file makes its own database there, one at a time (they take an advisory lock while they make it and, on a new server, the API roles), and drops it at the end. Never point it at a Supabase project or at any database whose contents matter.
+The tests run on PGlite's PostgreSQL 18. One local database is one session, so two transactions at the same instant cannot be acted out in PGlite. `races.db.mjs`, `record_races.db.mjs` and `billing_races.db.mjs` act them out on a real PostgreSQL server instead, and are skipped (saying why) unless `MINEMUSTER_TEST_DATABASE_URL` names one: a throwaway PostgreSQL 15 or newer server, as a superuser that may create databases and roles. Each file makes its own database there, one at a time (they take an advisory lock while they make it and, on a new server, the API roles), and drops it at the end. Never point it at a Supabase project or at any database whose contents matter.
 
 ```bash
 MINEMUSTER_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55461/postgres npm test
 ```
 
-They were last run that way on PostgreSQL 16. In PGlite, `concurrency_guard.db.mjs` reads from the catalog that the guard writes its row and that approving and denying take the per-account lock first.
+They were last run that way on PostgreSQL 16, all three files. In PGlite, `concurrency_guard.db.mjs` reads from the catalog that the guard writes its row and that approving and denying take the per-account lock first.
 
 The app's own `npm test` (Jest) does not pick these files up, because they are named `*.db.mjs`. The app's `npm run typecheck` reads them as plain JavaScript but does not check them. The server tests use the `pg` client, pinned in `tests/package.json`.
 
 ## Applying the migrations to a Supabase project
 
-Not done yet, and not to be done from a test. When the project exists:
+Being done now for the MineMuster project. Never from a test:
 
 1. Apply the files in `migrations/`, in order, once each, to a project on PostgreSQL 15 or newer. New Supabase projects are; `select version();` in the SQL editor shows what an older one runs. The migrations expect what Supabase already provides (the `auth` schema, `auth.users` with its `deleted_at` and `banned_until` columns, `auth.uid()`, `auth.jwt()` and the roles), and they neither create nor change any of it. An extension already in `public` is left alone too. Do not apply anything from `tests/`.
    - With the [Supabase CLI](https://supabase.com/docs/guides/cli), from the repository root: `supabase link --project-ref <project-ref>`, then `supabase db push`. The CLI records which migrations have run, so a later `supabase db push` applies only new ones; `supabase migration list` shows where things stand. (`supabase init` first if the CLI asks for a `supabase/config.toml`.)
@@ -389,6 +592,7 @@ Not done yet, and not to be done from a test. When the project exists:
 3. Turn on the sign-in providers in Supabase Auth. The database needs nothing more: it reads the account from `auth.uid()`. If anonymous sign-ins are turned on, `join_company` and `create_company` refuse them (they read `is_anonymous` from `auth.jwt()`), so a throwaway account cannot claim rows or leave requests; still, leaving anonymous sign-ins off keeps that surface closed entirely.
 4. Any server code that soft-deletes or bans accounts calls `step_down_everywhere(user_id)` first, and bans only once it has returned, as [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor) says.
 5. Keep PostgREST's `db-plan-enabled` off (see [What a count can tell](#what-a-count-can-tell)).
+6. For billing (`20261117000500`): keep the webhook's signing secret in Vault as `stripe_webhook_secret`, deploy `functions/stripe-webhook` with JWT verification off, and point a Stripe webhook endpoint at it for the four events it uses, as [The webhook](#the-webhook) says. The Security Advisor may point out `stripe_events` and `contact_requests` as tables with row level security on and no policy, and `submit_contact_request` as callable by `anon`: on purpose, as above.
 
 ### Adding to it later
 

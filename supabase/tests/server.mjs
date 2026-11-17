@@ -93,18 +93,20 @@ class ServerDatabase {
 
   /**
    * An API request in progress: its own connection and transaction, at the
-   * given isolation level, as the authenticated role with this account's id.
+   * given isolation level, as the authenticated role with this account's id
+   * (or as `role`: anon, or service_role for the server key, with no account).
    * PostgREST's first statement in each transaction sets the claims, and at
    * REPEATABLE READ or SERIALIZABLE that statement fixes the snapshot.
    */
-  async request(account, isolation = 'read committed') {
+  async request(account, isolation = 'read committed', role = 'authenticated') {
     assert.match(isolation, /^(read committed|repeatable read|serializable)$/);
+    assert.match(role, /^(anon|authenticated|service_role)$/);
     const client = new pg.Client({ connectionString: urlFor(this.name) });
     await client.connect();
     this.open.add(client);
     await client.query(`begin isolation level ${isolation}`);
-    await client.query('set local role authenticated');
-    await client.query("select set_config('request.jwt.claim.sub', $1, true)", [account]);
+    await client.query(`set local role ${role}`);
+    await client.query("select set_config('request.jwt.claim.sub', $1, true)", [account ?? '']);
     const [{ pid }] = (await client.query('select pg_backend_pid() as pid')).rows;
     return new Request(this, client, pid);
   }
