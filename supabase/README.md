@@ -1,17 +1,18 @@
 # MineMuster database
 
-This is step 1 of MineMuster, the version of the crew app that more than one company can use. It is the shared database underneath: the companies, the people on each company's roster, how a person's account joins their company, and who may see and change what. It is written for a Supabase project (PostgreSQL with Supabase Auth and its API).
+This is step 1 of MineMuster, the version of the crew app that more than one company can use. It is the shared database underneath: the companies, the people on each company's roster, how a person's account joins their company, and who may see and change what. It is written for a Supabase project (PostgreSQL with Supabase Auth and its API). Step 2 adds the records the crew's phones send: see [The records](#the-records).
 
-Nothing here is connected to the app yet, and nothing here has been applied to a Supabase project. Everything is tested on a local database on this machine, and the two rules that only show when two requests overlap on a throwaway local PostgreSQL server.
+Nothing here is connected to the app yet, and nothing here has been applied to a Supabase project. Everything is tested on a local database on this machine, and the rules that only show when two requests overlap on a throwaway local PostgreSQL server.
 
 - `migrations/` holds the SQL migrations, applied in order of their file names.
 - `tests/` holds the tests, which run the migrations on a fresh local PostgreSQL ([PGlite](https://pglite.dev)) and try every rule as the API roles would.
+- `tools/` holds `make_name_skeleton_table.py`, which makes the table of look-alike characters in `20261116002500_lookalike_names.sql` from Unicode's `confusables.txt` (see [How a typed name is matched](#how-a-typed-name-is-matched)).
 
 The names in the tests and on this page are made up. The repository is public: keep it that way.
 
 ## The tables
 
-The four tables below are in schema `public`, and row level security is on for every one of them. Two more there hold what the functions keep for themselves and are granted to no API role: `company_supervisor_guard`, the row the last-supervisor guard writes for each company whose supervisors change (see [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor)), and `join_holds`, the accounts a supervisor has acted on in a company (released or barred; see [How someone joins](#how-someone-joins)). None of the six keeps planner statistics (see [What a count can tell](#what-a-count-can-tell)).
+The four tables below are in schema `public`, and row level security is on for every one of them. Two more there hold what the functions keep for themselves, and neither `anon` nor `authenticated` may read or write them: `company_supervisor_guard`, the row the last-supervisor guard writes for each company whose supervisors change (see [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor)), and `join_holds`, the accounts a supervisor has acted on in a company (released, barred, or both, one row for each; see [How someone joins](#how-someone-joins)). The records the phones send are in two more, `records` and `record_history`, and `push_records` keeps its own counts in `record_counters` and `record_usage` (see [The records](#the-records)). None of the ten keeps planner statistics (see [What a count can tell](#what-a-count-can-tell)).
 
 ### companies
 
@@ -81,16 +82,17 @@ What a company's supervisors are told: `joined` when someone joins by claiming t
 | `no_company` | No company has that code. Nothing is recorded. | Ask them to check the code. |
 | `already_member` | Their account already holds an active row there. `role` says which. | Open the company. |
 | `denied` | A supervisor denied this account with a bar. Nothing is recorded, and no notification is sent. | Tell them a supervisor has turned the request down, and to speak to one. |
+| (refused, `22023`) | The name only looks like a name on the roster: no row of the company is it or fits it, but one does once both are read for the characters they look like (see [How a typed name is matched](#how-a-typed-name-is-matched)). Nothing is recorded. | Ask for the name the way it is written on the roster. |
 | `joined` | The name is exactly one active, unclaimed **employee** row. It is now theirs, `role` says which, and the supervisors get a `joined` notification. Any request of theirs still pending there is settled as `withdrawn`. A supervisor row is never claimed this way; it becomes a `pending` request instead, and so does any name typed by an account that was taken off the roster or whose claim was released. | Open the company. |
 | `ambiguous` | The name only loosely fits several rows and none exactly, so typing the whole name as it is on the roster would settle it. Nothing is recorded. | Ask for the name the way it is on the roster. |
 | `pending` | A request is waiting for a supervisor. `reason` is `not_on_roster`, `already_claimed`, `supervisor_row` (the row it fits is a supervisor row), `removed` (the caller was taken off this roster), `released` (a supervisor released the caller's claim, or deleted the caller's row), or `ambiguous` (the name is written the same for several people). The supervisors get a `join_request` notification. Trying again while it waits returns the same request and adds nothing. | Tell them a supervisor will let them in. |
 
 Every answer but `no_company` carries `company_name`.
 
-5. **A supervisor decides the request.** `approve_join_request` either puts the person on a row already on the roster (`roster_id`, which must be active and unclaimed, unless `replace_claim` is given; see step 6) or makes a new row from the name on the request, with the given `role` and `title`. `deny_join_request` closes it; with `bar`, it also turns the account away from the company from then on (`join_company` answers `denied` and records nothing) until a supervisor calls `lift_join_bar` with any of that account's requests. A bar holds in that company only. A request is decided once.
+5. **A supervisor decides the request.** `approve_join_request` either puts the person on a row already on the roster (`roster_id`, which must be active and unclaimed, unless `replace_claim` is given; see step 6) or makes a new row from the name on the request, with the given `role` and `title`. `deny_join_request` closes it; with `bar`, it also turns the account away from the company from then on (`join_company` answers `denied` and records nothing) until a supervisor calls `lift_join_bar` with any of that account's requests. A bar holds in that company only, and is kept apart from a release (step 6): lifting the bar leaves an account whose claim was released still held, so it may ask again but still takes no row by typing a name. A request is decided once.
 6. **When the wrong account has a row** (someone typed a coworker's name), the simplest fix is one step: approve the right person's request onto that row with `replace_claim`, which lets go of the wrong account and gives the row to the right one in the same transaction, so nobody with the code can take it in between. A supervisor can also call `release_roster_claim` on the row; the right person can then join by typing their name if it is an employee row, or a supervisor approves their request onto it. Either way the account the row was taken from is held: it can no longer take any row by typing a name, and typing one leaves a `released` request. The same goes for an account whose row a supervisor deletes. Approving one of its requests lets it in and lifts the hold. A released **supervisor** row is never re-claimed by a typed name either: typing it leaves a request to approve.
 
-Claiming locks the row and takes it only while it is still unclaimed, so two people can never claim the same row. The one who comes second gets a `pending` request with reason `already_claimed`. Calls by one account to one company take turns, with each other and with a supervisor approving or denying that account's request, so someone who types a name while their request is being approved is told `already_member`.
+Claiming locks the row and takes it only while it is still unclaimed, so two people can never claim the same row. The one who comes second gets a `pending` request with reason `already_claimed`. Once the row is locked the name is matched again, so a row a supervisor renames while its old name is being typed is not handed out under a name nobody typed. Calls by one account to one company take turns, with each other and with a supervisor approving or denying that account's request, so someone who types a name while their request is being approved is told `already_member`. They also take turns with a supervisor's change to the caller's own row in that company (releasing it, deleting it, handing it to someone else, taking the person back): `join_company` locks that row before it reads anything about the caller, so it sees such a change whole, never half of it.
 
 A person who was taken off the roster (their row made inactive) is not let back in by themselves: typing their name — or anyone's — leaves a `removed` request, so a supervisor decides. Releasing or deleting their old row does not change that: they are held, and their requests say `released`. Approving it puts them on the given row (or a new one) and lets go of their old inactive row, because an account holds one row per company. To take someone back on their old row instead, a supervisor makes that row active again; the request they left while they were off is then settled as `withdrawn`, so it cannot be approved after a later removal.
 
@@ -101,9 +103,10 @@ These are the same rules as `findOnRoster` in `src/domain/roster.ts`. The tests 
 - A name typed exactly as it is on the roster is that person. It is composed first (Unicode NFC, so an accent typed as a separate mark is the same letter), spaces at either end are trimmed, runs of spaces closed up and capitals ignored. A capital I with a dot counts as I, and a final sigma as the sigma it is.
 - Otherwise the last names have to agree, give or take a suffix (Jr, Sr, II, III, IV, V), and every word of the typed first name has to be one of the words of the roster's first name. So `Riley` finds `Riley J Quinn`, and `Buck` or `Lee` finds `Lee "Buck" Vance III`. Words are compared in lower case, with quote marks (straight or curly), full stops, commas and hyphens taken out.
 - A typed first name made only of single letters, such as `J`, is not a name.
-- Only active rows are matched and claimed. The server looks for the exact match over every row of the company first, active or not: an exact name on an *inactive* row still shadows the looser fallback, so typing a removed person's name never stands in for a different, still-active person. (The app only ever matches active rows; this is a server-side guard the app cannot reach.)
+- Only active rows are matched and claimed. The server looks for the exact match over every row of the company first, active or not, and runs the looser fallback only when no row is the name exactly and no *inactive* row fits it either: so typing a removed person's name, exactly or the looser way (`Riley J.` for `Riley J`, a suffix left off), never stands in for a different, still-active person, and leaves a request instead. (The app only ever matches active rows; this is a server-side guard the app cannot reach.)
 - When a name is typed exactly as one row, the rows it only fits do not count: `Lee Park` is Lee Park even with Lee Roy Park on the roster. When it fits several rows and none exactly (`Roy Park` with Lee Roy Park and Roy "Lee" Park), it is ambiguous. When several rows are written the *same* way, so no typing can single one out, `join_company` leaves an `ambiguous` request for a supervisor instead of recording nothing.
-- A name may not hold a control character or an invisible one: any of Unicode's default-ignorable characters (a zero-width space, a bidi override, a soft hyphen, a variation selector, a tag character, a Hangul filler, ...) or another format character. Nor may a name, first and last together, mix letters of the Latin, Greek and Cyrillic alphabets, which have look-alikes of each other; a name wholly in one of them is fine. Such a name is refused (`22023`), so a request cannot pose as a claimed coworker's name with a hidden or look-alike character in it. These rules hold for typed names, roster names and titles (and hidden characters for company names), and are checked when a name is written, so a rule made stricter later never blocks other changes to an older row. Look-alikes from other scripts remain possible, so the app should show a supervisor each request's `reason` and the claimed row it resembles.
+- A name may not hold a control character or an invisible one: any of Unicode's default-ignorable characters (a zero-width space, a bidi override, a soft hyphen, a variation selector, a tag character, a Hangul filler, ...) or another format character. Nor may a name, first and last together, mix letters of the Latin, Greek and Cyrillic alphabets, which have look-alikes of each other; a name wholly in one of them is fine. Such a name is refused (`22023`), so a request cannot pose as a claimed coworker's name with a hidden or look-alike character in it. These rules hold for typed names, roster names and titles (and hidden characters for company names), and are checked when a name is written, so a rule made stricter later never blocks other changes to an older row.
+- A name that only *looks* like a name on the roster is refused too (`22023`), whatever alphabets it is written in: `Joe Cox` written wholly in Cyrillic look-alikes, a small capital O or a Roman numeral fifty among Latin letters, a mathematical or fullwidth letter, a capital I for a small l, `rn` for `m`, an Armenian or Cherokee look-alike. Names are compared by what they look like (`name_skeleton`, after Unicode's confusables, UTS #39): compatibility forms folded (NFKC), every character Unicode lists as looking like a Latin letter, a quote mark, an apostrophe, a hyphen, a full stop or a comma read as it, `rn` read as `m`, and then capitals ignored, keeping a capital L apart from the small l that I, 1 and | look like (so `Lan` is not `Ian`). `join_company` refuses a typed name that no row of the company, active or not, is or fits, but that one is or fits once both are read that way; nothing is recorded. The roster refuses a name, when it is written, that looks the same as another row of the company without being written the same, so approving such a request cannot put a second row on the roster that reads the same. Two rows written exactly the same stay allowed. Two different people whose names only look alike (`Arnie` and `Amie`, say) are told apart on the roster some other way, such as a middle initial. The table of look-alike characters is made from Unicode's `confusables.txt` by `tools/make_name_skeleton_table.py` (`python3 -I tools/make_name_skeleton_table.py confusables.txt`) and is never edited by hand: a new table goes into a new migration that replaces `name_skeleton`. A look-alike Unicode does not list remains possible, so the app should still show a supervisor each request's `reason`.
 
 ### What the join code does and does not protect
 
@@ -120,32 +123,36 @@ Guessing a code means searching a space of about 1.1 trillion (32^8). Every comp
 | | Read | Change |
 |---|---|---|
 | **Nobody signed in** (`anon`) | Nothing in any table. | Nothing. Can call `company_by_code` and no other function. |
-| **A signed-in account** | Its own join requests, through `my_join_requests()` (the `join_requests` table itself is readable only by a company's supervisors, and the function never returns `decided_by` or `roster_id`). | Can start a company and join one with its code, unless it is an anonymous sign-in. |
-| **An employee** (an active row on the roster) | The company and its whole roster. | Nothing in the tables. |
-| **A supervisor** (an active row with the supervisor role) | The company, the roster, the company's join requests and notifications. | The company's name, state, time zone, logo and pay period. Rows on the roster: adding, changing (name, title, role, active) and deleting them. Marking notifications read. Approving and denying requests, rotating the code and releasing claims, through the functions. |
-| **The server key** (`service_role`) | Everything. | Everything, as Supabase gives it, and still within the rules below, including the last-supervisor guard. `TRUNCATE` on all six tables is taken away from it, so the key cannot empty a table past the triggers. It alone can call `is_last_supervisor`. It is never put in the app. |
+| **A signed-in account** | Its own join requests, through `my_join_requests()` (the `join_requests` table itself is readable only by a company's supervisors, and the function never returns `decided_by` or `roster_id`). The companies it belongs to, through `my_companies()`. | Can start a company and join one with its code, unless it is an anonymous sign-in. |
+| **An employee** (an active row on the roster) | The company and its whole roster. The records the crew works from, and the shifts and denied punches its own account sent first as an employee (see [Reading records](#reading-records)). | Nothing in the tables. Sends records through `push_records`, as far as [who writes what](#sending-records-push_records) allows. |
+| **A supervisor** (an active row with the supervisor role) | The company, the roster, the company's join requests and notifications. Every record of the company and every version of each. | The company's name, state, time zone, logo and pay period. Rows on the roster: adding, changing (name, title, role, active) and deleting them. Marking notifications read. Approving and denying requests (with or without a bar), lifting a bar, rotating the code and releasing claims, through the functions. Every kind of record, through `push_records`. |
+| **The server key** (`service_role`) | Everything. | Everything, as Supabase gives it, and still within the rules below, including the last-supervisor guard. `TRUNCATE` on the six tables of step 1 is taken away from it, so the key cannot empty a table past the triggers. `records`, `record_history`, `record_counters` and `record_usage` it reads and never writes: only `push_records` does. It alone can call `is_last_supervisor` and `step_down_everywhere`. It is never put in the app. |
 
-Membership is always worked out from the roster: `is_member(company_id)` and `is_supervisor(company_id)` look for the signed-in account on an active row. The row level security policies use them.
+Membership is always worked out from the roster: `is_member(company_id)` and `is_supervisor(company_id)` look for the signed-in account on an active row, and only while Supabase Auth has neither soft-deleted the account (`deleted_at`) nor banned it (`banned_until` still to come), the same test the last-supervisor guard counts by. So an account that is banned or soft-deleted loses every power at once, in every company, even though an access token it already holds stays valid until it expires: it reads nothing, changes nothing and calls no supervisor function, and `join_company` and `create_company` refuse it (`42501`). The row level security policies compare each row's company with the caller's own companies (`member_company_ids()` and `supervisor_company_ids()`, by the same rule), worked out once per statement.
 
-These are never written through the API, by anyone, supervisors included: `user_id` and `claimed_at` on the roster, a row's `company_id`, a company's join code, id, creator and dates, and anything in `join_requests` or `notifications` except `read_at`. Column privileges refuse the write outright ("permission denied"), rather than quietly ignoring it.
+These are never written through the API, by anyone, supervisors included: `user_id` and `claimed_at` on the roster, a row's `company_id`, a company's join code, id, creator and dates, anything in `join_requests` or `notifications` except `read_at`, and anything in `company_supervisor_guard`, `join_holds`, `records`, `record_history`, `record_counters` or `record_usage`. Column privileges refuse the write outright ("permission denied"), rather than quietly ignoring it.
 
 A member of one company sees and changes nothing of another, in any table or through any function. A function asked about another company's request, row or company gives the same "not found" error as for an id that does not exist.
 
 ### What a count can tell
 
-Row level security hides rows, not the planner's statistics, and PostgREST answers a request made with `Prefer: count=planned` (supabase-js: `select(..., { count: 'planned' })`) with the planner's row estimate for the caller's own query. With ordinary statistics that estimate is worked out from every company's rows: it would tell a real company id from a made-up one and roughly how many people it has, confirm that a surname is on another company's roster, and give up other companies' ids to anyone who bisects `company_id < X`. So no column of any table here keeps statistics (`set statistics 0`, migration `20261116002200`), and every estimate is the planner's fixed default. What an estimate still reflects is a table's total number of rows across all companies, never one company's. Statistics already gathered survive turning them off, which is why this lands with the tables, before they hold data.
+Row level security hides rows, not the planner's statistics, and PostgREST answers a request made with `Prefer: count=planned` (supabase-js: `select(..., { count: 'planned' })`) with the planner's row estimate for the caller's own query. With ordinary statistics that estimate is worked out from every company's rows: it would tell a real company id from a made-up one and roughly how many people it has, confirm that a surname is on another company's roster, and give up other companies' ids to anyone who bisects `company_id < X`. So no column of any table here keeps statistics (`set statistics 0`, migration `20261116002200`, and `20261117000100` for the records), and every estimate is the planner's fixed default. What an estimate still reflects is a table's total number of rows across all companies, never one company's. Statistics already gathered survive turning them off, which is why this lands with the tables, before they hold data.
+
+Nor does how long a request takes depend on another company's rows. A policy that called a function on each row it met (`is_member(company_id)`) read every company's rows for a request with no filter of its own, and took longer the more hidden rows fit the caller's filter: response times told a real company id from a made-up one and roughly how many people it has, confirmed a surname on another company's roster, and gave up the leading digits of other companies' ids to anyone who bisected `company_id < X`. Each policy is now a comparison of the row's company with the caller's own companies, worked out once per statement (`company_id = any ((select public.member_company_ids())::uuid[])`, migration `20261116002300`). PostgreSQL uses it as an index condition, so rows of other companies are not read at all (`row_reads.db.mjs` checks the plans and the times). What remains is small: a filter on another indexed column, such as `companies?created_by=eq.<account>`, can make the scan fetch the few rows that match it and drop them by that plain comparison, a matter of microseconds rather than a function call and a roster lookup for each.
+
+PostgREST can also be set to hand back the plan of any request (its `db-plan-enabled` setting, off unless turned on). Keep it off in production: with it, `Rows Removed by Filter` in a plan counts rows the caller cannot see, such as another account's companies through that `created_by` index.
 
 ### A company always keeps a supervisor
 
 Every company keeps at least one active supervisor whose account can still sign in, so someone can always let people in. An account counts while it is on the row and Supabase Auth has neither soft-deleted it (`deleted_at`) nor banned it (`banned_until` still to come). Whatever would take the last one away is refused, by a trigger on the roster as well as in the functions: a role change, taking the row off the roster, deleting it, releasing its claim, handing it to someone else, or deleting the supervisor's account. To step down, the last supervisor makes someone else a supervisor first. Deleting the whole company is allowed, and takes its roster, requests, notifications and holds with it.
 
-A soft delete or a ban is a change to Supabase's own `auth.users`, which these migrations never put a trigger on, so the database cannot refuse it. **The server must not soft-delete or ban an account while `is_last_supervisor(user_id)` is true for it**: it makes someone else a supervisor first. A hard delete (`auth.admin.deleteUser(id)`) is refused by the guard already. Once a supervisor's account is soft-deleted or banned it stops counting, so the other supervisors cannot step down past it.
+A soft delete or a ban is a change to Supabase's own `auth.users`, which these migrations never put a trigger on, so the database cannot refuse it. And it is a Supabase Auth call, outside the database's transaction, so checking `is_last_supervisor(user_id)` and then banning does not hold when two such requests overlap: each check sees the other supervisor still there, and both bans go through. **The server steps an account down first, with `step_down_everywhere(user_id)`, and bans or soft-deletes it only once that has returned.** It makes the account an employee on every active supervisor row it holds, in one statement, so the guard refuses it (`23514`, nothing changed anywhere) while the account is the last supervisor who can sign in in any company; two at once for the supervisors of one company take turns, and the second is refused. `is_last_supervisor` stays, to show which accounts are the last supervisor somewhere. A hard delete (`auth.admin.deleteUser(id)`) is refused by the guard already. Once an account is soft-deleted or banned it stops counting, so the other supervisors cannot step down past it, and it has no supervisor power left (see [Who can do what](#who-can-do-what)).
 
 The guard holds even when two changes overlap. Before it counts, it writes a row (`company_supervisor_guard`) for each company that lost a counting supervisor in the statement, in a fixed order so two statements cannot deadlock. So two transactions that each remove a different supervisor of the same company — two supervisors stepping down at once, releasing each other, or one supervisor sending two requests — cannot both go through. At READ COMMITTED (PostgREST's default) the second waits, then sees the first's committed change and is refused (`23514`). At REPEATABLE READ or SERIALIZABLE, as a direct connection or a function may run, the second is told to try again (`40001`); when it does, it sees the first's change. A lock alone would not do at those levels: it makes no new row version, so the second would count with its older snapshot and both could commit, leaving the company with none.
 
 ## The functions
 
-The app calls these through the API (`supabase.rpc('join_company', { code, first_name, last_name })`). Each one is `security definer` and searches `pg_catalog` first and the temporary schema last (`search_path = pg_catalog, pg_temp`), and refuses when nobody is signed in — and, for `join_company` and `create_company`, when the sign-in is anonymous — except `company_by_code`, which anyone may call, and `is_member` and `is_supervisor`, which answer false when nobody is signed in because the row level security policies call them and must never raise. `is_last_supervisor` is for the server key only.
+The app calls these through the API (`supabase.rpc('join_company', { code, first_name, last_name })`). Each one is `security definer` and searches `pg_catalog` first and the temporary schema last (`search_path = pg_catalog, pg_temp`), and refuses when nobody is signed in — and, for `join_company` and `create_company`, when the sign-in is anonymous or the account can no longer sign in — except `company_by_code`, which anyone may call, and `is_member`, `is_supervisor`, `member_company_ids` and `supervisor_company_ids`, which answer false (or no companies) when nobody is signed in because the row level security policies call them and must never raise. `is_last_supervisor` and `step_down_everywhere` are for the server key only.
 
 | Function | Who | Gives back |
 |---|---|---|
@@ -158,8 +165,12 @@ The app calls these through the API (`supabase.rpc('join_company', { code, first
 | `rotate_join_code(company_id)` | supervisors of the company | the new code |
 | `release_roster_claim(roster_id)` | supervisors of the row's company | nothing |
 | `my_join_requests()` | signed in | the caller's own join requests, without `decided_by` or `roster_id` |
+| `push_records(company_id, changes)` | members of the company | `{accepted, ignored, deferred?}`; see [Sending records](#sending-records-push_records) |
+| `my_companies()` | signed in | the companies the caller belongs to: `id`, `name`, `state`, the caller's `role`, and `join_code` where they are a supervisor |
 | `is_member(company_id)`, `is_supervisor(company_id)` | signed in | true or false |
+| `member_company_ids()`, `supervisor_company_ids()` | signed in (the policies call them) | the ids of the caller's own companies, and of those it supervises |
 | `is_last_supervisor(user_id)` | the server key | true when that account is, in some company, the only active supervisor who can still sign in |
+| `step_down_everywhere(user_id)` | the server key | how many supervisor rows it made employee rows; refused (`23514`) while the account is the last supervisor who can sign in somewhere |
 
 A time zone left empty in `create_company` is `America/Los_Angeles`. With `roster_id`, `approve_join_request` leaves the row's own role and title as they are: `role` and `title` are for a new row. With `replace_claim`, a row another account holds is let go of and given to the request's account in one step; that other account is held, as a released claim is.
 
@@ -167,12 +178,151 @@ When a function refuses, the error's code says why:
 
 | Code | Means |
 |---|---|
-| `42501` | Not signed in, an anonymous sign-in where an account is needed, or a write the API does not allow ("permission denied"). |
-| `22023` | Something typed is missing or not allowed: a blank name, a name with a control or invisible character or with letters of more than one alphabet, a state that is not a postal code, an unknown time zone, a role that is not employee or supervisor, a logo path outside the company's own storage. |
+| `42501` | Not signed in, an anonymous sign-in where an account is needed, an account Supabase Auth has banned or soft-deleted, or a write the API does not allow ("permission denied"). |
+| `22023` | Something typed is missing or not allowed: a blank name, a name with a control or invisible character or with letters of more than one alphabet, a name that only looks like one on the roster, a state that is not a postal code, an unknown time zone, a role that is not employee or supervisor, a logo path outside the company's own storage, a call to `push_records` whose changes are not a list or number more than 200. |
 | `P0002` | Not found, or not the caller's to act on. The two look the same on purpose. |
 | `55000` | Not in a state to do that: a request already decided, a row already claimed or taken off, a person already on the roster. |
-| `23514` | It would leave the company without an active supervisor. (Also a check constraint, such as a state that is not one of the 51, or a pay period over 16 KiB.) |
-| `40001` | Two changes to the same company's supervisors overlapped at REPEATABLE READ or SERIALIZABLE. Try again. (PostgREST runs at READ COMMITTED, where the second waits and gets `23514` instead.) |
+| `23514` | It would leave the company without an active supervisor. (Also a check constraint, such as a state that is not one of the 51, or a pay period over 16 KiB as text, over 64 KiB as stored, or holding a number no browser sends.) |
+| `40001` | Two changes to the same company's supervisors overlapped at REPEATABLE READ or SERIALIZABLE. Try again. (PostgREST runs at READ COMMITTED, where the second waits and gets `23514` instead.) Also two `push_records` calls from one company at once, at those levels: the second has to try again. |
+
+## The records
+
+Step 2: what the crew's phones share. Everything a person does in the app is saved on their phone first and sent when the phone can reach the server (`changesToSend` and `sendWaiting` in `src/domain/sync.ts`, through `pushTransport` in `src/services/server.ts`). The server keeps the latest version of each record in `records` and every version it has taken in `record_history`, and takes them only through `push_records`. The migrations are `20261117000100` (the tables), `20261117000200` (who reads them, and `my_companies`), `20261117000300` (`push_records`) and `20261117000400` (the pay period's size, checked the same safe way as a record's).
+
+Phones send and do not pull yet. A phone knows only the versions the server confirmed to it, so it can be behind: it has not seen a supervisor's correction, a coworker's change to a unit, or a deletion. Several of the rules below exist so that such a phone cannot undo what it has not seen.
+
+A record has a kind, one of the eleven the app sends, in the order it sends them: `settings`, `employee`, `equipment`, `areaSheet`, `shift`, `denied`, `leave`, `inspection`, `opLog`, `exam`, `mrf`. Its id is the phone's own id for it; the shared settings are the one record `settings:company`, and hold only `company`, `site`, `workweekStartsOn` and `allowSectionAllOk`. Its rev is the phone's version of it, a hash of the record (20 hex characters from the app), or `deleted` for a record taken off a phone.
+
+### records
+
+| Column | What it is |
+|---|---|
+| `company_id`, `kind`, `id` | The record: its company, kind and id, which together are its key. The id is 1 to 120 characters with no control character. |
+| `rev` | The version last taken, 1 to 64 characters, or `deleted`. |
+| `data` | The record as the phone sent it: a JSON object of at most 1 MB as stored and 256 KB as text (see [Size](#size)). `{}` once it is deleted. |
+| `deleted` | True once a supervisor has deleted it. The row stays, so a phone that reads it learns it is gone. |
+| `version` | How many versions of it the server has taken: its newest `version` in `record_history`. |
+| `seq` | The company's number for its latest version. Every version a company's phones send gets the next number, so a client pulls what changed by asking for `seq` greater than the last one it has (see [Pulling what changed](#pulling-what-changed)). |
+| `created_by`, `updated_by` | The account that first sent it, and the one that sent its latest version. Cleared if that account is deleted. |
+| `created_by_supervisor` | Whether that first account was a supervisor of the company when it sent it. What an account sent as a supervisor stays a supervisor's: made an employee later, the account no longer reads or changes it. |
+| `created_at`, `updated_at` | When it was first and last taken, for showing. Not for pulling: every change of one call has the same `updated_at`, and a call that started first can commit last. |
+
+### record_history
+
+Every version the server has taken, one row each, never changed afterwards. A signed record is not rewritten: when one changes, its new version is added beside the old.
+
+| Column | What it is |
+|---|---|
+| `company_id`, `kind`, `id` | The record. |
+| `version` | 1 for the record's first version, then 2, 3 and on; with the record, the key. Counted per record rather than from one sequence for every company, so a number says nothing about how much other companies send. |
+| `seq` | The company's number for this version, as on `records`. Counted per company for the same reason. Within a company it does tell a member how many versions were sent between two they can read, kinds they cannot read included. |
+| `rev`, `base` | The version, and the one the sending phone last had confirmed (null for none). |
+| `data` | The record as it was sent, or null for a deletion. |
+| `deleted` | Whether this version is a deletion. |
+| `by`, `at` | The account that sent it, and when the server took it. `by` is cleared if that account is deleted. |
+
+A trigger refuses every change to a version and every removal through SQL, by anyone, and TRUNCATE too. Two things get through: deleting the company takes its records and their history with it, and deleting an account clears `by` (its foreign key does that, and only once the account is gone) and changes nothing else. Every version belongs to its record (a foreign key), so while its company stands, a record cannot be deleted either. The trigger stops mistakes and every write through the API, the server key's included; it does not stop the database's owner, who can disable or drop it, and the server key can still delete a whole company, history and all. An audit trail that must hold even against the owner has to be copied somewhere the owner cannot change. In PL/pgSQL write the column as `"by"`: a bare `by` reads as a keyword there.
+
+Two more tables are `push_records`' own, and only the server key reads them: `record_counters`, each company's latest `seq`, and `record_usage`, how much each account has sent today.
+
+### Sending records: push_records
+
+`push_records(company_id, changes)` takes up to 200 changes, each `{key, kind, id, rev, base?, record}` as `changesToSend` makes it, and answers with the ones it took, the ones it set aside and, only when there are any, the ones it left for a later call:
+
+```json
+{
+  "accepted": [{ "key": "mrf:m-17", "rev": "0f3c9a1b2d4e5f607182", "conflict": true }],
+  "ignored": [{ "key": "employee:e-4", "rev": "9a1b0f3c2d4e5f607182", "reason": "supervisor_only" }],
+  "deferred": [{ "key": "exam:x-9", "rev": "2d4e5f6071820f3c9a1b", "reason": "call_size" }]
+}
+```
+
+The phone marks `accepted` and `ignored` as sent (`markSent`, `readPushAnswer`): it stops sending those, and for an ignored one the server keeps what it had. A deferred change is in neither, so the phone sends it again in its next round. The changes are taken in order, in one transaction. A call whose changes are not a list, or that has more than 200, is refused whole (`22023`). Anything else wrong with one change sets aside that change only, so one bad record never stops the rest of a phone's records:
+
+1. **Shape** (`malformed`, with a `problem` naming the change and what is wrong, such as "Change 3 has a key that is not its kind and id."; or `unknown_kind`). A change that is not an object, a kind the server does not keep, a key that is not `kind:id`, an id or rev out of bounds, a base that is not a rev, a record that is not a JSON object (or not null for a deletion), settings with an id other than `company`, or a record holding a number no phone sends. The key and rev come back as sent when they are text, and as null when they are not.
+2. **Twice in one call.** The same key with the same rev gets the same answer; with another rev it is set aside (`duplicate`). One call writes one version of a record.
+3. **Size** (`too_large`): see [Size](#size).
+4. **Private** (`private`), whoever sends it: a record with a field named `payRates`, `payRate`, `passwordHash`, `salt`, `rate` or `hourlyRate`, in any capitals and at any depth (`settings.company.payRates`, an employee's `pay.rate`), and settings with any field but the four shared ones.
+5. **A supervisor's** (`supervisor_only`): the settings, the roster (`employee`), the area sheets, paid leave, any deletion, a new unit in the fleet, and a new maintenance request that already names who it is assigned to.
+6. **Bounds** (`deferred`, reason `call_size` or `daily_limit`). Once a call has taken 8 MB of records, or the caller's account has sent 20,000 versions or 64 MB of records today (UTC), that change and every one after it in the call wait. What the server already has is still answered, and the count starts again the next day. The limits are constants at the top of `push_records`; a company whose phones send more than that in a day (a big crew's first sync after months offline, say) finishes the next day.
+7. **What the server has.** The record is locked, after the company's row in `record_counters`, so one company's calls take turns from there until they commit.
+   - The server has this version already, or this is the caller's own latest change to the record sent again (the same rev and base: a batch retried after its answer was lost): accepted, and nothing is written. Matching rev and base, not rev alone, still lets a record come back to an earlier version of its own (ready, red tag, ready, red tag).
+   - The record is deleted: only a supervisor brings it back (`deleted`). Bringing back a record by the same id, such as an area sheet whose id is its name, is a supervisor's.
+   - A change with no base onto a record the server has is a copy, not an edit (`copy`): always for the settings, the roster, the fleet and the area sheets, which every phone of a build starts with, and for the other kinds whenever someone else wrote the server's version. A new phone's fleet therefore never resets a red tag. For a shift, punch, checklist, log, exam, request or leave entry that another account sent first, the reason is `taken` (the phone made a record under an id that is not free); for the caller's own that someone else has changed since, `superseded`.
+   - A member's change made from a version other than the server's, when someone else wrote the server's (`superseded`). An employee's phone that has not seen a supervisor's correction, a deletion or a date fixed does not undo it: the server keeps the supervisor's version as current.
+8. **What a member may change** in a record already on the server. A supervisor changes anything. A member, who never deletes:
+
+   | Kind | A member may | Otherwise |
+   |---|---|---|
+   | `shift` | On their own, while it is open: clock out, add a lunch (it ends by itself) and a break, end a break. No time already on it moves, nothing is taken off, a correction (`edits`) is a supervisor's, and once clocked out it does not change. | `signed`; someone else's: `not_yours` |
+   | `denied` | Nothing: a turned-down punch is kept as it was. | `signed` / `not_yours` |
+   | `inspection` | On their own checklist: what they decided after a defect, once, and the request it was sent on (`decision`, `mrfId`). | `signed` / `not_yours` |
+   | `exam` | On their own exam: a date fixed on a line, once (the first date stands), and the request a line was sent on (`fixed`, `mrfId`). | `signed` / `not_yours` |
+   | `opLog` | Their own log until it is checked in, its start left as it was; another operator's open log, ended (`endAt` and `endMeter` added, nothing else), as a new operator taking the unit does. | `signed` / `not_yours` |
+   | `mrf` | The work on a request not yet completed: `status`, `remarks`, `timeSpent`, `completedBy`, `completedAt`, and `history` added to. Who it is assigned to and what it is about are a supervisor's. | `supervisor_only` |
+   | `equipment` | A unit's `status`, and its `meter`, never down. | `supervisor_only` |
+
+   "Own" means the caller's account sent it first, as an employee.
+9. **Write.** The record is written and the version added to the history, each with the company's next `seq`. A change made from a version other than the one the server had (a supervisor's, a supervisor bringing a record back, or the caller's own on top of their own after a lost answer) is still written, and its accepted entry carries `"conflict": true`.
+
+A deletion (`rev: "deleted"`, `record: null`) keeps the row, marked deleted and emptied, and adds the deletion to the history. A supervisor's deletion of a record the server never had writes nothing and is accepted. An employee's deletion gets `supervisor_only` whether or not the record is there, so a deletion tells nobody which ids exist; it also means a phone dropping old denied punches (the app keeps the last 200) never deletes them on the server.
+
+The caller must be an active member of the company. An account that is not, a member taken off the roster and a company that does not exist all get the same `P0002` ("No such company."). anon cannot call it at all.
+
+Who may send what, in short:
+
+| Kind | Sends a new one | Changes one already there | Deletes |
+|---|---|---|---|
+| `settings`, `employee`, `areaSheet`, `leave` | a supervisor | a supervisor | a supervisor |
+| `equipment` | a supervisor | a supervisor; any member: status and equipment hours | a supervisor |
+| `shift`, `denied`, `inspection`, `exam` | any member | a supervisor; the member who sent it, as the table above allows | a supervisor |
+| `opLog` | any member | a supervisor; its operator until checked in; any member, to end it | a supervisor |
+| `mrf` | any member (unassigned) | a supervisor; any member: the work, until completed | a supervisor |
+
+A client that writes records the way a phone does (the office dashboard, say) sends the rev it read as `base`. Without one, a change to a record someone else wrote is a copy and is set aside.
+
+### Size
+
+jsonb keeps a number such as `1e131071` in a few bytes, and its text is 131,072 characters: a record of a few thousand of them would take a gigabyte to write out. So a record's size is checked without writing it out first, in this order: at most 1 MB as stored, no number a phone never sends (`JSON.stringify` writes nothing past ±1.8e308, and nothing nearer zero than 5e-324; such a record is `malformed`), and only then at most 256 KB as JSON text (`too_large`). The tables' own check constraints do the same, and so does the pay period's (`20261117000400`: 64 KiB stored, the same numbers, 16 KiB as text). A company logo kept in the settings as an image data URL is the record likeliest to pass 256 KB; the server sets such settings aside rather than stopping the phone, so the app should keep the logo well under that before it sends.
+
+### Reading records
+
+Through the tables (`supabase.from('records').select()`), by row level security:
+
+- A supervisor reads every record of the company and every version of each.
+- Any member reads the records the crew works from, `settings`, `employee`, `equipment`, `areaSheet`, `inspection`, `opLog`, `exam` and `mrf`, and every version of them.
+- A member reads the `shift` and `denied` records their own account sent first as an employee, and every version of those, a supervisor's corrections included, and nobody else's. Paid leave is entered by a supervisor, so a member reads none, their own included.
+- Nobody reads another company's records. anon reads nothing. The server key reads the four tables and writes none.
+
+As every policy here does, the two compare a row's company with the caller's own companies (`member_company_ids()`, and `supervisor_company_ids()` for what a supervisor reads), worked out once per statement, and call no function on each row: a request reads no row of another company, and takes no longer for a company with more records. What a member may not read is filtered from their own company's rows only.
+
+`my_companies()` lists the companies the caller belongs to, for the app and the office dashboard to pick one: `id`, `name`, `state`, the caller's `role` there, and `join_code` where they are a supervisor (null elsewhere; an employee can still read the code from `companies`, as before). It counts membership as `is_member` does, so an account Supabase Auth has banned or soft-deleted belongs to none.
+
+### Pulling what changed
+
+Page by `seq`, never by `updated_at` or by offset:
+
+```js
+const { data } = await supabase
+  .from('records')
+  .select('*')
+  .eq('company_id', companyId)
+  .gt('seq', lastSeq)
+  .order('seq')
+  .limit(1000);
+// then lastSeq = the last row's seq, and repeat until a page comes back short
+```
+
+A company's calls take turns on its `record_counters` row, held until each commits, so a version with a higher `seq` became visible after every lower one: a pull never misses a version that committed late, and a record changed between two pages comes back on a later page at its new `seq`. The same goes for `record_history`. Keep the highest `seq` read, not the time.
+
+### What the server works out, and what it does not check yet
+
+- **A date fixed through a request.** The app writes the date a condition was fixed onto the exam when the person assigned completes the request it was sent on, and the request's id onto the exam line or checklist it came from. The server takes those only from the exam's or checklist's own maker or a supervisor. The completed request holds the same facts (`examId`, `findingKey`, `inspectionId`, `completedAt`, `completedBy`, `remarks`), so a condition is fixed on the server when its exam line has `fixed`, or a completed `mrf` names that exam and line. The dashboard should read both.
+- **A unit's status and hours.** Every phone holds its own copy of the fleet and does not pull, so after the first change to a unit, other phones' changes to it are set aside as copies or as superseded, and the server's `equipment` is only as current as its last writer. A unit is tagged out while an `mrf` for it is open with `taggedOut`; its latest equipment hours are in its latest `inspection` (`meter`) and `opLog` (`endMeter`). The dashboard should work those out rather than trust `equipment.status` and `meter`.
+- **Whose a record is.** The server goes by the account that sent it, not by the person it is about: it does not check that a shift's `employeeId` is the sender's, that a request is worked by the person it is assigned to, or that "completed by" names that person. A shift a supervisor enters for someone is the supervisor's: that person's account cannot change it and does not read it. What a phone sends is judged by the account it is connected with, so a shared phone connected with an employee's account cannot send a supervisor's work. Linking each account to the app's employee id would let the server check these.
+- **Payroll ids.** Every member reads every `employee` record, `payrollId` included, and every version of it; the app shows `payrollId` on supervisor screens only. Row level security cannot hide one field of a JSON record: keeping it from members needs a supervisor-only place for it, or a member's view of the roster without it.
+- **Removing a version.** Nothing removes one version, a leaked field or a person's data included, short of deleting the company. Who may redact an audit trail, and how that is recorded, is still to be decided.
+- **Phones do not yet show** a `conflict`, a reason in `ignored`, or a `deferred` list; `readPushAnswer` reads `accepted` and `ignored` only.
 
 ## Running the tests
 
@@ -184,49 +334,71 @@ npm install
 npm test
 ```
 
-`npm test` runs `node --test *.db.mjs`. Each test file starts a fresh PGlite database. It first makes stand-ins for what every Supabase project already has (`tests/supabase-stub.mjs`): the `auth` schema with `auth.users`, `auth.uid()` and `auth.jwt()`, the roles `anon`, `authenticated` and `service_role`, and Supabase's default grants on schema `public`. It then applies every migration in order and makes its requests the way the API does, as the role `anon` or `authenticated` with the account's id in `request.jwt.claim.sub`. Every test makes its own companies and accounts, so none depends on another.
+`npm test` runs `node --test *.db.mjs`. Each test file starts a fresh PGlite database. It first makes stand-ins for what every Supabase project already has (`tests/supabase-stub.mjs`): the `auth` schema with `auth.users` (with the `deleted_at` and `banned_until` columns the guard reads), `auth.uid()` and `auth.jwt()`, the roles `anon`, `authenticated` and `service_role`, and Supabase's default grants on schema `public`. It then applies every migration in order and makes its requests the way the API does, as the role `anon` or `authenticated` with the account's id in `request.jwt.claim.sub`. Every test makes its own companies and accounts, so none depends on another. `startDatabase({ owner })` in `tests/harness.mjs` applies the migrations as a non-superuser owner instead, as Supabase's `postgres` is, so a statement that would need a superuser there fails here too.
 
-There are 143 tests, in about 20 seconds:
+There are 328 tests, in about a minute, and 21 more that need a real server (below):
 
 | File | What it holds to |
 |---|---|
 | `companies.db.mjs` | Starting a company, the join code and its alphabet, rotating it, company settings |
 | `join.db.mjs` | Every `join_company` status, reading codes, claiming a row only once |
-| `join_hardening.db.mjs` | A supervisor row is never claimed by name, a removed person waits for approval, identical names leave a request, hidden characters are refused, joining settles a stale request |
+| `join_hardening.db.mjs` | A supervisor row is never claimed by name, a removed person waits for approval, a name that fits a removed person (exactly or the looser way) never lands on an active namesake, identical names leave a request, hidden characters are refused, joining settles a stale request |
+| `join_holds.db.mjs` | A released or deleted claim holds its account, `replace_claim` hands a row over in one step, taking someone back settles their request, joining keeps the request it settles, a bar keeps an account out until it is lifted, and lifting it leaves a release in place |
+| `name_hygiene.db.mjs` | Every invisible character is refused, a decomposed spelling is the same name, a name cannot mix alphabets, a name that only looks like one on the roster is refused when typed or written, names that only differ are not, and a stricter rule never blocks an older row |
 | `requests.db.mjs` | Approving onto a row or a new one, denying, deciding once, supervisors only |
 | `request_privacy.db.mjs` | A non-member reads no id of another company through its own requests; `my_join_requests()` hides `decided_by` and `roster_id` |
 | `anonymous.db.mjs` | An anonymous sign-in cannot join or start a company |
 | `isolation.db.mjs` | A member of one company sees and changes nothing of another, and the errors say nothing about it |
 | `employee.db.mjs` | What an employee cannot do, and what nobody writes through the API |
-| `supervisor-guard.db.mjs` | The last supervisor, on every path |
-| `concurrency_guard.db.mjs` | The guard locks the company before it counts, and the server key cannot `TRUNCATE` a table |
+| `supervisor-guard.db.mjs` | The last supervisor, on every path, counting only accounts that can still sign in; a banned or soft-deleted account has no power left; `is_last_supervisor` and `step_down_everywhere` |
+| `concurrency_guard.db.mjs` | The guard writes a row per company before it counts, approving and denying take the per-account lock first, and the server key cannot `TRUNCATE` a table |
+| `races.db.mjs` | Needs a real server: two supervisors stepping down at once, or stepped down by the server at once, at each isolation level; approving a request while the person types a name; releasing, deleting or reactivating a removed person's row while they type one; and renaming a row while its old name is typed |
+| `record_races.db.mjs` | Needs a real server: two `push_records` calls from one company take turns, so `seq` order is commit order; two calls making the same new record; REPEATABLE READ is told to try again; two companies do not wait for each other |
+| `planner_statistics.db.mjs` | The planner's estimates say nothing about another company's size, names or ids |
+| `row_reads.db.mjs` | No policy calls a function on each row, a request reads no row of another company, and how long it takes says nothing about another company's size, names or ids |
+| `extension_in_public.db.mjs` | The migrations apply as a non-superuser owner with an extension in `public`, and leave its functions alone |
+| `project_objects_in_public.db.mjs` | The migrations apply over the project's own procedure, aggregate and sign-up trigger function in `public`, and leave them alone, so sign-ups keep working |
 | `anon.db.mjs` | `anon` calls `company_by_code` and nothing else, and reads nothing |
-| `names.db.mjs` | Name matching, against `findOnRoster` itself |
+| `names.db.mjs` | Name matching, against `findOnRoster` itself, Greek names in capitals included; one `todo` test shows what `roster.ts` still has to fold the same way |
 | `notifications.db.mjs` | One for each join and new request, seen by that company's supervisors only |
-| `security.db.mjs` | `search_path` (pg_catalog first, pg_temp last), EXECUTE grants, row level security, each role's privileges, and that the migrations leave Supabase's own schema and roles alone |
+| `security.db.mjs` | `search_path` (pg_catalog first, pg_temp last), EXECUTE grants, row level security, each role's privileges, no planner statistics on any column, and that the migrations leave Supabase's own schema and roles alone |
+| `records.db.mjs` | Sending a record and reading it back, sending it twice, who may write each kind (`supervisor_only`, `not_yours`), private fields, deleting, conflicts, malformed changes and the size limit, who reads what in each company, a history nobody changes or removes, and `my_companies` |
+| `record_rules.db.mjs` | A stale phone does not undo a supervisor's correction, deletion or date fixed; copies of the fleet and settings are set aside; what an employee may change in each kind; what an account sent as a supervisor; resent batches; one bad change does not stop the rest; huge numbers, size, duplicates, the per-call and per-day bounds, and the pay period's size; private fields at any depth; reading with no function called on each row; pulling by `seq` |
 
 `names.db.mjs` loads `src/domain/roster.ts` directly (Node strips its types), and Node prints one warning about the module type when it does. That warning is expected. If the file ever cannot be loaded, that one test is skipped and says why.
 
-The tests run on PGlite's PostgreSQL 18. They pass on its builds of PostgreSQL 17 and 16 as well. One local database is one session, so two transactions at the same instant cannot be acted out here. Two races are settled by locks and are not played out in PGlite: the per-account advisory lock and one-row-per-account index that settle two people claiming a row at once (tested single-session as far as PGlite allows), and the per-company lock the last-supervisor guard takes before it counts. `concurrency_guard.db.mjs` reads from the catalog that the guard takes that lock; its behaviour under two overlapping sessions was checked on a real PostgreSQL 16.
+The tests run on PGlite's PostgreSQL 18. One local database is one session, so two transactions at the same instant cannot be acted out in PGlite. `races.db.mjs` and `record_races.db.mjs` act them out on a real PostgreSQL server instead, and are skipped (saying why) unless `MINEMUSTER_TEST_DATABASE_URL` names one: a throwaway PostgreSQL 15 or newer server, as a superuser that may create databases and roles. Each file makes its own database there, one at a time (they take an advisory lock while they make it and, on a new server, the API roles), and drops it at the end. Never point it at a Supabase project or at any database whose contents matter.
 
-The app's own `npm test` (Jest) does not pick these files up, because they are named `*.db.mjs`. The app's `npm run typecheck` reads them as plain JavaScript but does not check them.
+```bash
+MINEMUSTER_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55461/postgres npm test
+```
+
+They were last run that way on PostgreSQL 16. In PGlite, `concurrency_guard.db.mjs` reads from the catalog that the guard writes its row and that approving and denying take the per-account lock first.
+
+The app's own `npm test` (Jest) does not pick these files up, because they are named `*.db.mjs`. The app's `npm run typecheck` reads them as plain JavaScript but does not check them. The server tests use the `pg` client, pinned in `tests/package.json`.
 
 ## Applying the migrations to a Supabase project
 
 Not done yet, and not to be done from a test. When the project exists:
 
-1. Apply the files in `migrations/`, in order, once each, to a project on PostgreSQL 15 or newer. New Supabase projects are; `select version();` in the SQL editor shows what an older one runs. The migrations expect what Supabase already provides (the `auth` schema, `auth.users`, `auth.uid()` and the roles), and they neither create nor change any of it. Do not apply anything from `tests/`.
+1. Apply the files in `migrations/`, in order, once each, to a project on PostgreSQL 15 or newer. New Supabase projects are; `select version();` in the SQL editor shows what an older one runs. The migrations expect what Supabase already provides (the `auth` schema, `auth.users` with its `deleted_at` and `banned_until` columns, `auth.uid()`, `auth.jwt()` and the roles), and they neither create nor change any of it. An extension already in `public` is left alone too. Do not apply anything from `tests/`.
    - With the [Supabase CLI](https://supabase.com/docs/guides/cli), from the repository root: `supabase link --project-ref <project-ref>`, then `supabase db push`. The CLI records which migrations have run, so a later `supabase db push` applies only new ones; `supabase migration list` shows where things stand. (`supabase init` first if the CLI asks for a `supabase/config.toml`.)
    - To try them on Supabase's local stack first: `supabase start`, then `supabase db reset`.
    - Without the CLI: paste each file into the dashboard's SQL editor, in order.
-2. Run the dashboard's Security Advisor. It may point out that the functions above are `security definer` and callable by signed-in users, and `company_by_code` by `anon`. That is on purpose: each one checks who is calling, and nothing else is callable.
+2. Run the dashboard's Security Advisor. It may point out that the functions above are `security definer` and callable by signed-in users, `company_by_code` by `anon`, and `is_last_supervisor` and `step_down_everywhere` by the server key. That is on purpose: each one checks who is calling, and nothing else is callable. It may also point out `company_supervisor_guard` and `join_holds` as tables with row level security on and no policy: that is on purpose too, since only the functions use them.
 3. Turn on the sign-in providers in Supabase Auth. The database needs nothing more: it reads the account from `auth.uid()`. If anonymous sign-ins are turned on, `join_company` and `create_company` refuse them (they read `is_anonymous` from `auth.jwt()`), so a throwaway account cannot claim rows or leave requests; still, leaving anonymous sign-ins off keeps that surface closed entirely.
+4. Any server code that soft-deletes or bans accounts calls `step_down_everywhere(user_id)` first, and bans only once it has returned, as [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor) says.
+5. Keep PostgREST's `db-plan-enabled` off (see [What a count can tell](#what-a-count-can-tell)).
 
 ### Adding to it later
 
 - One new file in `migrations/` per change, named `YYYYMMDDHHMMSS_what_it_does.sql`. Never edit a migration that has been applied; write a new one.
-- Lock a new table in the file that makes it: `enable row level security` and `revoke all ... from public, anon, authenticated`. Grant and add policies in the same migration, or in the next one.
+- Lock a new table in the file that makes it: `enable row level security`, `revoke all ... from public, anon, authenticated` and `revoke truncate ... from service_role`. Grant and add policies in the same migration, or in the next one.
+- Turn a new table's planner statistics off in the file that makes it, before it holds data: `alter table ... alter column ... set statistics 0` for every column, as `20261116002200_no_planner_statistics.sql` does. A test checks every column of every table in `public`.
 - Every new function gets `set search_path = pg_catalog, pg_temp` (pg_catalog first so unqualified type names resolve against it, the temporary schema last so a session cannot shadow a type or relation), fully qualified names, `revoke all on function ... from public, anon, authenticated, service_role`, and a grant to the roles that call it. Supabase grants EXECUTE on every new function in `public` to everyone unless the migration takes it back.
 - PostgreSQL checks EXECUTE against the role doing the write, even for a function called from a check constraint or inside a trigger. So constraints use built-in functions only, and a trigger that calls a private helper is `security definer`.
+- A trigger that checks a value checks it when that value is written (on insert, or when it changes), not on every update of the row, so a rule made stricter later never blocks an unrelated change to an older row, such as a foreign key clearing a claim.
+- Never sweep a schema: name each object a migration alters, as `20261116001600_search_path_hardening.sql` names its functions. On a real project `public` already holds what these migrations must leave alone: an extension's functions (owned by the bootstrap superuser, since on Supabase `postgres` is not one), and the project's own procedures, aggregates and functions, such as a trigger on `auth.users` that finds its tables by the default `search_path`. A loop over the catalog is fine only over a list of names, as `20261116002200_no_planner_statistics.sql` loops over its tables.
+- A row level security policy never calls a function on the row's own column. It compares the column with the caller's own companies, worked out once per statement: `company_id = any ((select public.member_company_ids())::uuid[])`, or `supervisor_company_ids()` for what only a supervisor may do. `row_reads.db.mjs` checks the plans.
 - Keep the files plain ASCII: write a character such as a no-break space as a regular-expression escape (`\x00a0`). A test checks this.
 - Add a test beside the others, and keep the names in it made up.

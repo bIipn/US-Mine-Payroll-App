@@ -5,7 +5,9 @@
 //    own name or a coworker's;
 //  * a name written the same way for several people leaves a request;
 //  * a name cannot carry a control or invisible character;
-//  * joining settles the account's own pending request.
+//  * joining settles the account's own pending request;
+//  * a name that fits a removed person, exactly or the looser way, never lands
+//    on a different, still-active person (migration 20261116002600).
 //
 // All names are made up. The companies are Test Pit A, B, ...
 
@@ -112,6 +114,52 @@ describe('a person taken off the roster', () => {
     const result = await join(db, stranger, company.code, 'Lee', 'Park');
     assert.equal(result.reason, 'not_on_roster');
     assert.equal((await rosterRow(db, company.rows['Lee Roy Park'])).user_id, null);
+  });
+});
+
+describe('a name that fits a row taken off the roster', () => {
+  // The exact name on an inactive row shadows the looser fallback. So does a
+  // name that only fits it, the way the fallback reads names: full stops,
+  // commas and quote marks as spaces, a suffix left off (migration 20261116002600).
+  const FATHER_AND_SON = [{ first: 'Riley J', last: 'Quinn' }, { first: 'Riley J', last: 'Quinn Jr' }];
+
+  async function withFatherRemoved(roster = FATHER_AND_SON) {
+    const company = await startCompany(db, { roster });
+    const father = `${roster[0].first} ${roster[0].last}`;
+    await db.as(company.owner).affected('update public.roster set active = false where id = $1', [company.rows[father]]);
+    return { company, son: company.rows['Riley J Quinn Jr'] };
+  }
+
+  it('with both rows active, the looser name is ambiguous', async () => {
+    const company = await startCompany(db, { roster: FATHER_AND_SON });
+    assert.deepEqual(await join(db, await db.newAccount(), company.code, 'Riley J.', 'Quinn'), { status: 'ambiguous', company_name: 'Test Pit A' });
+  });
+
+  it('typed exactly as the inactive row, leaves a request', async () => {
+    const { company, son } = await withFatherRemoved();
+    assert.equal((await join(db, await db.newAccount(), company.code, 'Riley J', 'Quinn')).reason, 'not_on_roster');
+    assert.equal((await rosterRow(db, son)).user_id, null);
+  });
+
+  for (const [what, first, last, roster] of [
+    ['with a full stop after the initial', 'Riley J.', 'Quinn'],
+    ['with a comma after the last name', 'Riley J', 'Quinn,'],
+    ['without the full stop the roster wrote', 'Riley J', 'Quinn', [{ first: 'Riley J.', last: 'Quinn' }, { first: 'Riley J', last: 'Quinn Jr' }]],
+    ['without the middle initial', 'Riley', 'Quinn'],
+  ]) {
+    it(`typed ${what}, leaves a request rather than landing on the active namesake`, async () => {
+      const { company, son } = await withFatherRemoved(roster);
+      const result = await join(db, await db.newAccount(), company.code, first, last);
+      assert.deepEqual(result, { status: 'pending', company_name: 'Test Pit A', reason: 'not_on_roster' });
+      assert.equal((await rosterRow(db, son)).user_id, null);
+    });
+  }
+
+  it('does not stop the son from joining by his own name', async () => {
+    const { company, son } = await withFatherRemoved();
+    const account = await db.newAccount();
+    assert.equal((await join(db, account, company.code, 'Riley J', 'Quinn Jr')).status, 'joined');
+    assert.equal((await rosterRow(db, son)).user_id, account);
   });
 });
 

@@ -44,18 +44,23 @@ export async function startServerDatabase() {
   const name = `minemuster_test_${randomUUID().replaceAll('-', '')}`;
   const root = new pg.Client({ connectionString: SERVER_URL });
   await root.connect();
-  let haveRoles = false;
+  let admin;
   try {
+    // Test files run at once, and the API roles belong to the whole server:
+    // one file at a time makes its database and, if they are not there yet,
+    // the roles. An advisory lock taken in the server's own database is held
+    // across both.
+    await root.query('select pg_advisory_lock(7262001)');
     await root.query(`create database ${name}`);
-    // The API roles belong to the whole server, so a second test database finds them made.
     const { rows } = await root.query("select count(*)::int as n from pg_roles where rolname in ('anon', 'authenticated', 'service_role')");
-    haveRoles = rows[0].n === 3;
+    const haveRoles = rows[0].n === 3;
+    admin = new pg.Client({ connectionString: urlFor(name) });
+    await admin.connect();
+    await admin.query(haveRoles ? SUPABASE_STUB.replace(/^create role .*$/gm, '') : SUPABASE_STUB);
   } finally {
+    await root.query('select pg_advisory_unlock(7262001)').catch(() => {});
     await root.end();
   }
-  const admin = new pg.Client({ connectionString: urlFor(name) });
-  await admin.connect();
-  await admin.query(haveRoles ? SUPABASE_STUB.replace(/^create role .*$/gm, '') : SUPABASE_STUB);
   for (const file of await migrationFiles()) {
     const sql = await readFile(new URL(file, MIGRATIONS), 'utf8');
     try {

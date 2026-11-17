@@ -9,40 +9,43 @@
 -- function owner, past row level security. PostgreSQL's CREATE FUNCTION page
 -- asks that pg_temp be searched last for exactly this reason.
 --
--- Every function in schema public that these migrations made is set to search
--- pg_catalog first and pg_temp last. The bodies do not change: they already
--- qualify every relation and helper, and now their unqualified type names
--- resolve against pg_catalog before the temporary schema. New functions in
--- later migrations must do the same (see the README).
+-- Every function the earlier migrations made is set to search pg_catalog first
+-- and pg_temp last. The bodies do not change: they already qualify every
+-- relation and helper, and now their unqualified type names resolve against
+-- pg_catalog before the temporary schema. New functions in later migrations
+-- set it themselves (see the README).
 --
--- Functions this role does not own, and the member functions of an extension,
--- are left alone. On Supabase the migration role (postgres) is not a
--- superuser, and an extension someone put in public (`create extension
--- pg_trgm;` with no schema lands there) has member functions owned by the
--- bootstrap superuser: altering them would stop this migration with "must be
--- owner of function", and run as a superuser it would rewrite the extension.
--- (This file was corrected in place before it was ever applied; once a
--- migration is applied, write a new one instead.)
+-- The functions are named one by one. Nothing else in schema public is
+-- touched: on a real project public already holds objects these migrations do
+-- not own and must leave as they are, such as an extension someone put there
+-- (`create extension pg_trgm;` with no schema lands there), a procedure or an
+-- aggregate (which ALTER FUNCTION refuses, so a sweep would stop the push), or
+-- the project's own trigger function on auth.users, which would lose the
+-- search_path it finds its own tables by.
+-- (This file was corrected in place twice before it was ever applied, the last
+-- time to stop it sweeping the schema; once a migration is applied, write a new
+-- one instead.)
 
-do $$
-declare
-  fn pg_catalog.regprocedure;
-begin
-  for fn in
-    select p.oid::pg_catalog.regprocedure
-    from pg_catalog.pg_proc p
-    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and pg_catalog.pg_has_role(p.proowner, 'USAGE')
-      and not exists (
-        select 1
-        from pg_catalog.pg_depend d
-        where d.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
-          and d.objid = p.oid
-          and d.deptype = 'e'
-      )
-  loop
-    execute pg_catalog.format('alter function %s set search_path = pg_catalog, pg_temp', fn);
-  end loop;
-end;
-$$;
+alter function public.approve_join_request(uuid, uuid, text, text) set search_path = pg_catalog, pg_temp;
+alter function public.clean_text(text) set search_path = pg_catalog, pg_temp;
+alter function public.companies_before_write() set search_path = pg_catalog, pg_temp;
+alter function public.company_by_code(text) set search_path = pg_catalog, pg_temp;
+alter function public.create_company(text, text, text, text, text, text) set search_path = pg_catalog, pg_temp;
+alter function public.deny_join_request(uuid) set search_path = pg_catalog, pg_temp;
+alter function public.find_on_roster(uuid, text, text) set search_path = pg_catalog, pg_temp;
+alter function public.has_hidden_characters(text) set search_path = pg_catalog, pg_temp;
+alter function public.is_member(uuid) set search_path = pg_catalog, pg_temp;
+alter function public.is_supervisor(uuid) set search_path = pg_catalog, pg_temp;
+alter function public.join_company(text, text, text) set search_path = pg_catalog, pg_temp;
+alter function public.last_name_core(text) set search_path = pg_catalog, pg_temp;
+alter function public.last_name_suffix(text) set search_path = pg_catalog, pg_temp;
+alter function public.my_join_requests() set search_path = pg_catalog, pg_temp;
+alter function public.name_fits(text, text, text, text) set search_path = pg_catalog, pg_temp;
+alter function public.name_words(text) set search_path = pg_catalog, pg_temp;
+alter function public.new_join_code() set search_path = pg_catalog, pg_temp;
+alter function public.normalize_join_code(text) set search_path = pg_catalog, pg_temp;
+alter function public.release_roster_claim(uuid) set search_path = pg_catalog, pg_temp;
+alter function public.roster_before_write() set search_path = pg_catalog, pg_temp;
+alter function public.roster_keeps_a_supervisor() set search_path = pg_catalog, pg_temp;
+alter function public.rotate_join_code(uuid) set search_path = pg_catalog, pg_temp;
+alter function public.same_name(text, text, text, text) set search_path = pg_catalog, pg_temp;

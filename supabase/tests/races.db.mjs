@@ -11,6 +11,15 @@
 //  * approve_join_request taking turns with join_company for the same account,
 //    so a person who types a name while a supervisor approves their request
 //    gets an answer (already_member), not a raw duplicate-key error.
+//  * the server stepping two supervisors down at once (step_down_everywhere,
+//    before it bans them): the second is refused, as two supervisors stepping
+//    down themselves are.
+//  * join_company taking turns with a supervisor's change to the caller's own
+//    row: releasing or deleting a removed person's row, or taking them back,
+//    while they type a name. Without that, a change committing between
+//    join_company's reads was half seen: a removed person claimed a coworker's
+//    row by name, or an active member was left a fresh pending request.
+//  * a row renamed while its old name is typed is not claimed under its new name.
 //
 // All names are made up.
 
@@ -138,5 +147,115 @@ describe('approving a request while the same person types a name', { skip: skipW
     const rows = await db.adminRows("select first_name from public.roster where user_id = $1", [person]);
     assert.deepEqual(rows, [{ first_name: 'Pat' }]);
     assert.equal((await db.adminRows("select user_id from public.roster where company_id = $1 and first_name = 'Bo'", [made.company_id]))[0].user_id, null);
+  });
+});
+
+describe('the server stepping both supervisors down at once', { skip: skipWithoutServer }, () => {
+  for (const [isolation, expected] of Object.entries(SECOND_IS_TOLD)) {
+    it(`leaves the company a supervisor, at ${isolation}`, async () => {
+      const co = await twoSupervisors();
+      const a = await db.request(co.first, isolation);
+      const b = await db.request(co.second, isolation);
+      for (const server of [a, b]) await server.query('set local role service_role');
+      await a.query('select public.step_down_everywhere(user_id => $1)', [co.first]);
+      const { settled } = await b.start('select public.step_down_everywhere(user_id => $1)', [co.second]);
+      await a.commit();
+      const outcome = await finish(b, await settled);
+      await a.end();
+      await b.end();
+
+      assert.equal(await supervisorsLeft(co.id), 1, `both went through: ${JSON.stringify(outcome)}`);
+      assert.equal(outcome.ok, false, 'the second step-down should be refused, so the server does not ban that account');
+      assert.equal(outcome.code, expected, outcome.message);
+    });
+  }
+});
+
+/** A company with Kit Marlow (claimed by kit, then taken off the roster) and Bo Ellison (unclaimed). */
+async function removedKit({ leaveRequest }) {
+  const owner = await db.newAccount();
+  const kit = await db.newAccount();
+  const [made] = await db.asAccount(
+    owner,
+    "select * from public.create_company(name => 'Test Pit A', state => 'CA', timezone => null, first_name => 'Sam', last_name => 'Ortiz')",
+  );
+  const [kitRow] = await db.asAccount(owner, "insert into public.roster (company_id, first_name, last_name) values ($1, 'Kit', 'Marlow') returning id", [made.company_id]);
+  const [boRow] = await db.asAccount(owner, "insert into public.roster (company_id, first_name, last_name) values ($1, 'Bo', 'Ellison') returning id", [made.company_id]);
+  const [joined] = await db.asAccount(kit, "select public.join_company(code => $1, first_name => 'Kit', last_name => 'Marlow') as r", [made.join_code]);
+  assert.equal(joined.r.status, 'joined');
+  await db.asAccount(owner, 'update public.roster set active = false where id = $1', [kitRow.id]);
+  if (leaveRequest) {
+    const [typed] = await db.asAccount(kit, "select public.join_company(code => $1, first_name => 'Kit', last_name => 'Marlow') as r", [made.join_code]);
+    assert.equal(typed.r.reason, 'removed');
+  }
+  return { owner, kit, companyId: made.company_id, code: made.join_code, kitRow: kitRow.id, boRow: boRow.id };
+}
+
+/**
+ * A supervisor's change to a removed person's row, held open while that person
+ * types a name, then committed. Returns join_company's answer.
+ */
+async function typedDuring(co, change, params, first, last) {
+  const supervisor = await db.request(co.owner);
+  await supervisor.query(change, params);
+  const person = await db.request(co.kit);
+  const { settled } = await person.start('select public.join_company(code => $1, first_name => $2, last_name => $3) as result', [co.code, first, last]);
+  await supervisor.commit();
+  const outcome = await finish(person, await settled);
+  await supervisor.end();
+  await person.end();
+  assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+  return outcome.rows[0].result;
+}
+
+const PENDING_RELEASED = { status: 'pending', company_name: 'Test Pit A', reason: 'released' };
+
+describe('a supervisor changing a removed person\'s row while they type a name', { skip: skipWithoutServer }, () => {
+  it('releasing it: join_company waits for the release and is held by it, so no coworker row is claimed', async () => {
+    const co = await removedKit({ leaveRequest: false });
+    const answer = await typedDuring(co, 'select public.release_roster_claim(roster_id => $1)', [co.kitRow], 'Bo', 'Ellison');
+    assert.deepEqual(answer, PENDING_RELEASED);
+    assert.deepEqual(await db.adminRows('select user_id from public.roster where id = $1', [co.boRow]), [{ user_id: null }]);
+  });
+
+  it('deleting it: the same', async () => {
+    const co = await removedKit({ leaveRequest: false });
+    const answer = await typedDuring(co, 'delete from public.roster where id = $1', [co.kitRow], 'Bo', 'Ellison');
+    assert.deepEqual(answer, PENDING_RELEASED);
+    assert.deepEqual(await db.adminRows('select user_id from public.roster where id = $1', [co.boRow]), [{ user_id: null }]);
+  });
+
+  it('taking them back on it: they are told already_member, and no pending request is left to re-admit them later', async () => {
+    const co = await removedKit({ leaveRequest: true });
+    const answer = await typedDuring(co, 'update public.roster set active = true where id = $1', [co.kitRow], 'Kit', 'Marlow');
+    assert.deepEqual(answer, { status: 'already_member', company_name: 'Test Pit A', role: 'employee' });
+    assert.deepEqual(await db.adminRows("select id from public.join_requests where user_id = $1 and status = 'pending'", [co.kit]), []);
+  });
+});
+
+describe('a row renamed while its old name is typed', { skip: skipWithoutServer }, () => {
+  it('is not handed to the account that typed the old name', async () => {
+    const owner = await db.newAccount();
+    const [made] = await db.asAccount(
+      owner,
+      "select * from public.create_company(name => 'Test Pit A', state => 'CA', timezone => null, first_name => 'Sam', last_name => 'Ortiz')",
+    );
+    const [row] = await db.asAccount(owner, "insert into public.roster (company_id, first_name, last_name) values ($1, 'Bo', 'Ellison') returning id", [made.company_id]);
+
+    // The supervisor corrects the row to Pat Cole; before that commits, someone types "Bo Ellison".
+    const renaming = await db.request(owner);
+    await renaming.query("update public.roster set first_name = 'Pat', last_name = 'Cole' where id = $1", [row.id]);
+    const typist = await db.newAccount();
+    const joining = await db.request(typist);
+    const { settled } = await joining.start("select public.join_company(code => $1, first_name => 'Bo', last_name => 'Ellison') as result", [made.join_code]);
+    await renaming.commit();
+    const outcome = await finish(joining, await settled);
+    await renaming.end();
+    await joining.end();
+
+    assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+    assert.deepEqual(outcome.rows[0].result, { status: 'pending', company_name: 'Test Pit A', reason: 'not_on_roster' });
+    const [after] = await db.adminRows('select first_name, last_name, user_id from public.roster where id = $1', [row.id]);
+    assert.deepEqual(after, { first_name: 'Pat', last_name: 'Cole', user_id: null }, 'the row now named Pat Cole went to the account that typed Bo Ellison');
   });
 });

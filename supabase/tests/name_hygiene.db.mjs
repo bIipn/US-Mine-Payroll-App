@@ -9,6 +9,10 @@
 //    decomposed spelling is the same name as the composed one;
 //  * a name does not mix Latin, Greek and Cyrillic letters, which have
 //    look-alikes of each other;
+//  * and a name that only looks like a name on the roster, written with other
+//    characters (Cyrillic or Armenian look-alikes, small capitals, a Roman
+//    numeral, a mathematical letter, a capital I for an l, rn for m), is
+//    refused, typed or put on the roster (migration 20261116002500);
 //  * a rule made stricter later is checked only when a name is written, so
 //    it never blocks unrelated changes to an older row.
 //
@@ -17,6 +21,9 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { addToRoster, BAD_INPUT, join, newMember, refused, rosterRow, startCompany, startDatabase } from './harness.mjs';
+
+const ROSTER_SPELLING = /way it is written on the roster/;
+const LOOKS_THE_SAME = /looks the same as/;
 
 const cp = (n) => String.fromCodePoint(n);
 
@@ -168,5 +175,115 @@ describe('a rule made stricter later', () => {
     assert.equal((await rosterRow(db, id)).user_id, null);
     // Writing the name again is held to the rule.
     await refused(db.as(company.owner).query('update public.roster set first_name = $2 where id = $1', [id, `Lee${cp(0x034f)} `]), BAD_INPUT);
+  });
+});
+
+describe('a name that looks like a name on the roster, written with other characters', () => {
+  // [roster first, roster last, typed first, typed last]
+  const LOOK_ALIKES = {
+    'wholly in Cyrillic': ['Joe', 'Cox', cp(0x0408) + cp(0x043e) + cp(0x0435), cp(0x0421) + cp(0x043e) + cp(0x0445)],
+    'a small Roman numeral fifty for l': ['Kit', 'Marlow', 'Kit', `Mar${cp(0x217c)}ow`],
+    'a Latin small capital O for o': ['Kit', 'Marlow', 'Kit', `Marl${cp(0x1d0f)}w`],
+    'a mathematical sans-serif K': ['Kit', 'Marlow', `${cp(0x1d5aa)}it`, 'Marlow'],
+    'an ASCII capital I for l': ['Kit', 'Marlow', 'Kit', 'MarIow'],
+    'rn for m': ['Kit', 'Marlow', 'Kit', 'rnarlow'],
+    'an Armenian o among Latin letters': ['Kit', 'Marlow', 'Kit', `Marl${cp(0x0585)}w`],
+    'a Cherokee letter among Latin ones': ['Ana', 'Diaz', `${cp(0x13aa)}na`, 'Diaz'],
+    'a fullwidth name': ['Kit', 'Marlow', 'Ｋｉｔ', 'Ｍａｒｌｏｗ'],
+  };
+
+  for (const [what, [first, last, typedFirst, typedLast]] of Object.entries(LOOK_ALIKES)) {
+    it(`is refused when typed for a claimed coworker, rather than left as an innocent request: ${what}`, async () => {
+      const company = await startCompany(db, { roster: [{ first, last }] });
+      await newMember(db, company, first, last);
+      const sly = await db.newAccount();
+      await refused(join(db, sly, company.code, typedFirst, typedLast), BAD_INPUT, ROSTER_SPELLING);
+      assert.deepEqual(await requestsOf(sly), []);
+    });
+
+    it(`cannot be put on the roster beside the name it looks like: ${what}`, async () => {
+      const company = await startCompany(db, { roster: [{ first, last }] });
+      await refused(addToRoster(db, company.owner, company.id, { first: typedFirst, last: typedLast }), BAD_INPUT, LOOKS_THE_SAME);
+      assert.equal((await db.adminRows('select count(*)::int as n from public.roster where company_id = $1', [company.id]))[0].n, 2);
+    });
+  }
+
+  it('is refused for an unclaimed coworker, a coworker taken off the roster, and the looser way of writing a name', async () => {
+    const company = await startCompany(db, {
+      roster: [{ first: 'Kit J', last: 'Marlow' }, { first: 'Bo', last: 'Ellison', active: false }],
+    });
+    const sly = await db.newAccount();
+    // Kit J Marlow, written without the initial and with a capital I for the l.
+    await refused(join(db, sly, company.code, 'Kit', 'MarIow'), BAD_INPUT, ROSTER_SPELLING);
+    await refused(join(db, sly, company.code, 'B' + cp(0x043e), 'Ellison'), BAD_INPUT);
+    await refused(join(db, sly, company.code, 'Bo', `E${cp(0x217c)}lison`), BAD_INPUT, ROSTER_SPELLING);
+    assert.deepEqual(await requestsOf(sly), []);
+  });
+
+  it('is refused for a removed person too, so their request cannot pose as a coworker', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }, { first: 'Bo', last: 'Ellison' }] });
+    const kit = await newMember(db, company, 'Kit', 'Marlow');
+    await db.as(company.owner).affected('update public.roster set active = false where id = $1', [company.rows['Kit Marlow']]);
+    await refused(join(db, kit, company.code, 'Bo', 'EIlison'), BAD_INPUT, ROSTER_SPELLING);
+    assert.equal((await join(db, kit, company.code, 'Kit', 'Marlow')).reason, 'removed');
+  });
+
+  it('left as a request before this rule, cannot be approved into a second row that reads the same', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }] });
+    await newMember(db, company, 'Kit', 'Marlow');
+    const sly = await db.newAccount();
+    const [request] = await db.adminRows(
+      "insert into public.join_requests (company_id, user_id, first_name, last_name, reason) values ($1, $2, 'Kit', 'MarIow', 'not_on_roster') returning id",
+      [company.id, sly],
+    );
+    await refused(db.as(company.owner).call('approve_join_request', { request_id: request.id }), BAD_INPUT, LOOKS_THE_SAME);
+    assert.equal((await db.adminRows("select status from public.join_requests where id = $1", [request.id]))[0].status, 'pending');
+    assert.equal(await db.as(sly).call('is_member', { company_id: company.id }), false);
+  });
+
+  it('cannot come in by renaming a row, or two at once in one statement', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }, { first: 'Bo', last: 'Ellison' }] });
+    await refused(
+      db.as(company.owner).query("update public.roster set first_name = 'Kit', last_name = 'MarIow' where id = $1", [company.rows['Bo Ellison']]),
+      BAD_INPUT,
+      LOOKS_THE_SAME,
+    );
+    await refused(
+      db.as(company.owner).query("insert into public.roster (company_id, first_name, last_name) values ($1, 'Lou', 'Penrose'), ($1, 'Lou', 'Penr0se')", [company.id]),
+      BAD_INPUT,
+      LOOKS_THE_SAME,
+    );
+    assert.equal((await rosterRow(db, company.rows['Bo Ellison'])).last_name, 'Ellison');
+  });
+
+  it('is told apart from names that only differ, and from names written the same', async () => {
+    const company = await startCompany(db, {
+      roster: [
+        { first: 'Ian', last: 'Park' },
+        { first: 'Lee', last: 'Park', title: 'Crusher' },
+        { first: 'Lee', last: 'Park', title: 'Haul truck' },
+        { first: 'Pat', last: "O'Neil" },
+        { first: 'Іван', last: 'Петренко' },
+      ],
+    });
+    // A capital L is not the capital I that looks like a small l.
+    assert.deepEqual(await join(db, await db.newAccount(), company.code, 'Lan', 'Park'), { status: 'pending', company_name: 'Test Pit A', reason: 'not_on_roster' });
+    await addToRoster(db, company.owner, company.id, { first: 'Lan', last: 'Park' });
+    // A phone's curly apostrophe is the looser way of writing the same name: it claims the row.
+    assert.equal((await join(db, await db.newAccount(), company.code, 'Pat', `O${cp(0x2019)}Neil`)).status, 'joined');
+    // Lee Park twice, written the same, stays allowed: no typing can single one out.
+    assert.equal((await join(db, await db.newAccount(), company.code, 'Lee', 'Park')).reason, 'ambiguous');
+    assert.equal((await join(db, await db.newAccount(), company.code, 'Іван', 'Петренко')).status, 'joined');
+  });
+
+  it('as a stricter rule, does not block unrelated changes to rows written before it', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }] });
+    await db.admin('alter table public.roster disable trigger roster_names_look_apart_on_insert');
+    const [{ id }] = await db.adminRows("insert into public.roster (company_id, first_name, last_name) values ($1, 'Kit', 'MarIow') returning id", [company.id]);
+    await db.admin('alter table public.roster enable trigger roster_names_look_apart_on_insert');
+    assert.equal(await db.as(company.owner).affected("update public.roster set title = 'Crusher' where company_id = $1", [company.id]), 3);
+    assert.equal(await db.as(company.owner).affected('update public.roster set active = false where id = $1', [id]), 1);
+    // Writing a name to it again is held to the rule.
+    await refused(db.as(company.owner).query("update public.roster set last_name = 'Mar1ow' where id = $1", [id]), BAD_INPUT, LOOKS_THE_SAME);
   });
 });

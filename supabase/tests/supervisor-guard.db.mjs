@@ -1,6 +1,8 @@
 // A company always keeps at least one active supervisor with an account, on
 // every path: a role change, taking the row off, deleting it, releasing its
-// claim, and deleting the account.
+// claim, and deleting the account. An account Supabase Auth has banned or
+// soft-deleted is neither counted nor a supervisor, and the server steps an
+// account down before it bans it.
 
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -9,6 +11,8 @@ import {
   join,
   LAST_SUPERVISOR,
   newMember,
+  NOT_FOUND,
+  NOT_SIGNED_IN,
   refused,
   rosterRow,
   secondSupervisor,
@@ -25,6 +29,27 @@ after(async () => {
 });
 
 const LAST = /at least one active supervisor/;
+
+// Supabase Auth can take an account away without deleting its auth.users row:
+// a soft delete (auth.admin.deleteUser(id, true)) sets deleted_at, and a ban
+// sets banned_until. The roster's foreign key never fires, so the row keeps
+// its user_id.
+const softDelete = (id) => db.admin('update auth.users set deleted_at = now(), email = null where id = $1', [id]);
+const ban = (id) => db.admin("update auth.users set banned_until = now() + interval '100 years' where id = $1", [id]);
+const GONE = { 'soft-deleted': softDelete, banned: ban };
+
+/** The supervisors of a company whose accounts can still sign in. */
+async function usableSupervisors(companyId) {
+  return (
+    await db.adminRows(
+      `select r.user_id from public.roster r join auth.users u on u.id = r.user_id
+       where r.company_id = $1 and r.role = 'supervisor' and r.active
+         and u.deleted_at is null and (u.banned_until is null or u.banned_until <= now())
+       order by r.user_id`,
+      [companyId],
+    )
+  ).map((r) => r.user_id);
+}
 
 /** The ways a supervisor's row can stop counting. Each takes the supervisor making the change and the row. */
 const PATHS = {
@@ -161,15 +186,8 @@ describe('the guard', () => {
   });
 });
 
-// Supabase Auth can take an account away without deleting its auth.users row:
-// a soft delete (auth.admin.deleteUser(id, true)) sets deleted_at, and a ban
-// sets banned_until. The roster's foreign key never fires, so the row keeps
-// its user_id; the guard counts only supervisors whose account can still sign in.
+// The guard counts only supervisors whose account can still sign in.
 describe('a supervisor whose account can no longer sign in', () => {
-  const softDelete = (id) => db.admin('update auth.users set deleted_at = now(), email = null where id = $1', [id]);
-  const ban = (id) => db.admin("update auth.users set banned_until = now() + interval '100 years' where id = $1", [id]);
-  const GONE = { 'soft-deleted': softDelete, banned: ban };
-
   for (const [how, gone] of Object.entries(GONE)) {
     it(`does not count, so the other cannot step down once the first is ${how}`, async () => {
       const company = await startCompany(db);
@@ -215,5 +233,132 @@ describe('a supervisor whose account can no longer sign in', () => {
     assert.equal(await isLast(await db.newAccount()), false, 'an account on no roster');
     // It is the server's: nobody signed in through the app can call it.
     await refused(db.as(company.owner).call('is_last_supervisor', { user_id: company.owner }), '42501', /permission denied/);
+  });
+});
+
+// Membership goes by the same rule the guard does (migration 20261116002300).
+// An access token outlives a ban or a soft delete, so the database must not
+// take one as a member: from the moment the account is banned or soft-deleted
+// it is nobody in any company.
+describe('a supervisor banned or soft-deleted while their token still works', () => {
+  for (const [how, gone] of Object.entries(GONE)) {
+    it(`has no supervisor power left once ${how}: cannot promote a crony and push out the supervisor who can sign in`, async () => {
+      const company = await startCompany(db, { roster: [{ first: 'Maria', last: 'De La Cruz' }] });
+      const legit = await secondSupervisor(db, company, 'Ana', 'Diaz');
+      const crony = await newMember(db, company, 'Maria', 'De La Cruz');
+      // The server checks first, as it was told to, and then bans or soft-deletes.
+      assert.equal(await db.serviceRole().call('is_last_supervisor', { user_id: company.owner }), false);
+      await gone(company.owner);
+
+      const as = db.as(company.owner);
+      assert.equal(await as.call('is_supervisor', { company_id: company.id }), false, `a ${how} account still passes is_supervisor()`);
+      assert.equal(await as.call('is_member', { company_id: company.id }), false);
+      assert.equal(await as.affected("update public.roster set role = 'supervisor' where id = $1", [company.rows['Maria De La Cruz']]), 0);
+      assert.equal(await as.affected('update public.roster set active = false where user_id = $1', [legit]), 0);
+      assert.equal(await as.affected('delete from public.roster where user_id = $1', [legit]), 0);
+      assert.equal(await as.affected("update public.companies set name = 'Taken' where id = $1", [company.id]), 0);
+      await refused(as.call('rotate_join_code', { company_id: company.id }), NOT_FOUND);
+      await refused(as.call('release_roster_claim', { roster_id: company.rows['Ana Diaz'] }), NOT_FOUND);
+
+      // Nor can it let a second account of its own in as a supervisor.
+      const sock = await db.newAccount('sock');
+      assert.equal((await join(db, sock, company.code, 'Lou', 'Penrose')).status, 'pending');
+      const [request] = await db.adminRows("select id from public.join_requests where user_id = $1 and status = 'pending'", [sock]);
+      await refused(as.call('approve_join_request', { request_id: request.id, role: 'supervisor' }), NOT_FOUND);
+      await refused(as.call('deny_join_request', { request_id: request.id, bar: true }), NOT_FOUND);
+      await refused(as.call('lift_join_bar', { request_id: request.id }), NOT_FOUND);
+
+      // And it reads nothing.
+      for (const table of ['companies', 'roster', 'join_requests', 'notifications']) {
+        assert.deepEqual(await as.rows(`select * from public.${table}`), [], table);
+      }
+
+      assert.deepEqual(await usableSupervisors(company.id), [legit]);
+      assert.equal((await rosterRow(db, company.rows['Maria De La Cruz'])).role, 'employee');
+      assert.equal(await db.as(crony).call('is_supervisor', { company_id: company.id }), false);
+      assert.equal(await db.as(legit).call('is_supervisor', { company_id: company.id }), true);
+    });
+
+    it(`is no member as an employee either once ${how}, and cannot start a company or join one`, async () => {
+      const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }, { first: 'Bo', last: 'Ellison' }] });
+      const kit = await newMember(db, company, 'Kit', 'Marlow');
+      await gone(kit);
+      assert.equal(await db.as(kit).call('is_member', { company_id: company.id }), false);
+      assert.deepEqual(await db.as(kit).rows('select * from public.roster'), []);
+      const other = await startCompany(db, { name: 'Test Pit B', roster: [{ first: 'Kit', last: 'Marlow' }] });
+      await refused(join(db, kit, other.code, 'Kit', 'Marlow'), NOT_SIGNED_IN, /can no longer sign in/);
+      await refused(
+        db.as(kit).callRows('create_company', { name: 'Test Pit C', state: 'CA', timezone: null, first_name: 'Kit', last_name: 'Marlow' }),
+        NOT_SIGNED_IN,
+        /can no longer sign in/,
+      );
+      assert.equal((await rosterRow(db, other.rows['Kit Marlow'])).user_id, null);
+    });
+  }
+
+  it('is a supervisor again once a ban has run out', async () => {
+    const company = await startCompany(db);
+    await db.admin("update auth.users set banned_until = now() - interval '1 minute' where id = $1", [company.owner]);
+    assert.equal(await db.as(company.owner).call('is_supervisor', { company_id: company.id }), true);
+    assert.equal(await db.as(company.owner).affected("update public.companies set name = 'Test Pit A2' where id = $1", [company.id]), 1);
+  });
+});
+
+// A ban or a soft delete happens outside the database's transaction, so the
+// guard cannot refuse it. The server first steps the account down through the
+// roster (step_down_everywhere), where the guard refuses atomically, and bans
+// it only once that has gone through.
+describe('the server stepping an account down before it bans it', () => {
+  const stepDown = (id) => db.serviceRole().call('step_down_everywhere', { user_id: id });
+
+  it('leaves a supervisor who can sign in when the two supervisors are taken away at once', async () => {
+    const company = await startCompany(db);
+    const second = await secondSupervisor(db, company);
+    // Both are stepped down before either is banned, as a batch job would.
+    const outcomes = [];
+    for (const account of [company.owner, second]) outcomes.push(await stepDown(account).then((n) => n, (error) => error.code));
+    assert.deepEqual(outcomes, [1, LAST_SUPERVISOR]);
+    // The server bans only an account that stepped down.
+    await ban(company.owner);
+    assert.deepEqual(await usableSupervisors(company.id), [second]);
+  });
+
+  /** Make an account a supervisor of a company too: a supervisor row, and a request its owner approves onto it. */
+  async function supervisorToo(company, account, first, last) {
+    const rowId = await addToRoster(db, company.owner, company.id, { first, last, role: 'supervisor' }, company.rows);
+    assert.equal((await join(db, account, company.code, first, last)).reason, 'supervisor_row');
+    const [request] = await db.adminRows(
+      "select id from public.join_requests where user_id = $1 and company_id = $2 and status = 'pending'",
+      [account, company.id],
+    );
+    await db.as(company.owner).call('approve_join_request', { request_id: request.id, roster_id: rowId });
+  }
+
+  it('steps the account down in every company it supervises, in one statement, or nowhere', async () => {
+    const a = await startCompany(db);
+    const b = await startCompany(db, { name: 'Test Pit B' });
+    // One account supervises both, beside each company's owner.
+    const both = await secondSupervisor(db, a, 'Ana', 'Diaz');
+    await supervisorToo(b, both, 'Ana', 'Diaz');
+    assert.equal(await stepDown(both), 2);
+    assert.deepEqual(await usableSupervisors(a.id), [a.owner]);
+    assert.deepEqual(await usableSupervisors(b.id), [b.owner]);
+    assert.equal(await db.as(both).call('is_member', { company_id: b.id }), true, 'it stays on the roster as an employee');
+
+    // B's owner supervises A too, beside A's owner, but is B's only supervisor:
+    // refused, and it stays a supervisor of A as well.
+    await supervisorToo(a, b.owner, 'Jo', 'Vale');
+    await refused(stepDown(b.owner), LAST_SUPERVISOR, LAST);
+    assert.deepEqual(await usableSupervisors(a.id), [a.owner, b.owner].sort());
+    assert.deepEqual(await usableSupervisors(b.id), [b.owner]);
+    assert.equal(await stepDown(await db.newAccount()), 0, 'an account on no roster');
+  });
+
+  it("is the server key's alone", async () => {
+    const company = await startCompany(db);
+    const second = await secondSupervisor(db, company);
+    await refused(db.as(company.owner).call('step_down_everywhere', { user_id: second }), NOT_SIGNED_IN, /permission denied/);
+    await refused(db.anon().call('step_down_everywhere', { user_id: second }), NOT_SIGNED_IN, /permission denied/);
+    assert.deepEqual(await usableSupervisors(company.id), [company.owner, second].sort());
   });
 });

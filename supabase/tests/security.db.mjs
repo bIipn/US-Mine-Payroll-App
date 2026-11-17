@@ -30,9 +30,15 @@ const CALLABLE_BY = {
   release_roster_claim: ['authenticated'],
   lift_join_bar: ['authenticated'],
   my_join_requests: ['authenticated'],
+  my_companies: ['authenticated'],
+  push_records: ['authenticated'],
   is_last_supervisor: ['service_role'],
+  step_down_everywhere: ['service_role'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
+  // The row level security policies call these as the signed-in account.
+  member_company_ids: ['authenticated'],
+  supervisor_company_ids: ['authenticated'],
 };
 
 const SECURITY_DEFINER = [
@@ -46,16 +52,33 @@ const SECURITY_DEFINER = [
   'is_supervisor',
   'join_company',
   'lift_join_bar',
+  'member_company_ids',
+  'my_companies',
   'my_join_requests',
+  'push_records',
   'release_roster_claim',
   'roster_after_reactivate',
   'roster_before_delete',
   'roster_before_write',
   'roster_keeps_a_supervisor',
+  'roster_names_look_apart',
   'rotate_join_code',
+  'step_down_everywhere',
+  'supervisor_company_ids',
 ];
 
-const TABLES = ['companies', 'company_supervisor_guard', 'join_holds', 'join_requests', 'notifications', 'roster'];
+const TABLES = [
+  'companies',
+  'company_supervisor_guard',
+  'join_holds',
+  'join_requests',
+  'notifications',
+  'record_counters',
+  'record_history',
+  'record_usage',
+  'records',
+  'roster',
+];
 
 // What the authenticated role may do: whole-table privileges, and the columns it may insert and update.
 const AUTHENTICATED = {
@@ -70,6 +93,12 @@ const AUTHENTICATED = {
   // Kept by the functions and triggers only.
   company_supervisor_guard: { table: [], insert: [], update: [] },
   join_holds: { table: [], insert: [], update: [] },
+  // Written by push_records only, and read through their policies.
+  records: { table: ['SELECT'], insert: [], update: [] },
+  record_history: { table: ['SELECT'], insert: [], update: [] },
+  // push_records' own counts: each company's seq, each account's sends today.
+  record_counters: { table: [], insert: [], update: [] },
+  record_usage: { table: [], insert: [], update: [] },
 };
 const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 
@@ -135,6 +164,8 @@ describe('tables', () => {
       'join_requests SELECT',
       'notifications SELECT',
       'notifications UPDATE',
+      'record_history SELECT',
+      'records SELECT',
       'roster DELETE',
       'roster INSERT',
       'roster SELECT',

@@ -10,7 +10,9 @@
 //    it, so a supervisor still sees that the account first typed a claimed
 //    coworker's name;
 //  * a supervisor can deny with a bar, which keeps that account out of the
-//    company until a supervisor lifts it.
+//    company until a supervisor lifts it;
+//  * a bar and a release are kept apart, so lifting the bar leaves the release
+//    (migration 20261116002600).
 //
 // All names are made up.
 
@@ -214,5 +216,74 @@ describe('denying with a bar', () => {
     await join(db, stranger, company.code, 'Pat', 'Cole');
     await deny(company.owner, { request_id: (await pendingOf(stranger)).id });
     assert.equal((await join(db, stranger, company.code, 'Pat', 'Cole')).status, 'pending');
+  });
+});
+
+describe('a bar on an account that is also held for a release', () => {
+  const holdsOf = async (company, account) =>
+    (await db.adminRows('select kind from public.join_holds where company_id = $1 and user_id = $2 order by kind', [company.id, account])).map((h) => h.kind);
+
+  it('when lifted, leaves the release, so the impostor whose claim was released cannot type the row back', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const rowId = company.rows['Riley J Quinn'];
+    const impostor = await newMember(db, company, 'Riley', 'Quinn');
+    await db.as(company.owner).call('release_roster_claim', { roster_id: rowId });
+    assert.deepEqual(await join(db, impostor, company.code, 'Riley', 'Quinn'), PENDING_RELEASED);
+
+    // The impostor keeps asking, and is barred; later the bar is lifted.
+    const request = await pendingOf(impostor);
+    await deny(company.owner, { request_id: request.id, bar: true });
+    assert.equal((await join(db, impostor, company.code, 'Riley', 'Quinn')).status, 'denied');
+    assert.deepEqual(await holdsOf(company, impostor), ['barred', 'released']);
+    await db.as(company.owner).call('lift_join_bar', { request_id: request.id });
+    assert.deepEqual(await holdsOf(company, impostor), ['released']);
+
+    // It may ask again, as a lifted bar allows, but it is still held: it does not take the row.
+    assert.deepEqual(await join(db, impostor, company.code, 'Riley', 'Quinn'), PENDING_RELEASED);
+    assert.equal((await rosterRow(db, rowId)).user_id, null);
+  });
+
+  it('when lifted, leaves the hold on a removed person whose row was deleted', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }, { first: 'Bo', last: 'Ellison' }] });
+    const kit = await newMember(db, company, 'Kit', 'Marlow');
+    await deactivate(company, company.rows['Kit Marlow']);
+    assert.equal(await db.as(company.owner).affected('delete from public.roster where id = $1', [company.rows['Kit Marlow']]), 1);
+    assert.deepEqual(await join(db, kit, company.code, 'Kit', 'Marlow'), PENDING_RELEASED);
+    const request = await pendingOf(kit);
+    await deny(company.owner, { request_id: request.id, bar: true });
+    await db.as(company.owner).call('lift_join_bar', { request_id: request.id });
+
+    assert.deepEqual(await join(db, kit, company.code, 'Bo', 'Ellison'), PENDING_RELEASED);
+    assert.equal((await rosterRow(db, company.rows['Bo Ellison'])).user_id, null);
+  });
+
+  it('given after the bar, is not swallowed by it either', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }, { first: 'Bo', last: 'Ellison' }] });
+    const kit = await newMember(db, company, 'Kit', 'Marlow');
+    await deactivate(company, company.rows['Kit Marlow']);
+    assert.equal((await join(db, kit, company.code, 'Kit', 'Marlow')).reason, 'removed');
+    const request = await pendingOf(kit);
+    // Barred while off the roster, then the old row is deleted, which holds the account too.
+    await deny(company.owner, { request_id: request.id, bar: true });
+    assert.equal(await db.as(company.owner).affected('delete from public.roster where id = $1', [company.rows['Kit Marlow']]), 1);
+    assert.deepEqual(await holdsOf(company, kit), ['barred', 'released']);
+    await db.as(company.owner).call('lift_join_bar', { request_id: request.id });
+
+    assert.deepEqual(await join(db, kit, company.code, 'Bo', 'Ellison'), PENDING_RELEASED);
+    assert.equal((await rosterRow(db, company.rows['Bo Ellison'])).user_id, null);
+  });
+
+  it('goes with the release when a supervisor approves the account', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const impostor = await newMember(db, company, 'Riley', 'Quinn');
+    await db.as(company.owner).call('release_roster_claim', { roster_id: company.rows['Riley J Quinn'] });
+    await join(db, impostor, company.code, 'Riley', 'Quinn');
+    await deny(company.owner, { request_id: (await pendingOf(impostor)).id, bar: true });
+    const lifted = await db.adminRows("select id from public.join_requests where user_id = $1 and status = 'denied'", [impostor]);
+    await db.as(company.owner).call('lift_join_bar', { request_id: lifted[0].id });
+    await join(db, impostor, company.code, 'Pat', 'Cole');
+    await approve(company.owner, { request_id: (await pendingOf(impostor)).id });
+    assert.deepEqual(await holdsOf(company, impostor), []);
+    assert.equal(await db.as(impostor).call('is_member', { company_id: company.id }), true);
   });
 });
