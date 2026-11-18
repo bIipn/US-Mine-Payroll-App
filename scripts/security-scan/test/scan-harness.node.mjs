@@ -13,6 +13,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 
 import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from '../after-scan.mjs';
+import { otherScannerStill } from '../one-at-a-time.mjs';
 import { GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS, isLocalTarget, mayPass, startGuard, upstreamFrom } from '../egress-guard.mjs';
 import { FUNCTION_INPUTS, TABLE_FILTERS, filtersOf, readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
 import { LINK_MOVES, NOT_IN_THE_COPY, isThisMachine, liveLinksIn, moveLinks, undoLinks } from '../sites/live.mjs';
@@ -285,6 +286,20 @@ test('a scan that sent nothing to the scan targets through the guard is called o
   const some = { outside: ['api.stackhawk.com:443'], local: ['127.0.0.1:4443'], localTunnels: 812, refused: ['accounts.google.com:443'], failed: [] };
   assert.equal(guardVerdict(some).ok, true);
   assert.match(guardVerdict(some).line, /812 tunnels/);
+});
+
+test('a scanner that is closing is waited for, and one that keeps running is named', async () => {
+  const sleep = async () => {};
+  // Closing: running on the first two looks, gone on the third.
+  let looks = 0;
+  assert.equal(await otherScannerStill(() => (++looks < 3 ? '4242' : ''), { tries: 10, sleep }), '');
+  assert.equal(looks, 3);
+  // Still running after every look: its process ids are given back.
+  assert.equal(await otherScannerStill(() => '4242\n4343', { tries: 4, sleep }), '4242\n4343');
+  // Nothing running: one look is enough.
+  looks = 0;
+  assert.equal(await otherScannerStill(() => { looks += 1; return ''; }, { tries: 10, sleep }), '');
+  assert.equal(looks, 1);
 });
 
 // ---- The scan inputs ----------------------------------------------------------------------------

@@ -29,6 +29,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from './after-scan.mjs';
+import { otherScannerStill } from './one-at-a-time.mjs';
 import { GUARD_HOST, GUARD_PORT, GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS } from './egress-guard.mjs';
 import { inputsFolder, readEnvFile, writeScanInputs } from './scan-inputs.mjs';
 import { DASHBOARD_PORT, HOST, LOCAL_SERVER, REPO, WEBSITE_PORT, homeFrom, layout, readArgs } from './sites/layout.mjs';
@@ -582,8 +583,8 @@ async function scan(name, parent) {
   await needGuard();
   await needSafeNetwork();
   const action = parent ? 'rescan' : 'scan';
-  const others = spawnSync('pgrep', ['-x', 'hawk'], { encoding: 'utf8' }).stdout.trim();
-  if (others) fail('Another hawk command is still running. One at a time.');
+  const others = await otherScannerStill(() => spawnSync('pgrep', ['-x', 'hawk'], { encoding: 'utf8' }).stdout ?? '');
+  if (others) fail(`Another hawk command is still running (process ${others.split('\n').join(', ')}). One at a time.`);
   if (!(await listening(Number(new URL(surface.host).port)))) fail(`Nothing answers at ${surface.host}. Run "node up.mjs" first.`);
 
   // Every scan starts from the same data. The reset says what the last scan changed.
