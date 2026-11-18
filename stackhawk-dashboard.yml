@@ -1,0 +1,52 @@
+# HawkScan, surface 2 of 3: the office dashboard.
+#
+# The target is a private copy of the dashboard's build, served on this machine the way Vercel
+# serves the real one, at https://127.0.0.1:4444 (scripts/security-scan/sites). It calls the
+# local copy of the server and no other. Nothing live is ever scanned.
+# scripts/security-scan/README.md says how to start everything and run the scan.
+#
+# The dashboard is a single-page app. It keeps its session in the browser's own storage, which
+# the scanner cannot fill, so the crawl sees the sign-in screen at every address and nothing
+# behind it. What a signed-in supervisor can do is tested where it is decided, on the server
+# (stackhawk-api.yml). This scan covers how the dashboard is served: its response headers, its
+# files, and the sign-in screen.
+#
+# Assumed, with nobody to ask when this was written:
+# - Routes expected: the build's 15 files, and the app itself at any other address, since the
+#   live site rewrites every path to it.
+# - The crawl's browser stays on this host. The copy still links to the live sites, so the scan
+#   is run through scripts/security-scan/egress-guard.mjs, which lets the scanner reach
+#   StackHawk and nothing else outside this machine.
+
+app:
+  applicationId: ${APP_ID}
+  env: ${APP_ENV:Development-dashboard}
+  host: ${APP_HOST:https://127.0.0.1:4444}
+
+hawk:
+  # Any finding ends the scan with exit code 42.
+  failureThreshold: low
+  spider:
+    base: true
+    # The pages are drawn by JavaScript, so the crawl needs a browser.
+    ajax: true
+    ajaxBrowser: CHROME_HEADLESS
+    maxDurationMinutes: 3
+    # Every address is the same app, so nothing links to these: a page, pages that read the
+    # query, and the trial link from the website.
+    seedPaths:
+      - /roster
+      - /records?day=2026-11-18
+      - /requests?show=open
+      - /billing?started=1
+      - /?start=trial
+
+tags:
+  - name: _STACKHAWK_AGENT
+    value: ${HAWK_AGENT:none}
+  - name: _STACKHAWK_GIT_COMMIT_SHA
+    value: ${COMMIT_SHA:none}
+  - name: _STACKHAWK_GIT_BRANCH
+    value: ${BRANCH_NAME:none}
+  - name: git_origin
+    value: biipn/us-mine-payroll-app

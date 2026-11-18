@@ -1,0 +1,213 @@
+# HawkScan, surface 1 of 3: the company server.
+#
+# The target is the private local copy of the server that scripts/security-scan/stack runs, at
+# https://127.0.0.1:54321. Nothing live is ever scanned. Every id, account and key below is read
+# from the environment, where scripts/security-scan/scan-inputs.mjs writes it from the local
+# stack's own files, so this file holds nothing that could pass for a credential.
+# scripts/security-scan/README.md says how to start everything and run the scan.
+#
+# Scanned: PostgREST under /rest/v1 (the tables, and the functions under /rest/v1/rpc) and the
+# stripe-webhook function under /functions/v1.
+# Not scanned: Supabase Auth under /auth/v1. It is Supabase's code, not this repository's, and
+# junk sent there locks the scan's own accounts out (a changed password, or the limit on
+# sign-ins by caller address). The scanner still signs in there.
+#
+# Scan it with the profile mode, or the four accounts get two rules and nothing else:
+#   hawk scan --profile-scan-mode=primary-full --full-scan-profile=A1 stackhawk-api.yml
+#
+# Assumed, with nobody to ask when this was written:
+# - Routes expected: 61 method and path pairs on 28 paths, counted from the description file.
+#   PostgREST lists every method on every table, so 19 of them are there only to be refused by
+#   the grants.
+# - The first account, A1, is the supervisor of the first made-up company and gets every rule.
+#   Its own sign-in is in the part that is not attacked.
+# - The other company's ids under forbiddenVariables document the boundary. The preset rules
+#   that would use them are off on this account, so they are not counted as coverage.
+
+app:
+  applicationId: ${APP_ID}
+  env: ${APP_ENV:Development-api}
+  # The origin, with no path: sign-in, the tables and the function live under three prefixes,
+  # so every path in the description file carries its own.
+  host: ${APP_HOST:https://127.0.0.1:54321}
+
+  excludePaths:
+    - "/auth/v1"
+    - "/auth/v1/.*"
+
+  # The scanner asks this before it starts and when it suspects the server has stopped. It is a
+  # public function that answers 200 quickly, with a code no company has.
+  waitForAppTarget:
+    path: /rest/v1/rpc/company_by_code?code=XXXXXXXX
+    waitTimeoutMillis: 60000
+    pollDelay: 1000
+    requestHeaders:
+      apikey: ${SCAN_PUBLISHABLE_KEY}
+
+  openApiConf:
+    # One file: PostgREST's own description of what a signed-in account reaches, and the
+    # webhook's, with "/rest/v1" and "/functions/v1" written into each path. The gateway gives
+    # PostgREST's description to the secret key alone, so the scanner cannot fetch it itself.
+    filePath: ${OPENAPI_SCAN}
+    # A DELETE is sent, but never with one of the real ids below, so the scan does not delete
+    # the rows it is testing with.
+    includeAllMethods: false
+    # Real ids, so a request reaches the function or the row and not just a "not found". Each is
+    # held to its own paths: the same argument name means a raw id in a function and "eq.<id>"
+    # in a table filter. The only roster row named is one no account holds.
+    customVariables:
+      - field: company_id
+        path: ".*/rest/v1/rpc/(is_member|is_supervisor|push_records|rotate_join_code)$"
+        values:
+          - ${SCAN_COMPANY_A}
+      - field: p_company_id
+        path: ".*/rest/v1/rpc/company_billing$"
+        values:
+          - ${SCAN_COMPANY_A}
+      - field: request_id
+        path: ".*/rest/v1/rpc/(approve_join_request|deny_join_request|lift_join_bar)$"
+        values:
+          - ${SCAN_REQUEST_P1}
+      - field: roster_id
+        path: ".*/rest/v1/rpc/(approve_join_request|release_roster_claim)$"
+        values:
+          - ${SCAN_ROSTER_A3}
+      - field: code
+        path: ".*/rest/v1/rpc/(company_by_code|join_company)$"
+        values:
+          - ${SCAN_CODE_B}
+      - field: company_id
+        path: ".*/rest/v1/(roster|records|record_history|join_requests|notifications|billing_subscriptions|billing_overrides)$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_COMPANY_A_EQ}
+      - field: id
+        path: ".*/rest/v1/companies$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_COMPANY_A_EQ}
+      - field: id
+        path: ".*/rest/v1/roster$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_ROSTER_A3_EQ}
+    # The other company's ids, which no account of the first company may reach.
+    forbiddenVariables:
+      - field: company_id
+        path: ".*/rest/v1/rpc/(is_member|is_supervisor|push_records|rotate_join_code)$"
+        values:
+          - ${SCAN_COMPANY_B}
+      - field: p_company_id
+        path: ".*/rest/v1/rpc/company_billing$"
+        values:
+          - ${SCAN_COMPANY_B}
+      - field: roster_id
+        path: ".*/rest/v1/rpc/(approve_join_request|release_roster_claim)$"
+        values:
+          - ${SCAN_ROSTER_B1}
+      - field: company_id
+        path: ".*/rest/v1/(roster|records|record_history|join_requests|notifications|billing_subscriptions|billing_overrides)$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_COMPANY_B_EQ}
+      - field: id
+        path: ".*/rest/v1/companies$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_COMPANY_B_EQ}
+
+  authentication:
+    # An account signs in with its email address and password as JSON, and the answer holds an
+    # access token that lasts an hour.
+    usernamePassword:
+      type: JSON
+      loginPath: ${SCAN_LOGIN_PATH:/auth/v1/token?grant_type=password}
+      usernameField: email
+      passwordField: password
+      scanUsername: ${SCAN_A1_EMAIL}
+      scanPassword: ${SCAN_A1_PASSWORD}
+    tokenExtraction:
+      type: TOKEN_PATH
+      value: "access_token"
+    tokenAuthorization:
+      type: HEADER
+      value: Authorization
+      tokenType: Bearer
+      isJWT: true
+    # Answers 401 to the key alone and 200 to every signed-in account, a member of a company or not.
+    testPath:
+      path: /rest/v1/rpc/my_companies
+      requestMethod: GET
+      success: ".*200.*"
+      requestHeaders:
+        apikey: ${SCAN_PUBLISHABLE_KEY}
+    # A1 is the supervisor of the first company and gets every rule. The others get the two
+    # rules that look for one account reaching what belongs to another: an employee of the same
+    # company, the supervisor of another company, and an account that has joined nothing.
+    profiles:
+      - name: A1
+        isPrivileged: true
+        userNamePassword:
+          username: ${SCAN_A1_EMAIL}
+          password: ${SCAN_A1_PASSWORD}
+      - name: A2
+        isPrivileged: false
+        userNamePassword:
+          username: ${SCAN_A2_EMAIL}
+          password: ${SCAN_A2_PASSWORD}
+      - name: B1
+        isPrivileged: false
+        userNamePassword:
+          username: ${SCAN_B1_EMAIL}
+          password: ${SCAN_B1_PASSWORD}
+      - name: N1
+        isPrivileged: false
+        userNamePassword:
+          username: ${SCAN_N1_EMAIL}
+          password: ${SCAN_N1_PASSWORD}
+
+  redact:
+    headers:
+      - apikey
+
+# Every request to the gateway carries the publishable key in "apikey".
+hawkAddOn:
+  replacer:
+    rules:
+      - matchString: apikey
+        replacement: ${SCAN_PUBLISHABLE_KEY}
+        replaceOnly: false
+        isRegex: false
+
+hawk:
+  # Any finding ends the scan with exit code 42.
+  failureThreshold: low
+  spider:
+    # No pages to crawl: the routes come from the description file and from the requests below.
+    base: false
+    ajax: false
+    # One well-formed request for each call the description cannot render: a table filter
+    # ("eq.<value>"), the list push_records takes, the contact form with its hidden field empty.
+    har:
+      file:
+        paths:
+          - ${SEED_HAR}
+  scan:
+    # The scanner shares four cores with the server it attacks. Fewer threads keep answers
+    # quick, which the rules that time an answer depend on.
+    concurrentRequests: 10
+
+tags:
+  - name: _STACKHAWK_AGENT
+    value: ${HAWK_AGENT:none}
+  - name: _STACKHAWK_GIT_COMMIT_SHA
+    value: ${COMMIT_SHA:none}
+  - name: _STACKHAWK_GIT_BRANCH
+    value: ${BRANCH_NAME:none}
+  - name: git_origin
+    value: biipn/us-mine-payroll-app

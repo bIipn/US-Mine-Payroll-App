@@ -1,0 +1,46 @@
+# HawkScan, surface 3 of 3: the website.
+#
+# The target is a private copy of site/, served on this machine the way Vercel serves the real
+# one, at https://127.0.0.1:4443 (scripts/security-scan/sites). Its contact form posts to the
+# local copy of the server and to no other. Nothing live is ever scanned.
+# scripts/security-scan/README.md says how to start everything and run the scan.
+#
+# The pages are static, and /demo is one large page that runs the app in the browser and sends
+# nothing anywhere. So this scan covers how the site is served (its response headers and its
+# Content-Security-Policy, its files, what it gives for a path that is not there) and the pages
+# as a browser draws them. The contact form's own handling is on the server, and is tested
+# there (stackhawk-api.yml).
+#
+# Assumed, with nobody to ask when this was written:
+# - Routes expected: the 43 files the copy serves: six pages, /demo, the 404 page and their
+#   assets.
+# - The crawl's browser stays on this host. The copy still links to the live sites, so the scan
+#   is run through scripts/security-scan/egress-guard.mjs, which lets the scanner reach
+#   StackHawk and nothing else outside this machine.
+
+app:
+  applicationId: ${APP_ID}
+  env: ${APP_ENV:Development-site}
+  host: ${APP_HOST:https://127.0.0.1:4443}
+
+hawk:
+  # Any finding ends the scan with exit code 42.
+  failureThreshold: low
+  spider:
+    base: true
+    # /demo and the 3D logo are drawn by JavaScript, so the crawl needs a browser.
+    ajax: true
+    ajaxBrowser: CHROME_HEADLESS
+    # The pages take seconds. The rest of this is spent inside /demo, which has many screens
+    # and one address, so more time finds no more of the site.
+    maxDurationMinutes: 4
+
+tags:
+  - name: _STACKHAWK_AGENT
+    value: ${HAWK_AGENT:none}
+  - name: _STACKHAWK_GIT_COMMIT_SHA
+    value: ${COMMIT_SHA:none}
+  - name: _STACKHAWK_GIT_BRANCH
+    value: ${BRANCH_NAME:none}
+  - name: git_origin
+    value: biipn/us-mine-payroll-app
