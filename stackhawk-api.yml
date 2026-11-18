@@ -12,8 +12,9 @@
 # junk sent there locks the scan's own accounts out (a changed password, or the limit on
 # sign-ins by caller address). The scanner still signs in there.
 #
-# Scan it with the profile mode, or the four accounts get two rules and nothing else:
-#   hawk scan --profile-scan-mode=primary-full --full-scan-profile=A1 stackhawk-api.yml
+# Scan it with "node scripts/security-scan/up.mjs scan api". That adds the profile mode
+# (--profile-scan-mode=primary-full --full-scan-profile=A1), without which the four accounts get
+# two rules and nothing else, and it runs the scanner through the scan guard.
 #
 # Assumed, with nobody to ask when this was written:
 # - Routes expected: 61 method and path pairs on 28 paths, counted from the description file.
@@ -126,7 +127,7 @@ app:
     # access token that lasts an hour.
     usernamePassword:
       type: JSON
-      loginPath: ${SCAN_LOGIN_PATH:/auth/v1/token?grant_type=password}
+      loginPath: /auth/v1/token?grant_type=password
       usernameField: email
       passwordField: password
       scanUsername: ${SCAN_A1_EMAIL}

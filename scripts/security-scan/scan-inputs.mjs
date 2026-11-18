@@ -208,7 +208,6 @@ export function writeScanInputs({ home, appId }) {
   const vars = {
     APP_ID: application,
     SCAN_PUBLISHABLE_KEY: key,
-    SCAN_LOGIN_PATH: '/auth/v1/token?grant_type=password',
     SCAN_A1_EMAIL: A1.email, SCAN_A1_PASSWORD: A1.password,
     SCAN_A2_EMAIL: A2.email, SCAN_A2_PASSWORD: A2.password,
     SCAN_B1_EMAIL: B1.email, SCAN_B1_PASSWORD: B1.password,
