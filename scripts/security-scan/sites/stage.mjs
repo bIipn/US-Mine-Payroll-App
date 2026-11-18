@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 // Makes the private copies of the two sites that a security scan is pointed at:
 //
-//   <home>/sites/website                 site/ as it is, with the one live server address changed
+//   <home>/sites/website                 site/ with the live server, its key and the live links moved
 //   <home>/sites/dashboard               a build of dashboard/ that talks to the local server
 //   <home>/sites/dashboard.vercel.json   dashboard/vercel.json, changed the same way
 //   <home>/sites/stage-report.json       what was changed, and what was checked
 //
-//   node stage.mjs --home <private folder> [--only website|dashboard] [--local-key]
+//   node stage.mjs --home <private folder> [--only website|dashboard]
 //
-// The live server's address is read from the two vercel.json files, not written here. The script
-// stops, loudly, if that address is anywhere in a copy when it is done, and takes that copy away.
-// It never writes into site/, dashboard/dist or anywhere else in the repository.
-//
-// The website's contact form sends the live server's publishable key, which the local server
-// turns away. --local-key gives the copy's contact.js the local server's key as well, so the form
-// goes through on the copy. Without it the address is the only thing changed.
+// The live server's address and key are read from the repository's own files, not written here.
+// In both copies the server becomes the local one, the key becomes the local server's, and every
+// link to the live website, the live dashboard or Stripe goes to a copy instead (live.mjs). The
+// script stops, loudly, if the live server, its key or a live link is anywhere in a copy when it
+// is done, and takes that copy away. It never writes into site/, dashboard/dist or anywhere else
+// in the repository.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -22,6 +21,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSy
 import path from 'node:path';
 
 import { LOCAL_SERVER, REPO, homeFrom, layout, readArgs } from './layout.mjs';
+import { LOCAL_LINK_TARGETS, directives, liveKeys, liveLinksIn, liveServer, moveLinks, policiesIn, undoLinks } from './live.mjs';
 import { headersFor, readConfig } from './vercel-rules.mjs';
 
 const SITE = path.join(REPO, 'site');
@@ -49,56 +49,35 @@ function filesUnder(root) {
   return found;
 }
 
-/** A Content-Security-Policy as its directives, by name. */
-function directives(policy) {
-  const found = new Map();
-  for (const part of policy.split(';')) {
-    const [name, ...sources] = part.trim().split(/\s+/);
-    if (name) found.set(name.toLowerCase(), sources);
-  }
-  return found;
-}
-
-const policiesIn = (config) =>
-  (config.headers ?? []).flatMap((rule) => rule.headers.filter((h) => h.key.toLowerCase() === 'content-security-policy').map((h) => h.value));
-
-/** The one server the two sites are allowed to call, from connect-src in their vercel.json files. */
-function liveServer() {
-  const origins = new Set();
-  for (const file of [path.join(SITE, 'vercel.json'), path.join(DASHBOARD, 'vercel.json')]) {
-    for (const policy of policiesIn(JSON.parse(readFileSync(file, 'utf8')))) {
-      for (const source of directives(policy).get('connect-src') ?? []) {
-        if (/^https?:\/\//.test(source)) origins.add(source);
-      }
-    }
-  }
-  if (origins.size !== 1) {
-    fail(`connect-src in the two vercel.json files names ${origins.size} servers (${[...origins].join(', ') || 'none'}). This script moves exactly one.`);
-  }
-  const origin = [...origins][0];
-  return { origin, host: new URL(origin).host };
-}
-
 /** Replaces every mention of the live server in a text, and says how many there were. */
 function moved(text, live) {
   const count = text.split(live.origin).length - 1;
   return { text: text.split(live.origin).join(LOCAL_SERVER), count };
 }
 
-/** Stops if the live server, or any other Supabase project, is named anywhere under a folder. */
+/** The files whose text a copy may change. Anything else is copied byte for byte. */
+const isText = (rel) => /\.(html|js|mjs|css|json|xml|txt|svg|webmanifest|map)$/.test(rel);
+
+/**
+ * Stops if anything under a folder names the live server or any other Supabase project, holds the
+ * live server's key, or links to the live website, the live dashboard or Stripe.
+ */
 function mustNotName(live, root, files, extra = []) {
   const anyProject = /[a-z0-9]{20}\.supabase\.(co|in|net)/i;
+  const keys = liveKeys();
   const named = [];
-  for (const rel of files) {
-    const text = readFileSync(path.join(root, rel)).toString('latin1');
-    if (text.toLowerCase().includes(live.host.toLowerCase()) || anyProject.test(text)) named.push(rel);
-  }
-  for (const file of extra) {
-    const text = readFileSync(file, 'latin1');
-    if (text.toLowerCase().includes(live.host.toLowerCase()) || anyProject.test(text)) named.push(file);
-  }
+  const look = (where, text) => {
+    const why = [];
+    if (text.toLowerCase().includes(live.host.toLowerCase()) || anyProject.test(text)) why.push('the live server');
+    if (keys.some((key) => text.includes(key))) why.push('the live key');
+    const links = liveLinksIn(text);
+    if (links.length > 0) why.push(`a live link (${links.slice(0, 3).join(', ')})`);
+    if (why.length > 0) named.push(`${where}: ${why.join(', ')}`);
+  };
+  for (const rel of files) look(rel, readFileSync(path.join(root, rel)).toString('latin1'));
+  for (const file of extra) look(file, readFileSync(file, 'latin1'));
   if (named.length > 0) {
-    fail(`STOP: the live server is still named in the copy, in ${named.join(', ')}. Do not serve or scan this copy.`);
+    fail(`STOP: the copy still names what it must not, in ${named.join('; ')}. Do not serve or scan this copy.`);
   }
 }
 
@@ -179,34 +158,59 @@ function checkScriptHashes(root, files, configFile) {
   return pages;
 }
 
-function stageWebsite(live, at, withLocalKey) {
-  const key = withLocalKey ? localKey(at) : null;
-  if (key?.missing) fail(`--local-key needs the local server's key, and ${key.missing}.`);
+/** Adds up how many of each live link were moved, across files. */
+function addMoves(total, moved) {
+  for (const [live, count] of Object.entries(moved)) total[live] = (total[live] ?? 0) + count;
+}
+
+function stageWebsite(live, at) {
+  const key = localKey(at);
   rmSync(at.website, { recursive: true, force: true });
   mkdirSync(at.website, { recursive: true });
   const source = filesUnder(SITE);
 
-  // Two files name the server: the contact form's script, and connect-src in vercel.json. They are
-  // written with the address already moved, so the live one is never in the copy, even for a moment.
+  // The copy's own changes are only read back if site/ cannot hold them already.
+  for (const rel of source.filter(isText)) {
+    const text = readFileSync(path.join(SITE, rel), 'utf8');
+    const there = [LOCAL_SERVER, key.key, ...LOCAL_LINK_TARGETS].filter((s) => text.includes(s));
+    if (there.length > 0) fail(`site/${rel} already holds ${there.join(', ')}, so the copy could not be checked against it.`);
+  }
+
+  // Two files name the server: the contact form's script, and connect-src in vercel.json. Every
+  // file is written with its changes already made, so nothing live is in the copy, even for a moment.
   const changed = {};
+  const linksMoved = {};
   for (const rel of source) {
     const from = path.join(SITE, rel);
     const to = path.join(at.website, rel);
     mkdirSync(path.dirname(to), { recursive: true });
     if (rel === 'vercel.json') {
       changed[rel] = moveConfig(live, from, to);
-    } else if (rel === 'contact.js') {
-      const form = moved(readFileSync(from, 'utf8'), live);
-      if (form.count === 0) fail(`site/contact.js does not name ${live.origin}.`);
-      changed[rel] = { replaced: form.count, key: 'as in site/contact.js' };
-      if (key) {
+    } else if (isText(rel)) {
+      let text = readFileSync(from, 'utf8');
+      const what = {};
+      if (rel === 'contact.js') {
+        const form = moved(text, live);
+        if (form.count === 0) fail(`site/contact.js does not name ${live.origin}.`);
         const liveKey = /const KEY = '(sb_publishable_[\w-]+)';/.exec(form.text)?.[1];
         if (!liveKey || form.text.split(liveKey).length !== 2) fail('site/contact.js does not hold its key the way this script expects.');
-        form.text = form.text.replace(liveKey, key.key);
-        changed[rel].key = `the local server's, from ${key.from}`;
-        changed[rel].undoKey = (text) => text.replace(key.key, liveKey);
+        text = form.text.replace(liveKey, key.key);
+        what.serverAddress = form.count;
+        what.key = `the local server's, from ${key.from}`;
+      } else if (text.includes(live.host)) {
+        fail(`site/${rel} names the live server, and this script does not know how to move it there.`);
       }
-      writeFileSync(to, form.text);
+      const links = moveLinks(text);
+      if (Object.keys(links.moved).length > 0) {
+        what.links = links.moved;
+        addMoves(linksMoved, links.moved);
+      }
+      if (Object.keys(what).length > 0) {
+        changed[rel] = what;
+        writeFileSync(to, links.text);
+      } else {
+        copyFileSync(from, to);
+      }
     } else {
       if (readFileSync(from).toString('latin1').includes(live.host)) fail(`site/${rel} names the live server, and this script does not know how to move it there.`);
       copyFileSync(from, to);
@@ -216,16 +220,16 @@ function stageWebsite(live, at, withLocalKey) {
   }
   for (const rel of ['contact.js', 'vercel.json']) if (!changed[rel]) fail(`site/${rel} is missing.`);
 
+  // Every file of the copy is site/'s, but for the server address, the key and the links.
   const copy = filesUnder(at.website);
   if (copy.join('\n') !== source.join('\n')) fail('The copy of the website does not hold the same files as site/.');
+  const liveKey = /const KEY = '(sb_publishable_[\w-]+)';/.exec(readFileSync(path.join(SITE, 'contact.js'), 'utf8'))[1];
   for (const rel of copy) {
     const mine = readFileSync(path.join(at.website, rel));
     const theirs = readFileSync(path.join(SITE, rel));
     if (rel in changed) {
-      // The two changed files differ from site/ by the address and nothing else (and, when asked
-      // for, by the form's key).
-      const back = (changed[rel].undoKey ?? ((text) => text))(mine.toString('utf8')).split(LOCAL_SERVER).join(live.origin);
-      if (back !== theirs.toString('utf8')) fail(`${rel} in the copy differs from site/ by more than the server address.`);
+      const back = undoLinks(mine.toString('utf8')).split(LOCAL_SERVER).join(live.origin).split(key.key).join(liveKey);
+      if (back !== theirs.toString('utf8')) fail(`${rel} in the copy differs from site/ by more than the server address, the key and the links.`);
     } else if (sha256(mine) !== sha256(theirs)) {
       fail(`${rel} in the copy is not the same as in site/.`);
     }
@@ -237,9 +241,10 @@ function stageWebsite(live, at, withLocalKey) {
     config: at.websiteConfig,
     files: copy.length,
     sameAsSource: copy.length - Object.keys(changed).length,
-    serverAddressReplaced: { 'contact.js': changed['contact.js'].replaced, 'vercel.json': changed['vercel.json'].replaced },
+    changed: Object.fromEntries(Object.entries(changed).map(([rel, what]) => [rel, rel === 'vercel.json' ? { serverAddress: what.replaced, policiesChanged: what.policiesChanged } : what])),
+    linksMoved,
     contactFormKey: changed['contact.js'].key,
-    policiesChanged: changed['vercel.json'].policiesChanged,
+    keyMissing: key.missing ?? null,
     pages,
     hostsNamed: hostsNamed(at.website, copy),
   };
@@ -266,6 +271,7 @@ function stageDashboard(live, at) {
   const vite = path.join(DASHBOARD, 'node_modules', 'vite', 'bin', 'vite.js');
   if (!existsSync(vite)) fail('dashboard/node_modules is not installed. Run "npm ci" in dashboard/ first.');
   const key = localKey(at);
+  const keys = liveKeys();
 
   rmSync(at.dashboard, { recursive: true, force: true });
   const built = spawnSync(process.execPath, [vite, 'build', '--outDir', at.dashboard, '--emptyOutDir'], {
@@ -276,18 +282,30 @@ function stageDashboard(live, at) {
   if (built.status !== 0) fail(`The dashboard did not build:\n${built.stdout}\n${built.stderr}`);
   const config = moveConfig(live, path.join(DASHBOARD, 'vercel.json'), at.dashboardConfig);
 
+  // The code must be free of the live server and its key as built. A source map carries the
+  // source files as text, and lib/config.ts names both as the defaults; that text is changed as
+  // well. The links to the live sites and to Stripe are moved in every file, maps included.
   const files = filesUnder(at.dashboard);
-  // The code must be free of the live address as built. A source map carries the source files as
-  // text, and lib/config.ts names the live server as the default; that text is moved as well.
   const maps = {};
-  for (const rel of files) {
+  const linksMoved = {};
+  for (const rel of files.filter(isText)) {
     const full = path.join(at.dashboard, rel);
-    const text = readFileSync(full, 'latin1');
-    if (!text.includes(live.host)) continue;
-    if (!rel.endsWith('.map')) fail(`STOP: ${rel} of the dashboard build names the live server. The build did not take VITE_SUPABASE_URL.`);
-    const map = moved(readFileSync(full, 'utf8'), live);
-    writeFileSync(full, map.text);
-    maps[rel] = map.count;
+    let text = readFileSync(full, 'utf8');
+    const before = text;
+    if (text.includes(live.host) || keys.some((k) => text.includes(k))) {
+      if (!rel.endsWith('.map')) fail(`STOP: ${rel} of the dashboard build names the live server or holds its key. The build did not take the VITE_SUPABASE_ settings.`);
+      const map = moved(text, live);
+      text = map.text;
+      let replacedKeys = 0;
+      for (const k of keys) {
+        replacedKeys += text.split(k).length - 1;
+        text = text.split(k).join(key.key);
+      }
+      maps[rel] = { serverAddress: map.count, key: replacedKeys };
+    }
+    const links = moveLinks(text);
+    addMoves(linksMoved, links.moved);
+    if (links.text !== before) writeFileSync(full, links.text);
   }
   mustNotName(live, at.dashboard, files, [at.dashboardConfig]);
 
@@ -303,6 +321,7 @@ function stageDashboard(live, at) {
     key: key.from,
     keyMissing: key.missing ?? null,
     sourceMapsChanged: maps,
+    linksMoved,
     policiesChanged: config.policiesChanged,
     pages,
     hostsNamed: hostsNamed(at.dashboard, files),
@@ -344,19 +363,24 @@ function main() {
   report.madeAt = new Date().toISOString();
   report.madeFrom = madeFrom();
   report.liveServerMovedTo = LOCAL_SERVER;
+  const missing = (what) => {
+    if (report[what].keyMissing) {
+      console.error(`\nMISSING: ${report[what].keyMissing}.\nThe ${what} copy was made with a placeholder key, so the local server will turn it away.\nRun this again once the local server's step has written its key.\n`);
+    }
+  };
+  const links = (moves) => Object.values(moves).reduce((sum, n) => sum + n, 0);
   if (only !== 'dashboard') {
-    orNothing(report, 'website', at.report, [at.website], () => stageWebsite(live, at, args['local-key'] === true));
-    console.log(`Website: ${report.website.files} files in ${at.website}; ${report.website.sameAsSource} are byte for byte site/'s, and contact.js and vercel.json differ by the server address${args['local-key'] ? ', and contact.js by the form\'s key' : ' alone'}.`);
+    orNothing(report, 'website', at.report, [at.website], () => stageWebsite(live, at));
+    console.log(`Website: ${report.website.files} files in ${at.website}; ${report.website.sameAsSource} are byte for byte site/'s. The others differ by the server address, the contact form's key, and ${links(report.website.linksMoved)} links to the live sites and Stripe, moved onto the copies.`);
+    missing('website');
   }
   if (only !== 'website') {
     orNothing(report, 'dashboard', at.report, [at.dashboard, at.dashboardConfig], () => stageDashboard(live, at));
-    console.log(`Dashboard: built into ${at.dashboard} (${report.dashboard.files} files) to talk to ${LOCAL_SERVER}; its vercel.json is ${at.dashboardConfig}.`);
-    if (report.dashboard.keyMissing) {
-      console.error(`\nMISSING: ${report.dashboard.keyMissing}.\nThe dashboard copy was built with a placeholder key, so the local server will turn it away.\nRun this again once the local server's step has written its key.\n`);
-    }
+    console.log(`Dashboard: built into ${at.dashboard} (${report.dashboard.files} files) to talk to ${LOCAL_SERVER}, with ${links(report.dashboard.linksMoved)} links to the live sites and Stripe moved onto the copies; its vercel.json is ${at.dashboardConfig}.`);
+    missing('dashboard');
   }
   writeFileSync(at.report, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(`The live server is named nowhere in what was made. Report: ${at.report}`);
+  console.log(`The live server, its key and the live sites are named nowhere in what was made. Report: ${at.report}`);
 }
 
 try {

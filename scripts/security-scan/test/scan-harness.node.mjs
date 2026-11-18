@@ -1,5 +1,6 @@
-// Tests for the two pieces that keep a scan on this machine and keep secrets out of what the
-// scanner is given: the scan guard and the writer of the scan inputs. They need nothing running
+// Tests for the pieces that keep a scan on this machine and keep secrets out of what the scanner
+// is given: the scan guard, the writer of the scan inputs, the three configs, the rules that move
+// the copies' live links, and what is read from the logs after a scan. They need nothing running
 // and reach nothing outside this machine. Run them with: node --test "test/*.node.mjs"
 //
 // The name ends in .node.mjs and not in .test.mjs, so the app's jest does not pick it up.
@@ -11,8 +12,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 
-import { STACKHAWK_HOSTS, mayPass, startGuard, upstreamFrom } from '../egress-guard.mjs';
-import { readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
+import { describeTableAnswers, guardSummary, tableAnswers } from '../after-scan.mjs';
+import { GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS, isLocalTarget, mayPass, startGuard, upstreamFrom } from '../egress-guard.mjs';
+import { TABLE_FILTERS, filtersOf, readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
+import { LINK_MOVES, NOT_IN_THE_COPY, isThisMachine, liveLinksIn, moveLinks, undoLinks } from '../sites/live.mjs';
+
+const REPO = path.resolve(import.meta.dirname, '../../..');
+const CONFIGS = ['stackhawk-api.yml', 'stackhawk-dashboard.yml', 'stackhawk-site.yml'];
+/** A config without its comment lines. */
+const configText = (config) => readFileSync(path.join(REPO, config), 'utf8').split('\n').filter((line) => !line.trim().startsWith('#')).join('\n');
 
 // ---- The scan guard -----------------------------------------------------------------------------
 
@@ -31,6 +39,14 @@ test('only port 443 of a listed host may pass, and names are compared whole', ()
 
 test('the list is StackHawk and nothing of MineMuster, Supabase or Stripe', () => {
   for (const host of STACKHAWK_HOSTS) assert.match(host, /^[a-z]+\.stackhawk\.com$/);
+});
+
+test('on this machine only the three scan targets may pass, named exactly', () => {
+  assert.deepEqual(LOCAL_TARGETS, ['127.0.0.1:54321', '127.0.0.1:4443', '127.0.0.1:4444']);
+  for (const target of LOCAL_TARGETS) assert.equal(isLocalTarget(target, LOCAL_TARGETS), true);
+  for (const target of ['127.0.0.1:54322', '127.0.0.1:54331', '127.0.0.1:4480', 'localhost:54321', '127.0.0.2:4443', '127.0.0.1:4443 ', '127.0.0.1', undefined]) {
+    assert.equal(isLocalTarget(target, LOCAL_TARGETS), false, String(target));
+  }
 });
 
 test('the machine\'s own proxy is read from the environment', () => {
@@ -61,17 +77,30 @@ before(async () => {
   guardPort = guard.address().port;
 });
 
+let target;
+let targetPort;
+before(async () => {
+  // A stand-in for a scan target on this machine: it echoes, with its own mark.
+  target = net.createServer((socket) => {
+    socket.on('error', () => {});
+    socket.on('data', (chunk) => socket.write(`target:${chunk}`));
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  targetPort = target.address().port;
+});
+
 after(() => {
   guard.close();
   guard.closeAllConnections();
   upstream.close();
+  target.close();
   rmSync(logDir, { recursive: true, force: true });
 });
 
 /** Sends raw bytes to the guard and gives back everything it answered within a moment. */
-function raw(lines, thenSend) {
+function raw(lines, thenSend, port = guardPort) {
   return new Promise((resolve) => {
-    const socket = net.connect(guardPort, '127.0.0.1');
+    const socket = net.connect(port, '127.0.0.1');
     let got = '';
     let sent = false;
     socket.on('data', (chunk) => {
@@ -120,6 +149,129 @@ test('every request is one line in the log, with its verdict', () => {
   assert.ok(lines.every((l) => typeof l.at === 'string' && typeof l.target === 'string'));
 });
 
+test('a tunnel to a scan target on this machine is made directly, never through the machine\'s proxy, and no other port passes', async () => {
+  const localLog = path.join(logDir, 'local.jsonl');
+  const second = await startGuard({ port: 0, allowed: ['api.stackhawk.com'], locals: [`127.0.0.1:${targetPort}`], upstream: { host: '127.0.0.1', port: upstream.address().port }, logFile: localLog });
+  try {
+    const before = tunnelsAsked.length;
+    const got = await raw(`CONNECT 127.0.0.1:${targetPort} HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\n\r\n`, 'hello', second.address().port);
+    assert.match(got, /^HTTP\/1\.1 200 /);
+    assert.match(got, /target:hello$/);
+    for (const other of [`127.0.0.1:${upstream.address().port}`, '127.0.0.1:54322', `localhost:${targetPort}`]) {
+      assert.match(await raw(`CONNECT ${other} HTTP/1.1\r\nHost: ${other}\r\n\r\n`, null, second.address().port), /^HTTP\/1\.1 403 /, other);
+    }
+    assert.equal(tunnelsAsked.length, before, 'a local tunnel reached the machine\'s proxy');
+    const lines = readFileSync(localLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(lines.filter((l) => l.verdict === 'allowed').map((l) => [l.target, l.local]), [[`127.0.0.1:${targetPort}`, true]]);
+  } finally {
+    second.close();
+    second.closeAllConnections();
+  }
+});
+
+// ---- The three configs --------------------------------------------------------------------------
+
+test('every config sends the scanning engine through the guard, and scans this machine', () => {
+  assert.equal(GUARD_URL, 'http://127.0.0.1:4480');
+  for (const config of CONFIGS) {
+    // Both of the engine's ways out: its sign-in and platform client, and its scanning client.
+    assert.match(configText(config), /\nhawk:\n(?:  .*\n)*  outboundProxy:\n    host: \$\{SCAN_OUTBOUND_PROXY\}\n/, `${config} has no hawk.outboundProxy.host`);
+    assert.match(configText(config), /\n  config:\n    - network\.connection\.httpProxy\.enabled=true\n    - network\.connection\.httpProxy\.host=\$\{SCAN_GUARD_HOST\}\n    - network\.connection\.httpProxy\.port=\$\{SCAN_GUARD_PORT\}\n/, `${config} does not send the scanning client through the guard`);
+    assert.match(configText(config), /host: \$\{APP_HOST:https:\/\/127\.0\.0\.1:\d+\}/, `${config} must scan this machine`);
+  }
+});
+
+test('the server config keeps the key and the tokens out of the evidence, and cannot run without its profile mode', () => {
+  const text = configText('stackhawk-api.yml');
+  assert.match(text, /  redact:\n    headers:\n      - apikey\n      - Authorization\n/);
+  assert.match(text, /    sessionVerification:\n      disabled: false\n/);
+  // No default, so a run that does not set the scanner's own variables stops before it starts.
+  assert.match(text, /- name: profile_scan_mode\n    value: \$\{PROFILE_SCAN_MODE\}\n/);
+  assert.match(text, /- name: full_scan_profile\n    value: \$\{FULL_SCAN_PROFILE\}\n/);
+  for (const config of ['stackhawk-dashboard.yml', 'stackhawk-site.yml']) assert.doesNotMatch(configText(config), /PROFILE_SCAN_MODE|FULL_SCAN_PROFILE/);
+});
+
+test('each column a table read keeps is given a real value for GET by the server config', () => {
+  // The customVariables entries for the tables, read loosely: field, path, methods, value.
+  const text = configText('stackhawk-api.yml');
+  const custom = text.slice(text.indexOf('customVariables:'), text.indexOf('forbiddenVariables:'));
+  const entries = [...custom.matchAll(/- field: (\w+)\n\s+path: "([^"]+)"\n(?:\s+requestMethods:\n((?:\s+- \w+\n)+))?\s+values:\n\s+- (\S+)/g)]
+    .map(([, field, pathPattern, methods, value]) => ({ field, path: new RegExp(pathPattern), methods: methods ? [...methods.matchAll(/- (\w+)/g)].map((m) => m[1]) : null, value }));
+  const tables = ['companies', 'roster', 'records', 'record_history', 'join_requests', 'notifications', 'billing_subscriptions', 'billing_overrides'];
+  for (const table of tables) {
+    const route = `https://127.0.0.1:54321/rest/v1/${table}`;
+    const given = entries.filter((e) => e.path.test(route) && e.methods?.includes('GET')).map((e) => e.field).sort();
+    assert.deepEqual([...new Set(given)], [...filtersOf(table)].sort(), table);
+    for (const entry of entries.filter((e) => e.path.test(route))) assert.match(entry.value, /^\$\{SCAN_[A-Z0-9_]+_EQ\}$/, `${table} ${entry.field} must be written eq.<id>`);
+  }
+  assert.deepEqual(Object.keys(TABLE_FILTERS).sort(), ['companies', 'roster']);
+});
+
+// ---- The copies' links ----------------------------------------------------------------------------
+
+test('every live link is moved onto a copy, and moved back exactly', () => {
+  const page = [
+    '<a href="https://app.minemuster.com/?start=trial">Start free trial</a>',
+    '<a href="https://app.minemuster.com">Sign in</a> <link rel="canonical" href="https://minemuster.com/pricing">',
+    '<a href="https://billing.stripe.com/p/login/abc">Billing</a> <a href="https://stripe.com">Stripe</a>',
+    'const TRIAL = "https://buy.stripe.com/xyz"; // prose: app.minemuster.com and minemuster.com/demo stay',
+  ].join('\n');
+  const { text, moved } = moveLinks(page);
+  assert.deepEqual(liveLinksIn(text), []);
+  assert.match(text, /href="https:\/\/127\.0\.0\.1:4444\/\?start=trial"/);
+  assert.match(text, /href="https:\/\/127\.0\.0\.1:4443\/pricing"/);
+  assert.ok(text.includes(`${NOT_IN_THE_COPY}/billing.stripe.com/p/login/abc`));
+  assert.ok(text.includes(`${NOT_IN_THE_COPY}/buy.stripe.com/xyz`));
+  assert.ok(text.includes('prose: app.minemuster.com and minemuster.com/demo stay'));
+  assert.deepEqual(moved, { 'https://app.minemuster.com': 2, 'https://minemuster.com': 1, 'https://billing.stripe.com': 1, 'https://buy.stripe.com': 1, 'https://stripe.com': 1 });
+  assert.equal(undoLinks(text), page);
+  for (const [, local] of LINK_MOVES) assert.match(local, /^https:\/\/127\.0\.0\.1:444[34](\/|$)/);
+});
+
+test('a live link that is not moved is found, however it is written', () => {
+  for (const link of ['https://www.minemuster.com/x', 'http://minemuster.com', '//app.minemuster.com/a', 'https:\\/\\/dashboard.stripe.com', 'https://connect.stripe.com/']) {
+    assert.notDeepEqual(liveLinksIn(`see ${link} here`), [], link);
+  }
+  assert.deepEqual(liveLinksIn('write to us at minemuster.com/contact, or hello@minemuster.com'), []);
+});
+
+test('only an address of this machine, or of none, counts as unreachable', () => {
+  for (const address of ['127.0.0.1', '127.1.2.3', '0.0.0.0', '::1', '::', '::ffff:127.0.0.1']) assert.equal(isThisMachine(address), true, address);
+  for (const address of ['10.0.0.1', '104.18.1.1', '::ffff:8.8.8.8', '2606:4700::1']) assert.equal(isThisMachine(address), false, address);
+});
+
+// ---- After a scan ---------------------------------------------------------------------------------
+
+test('table answers tell the recorded reads from the description\'s', () => {
+  const lines = [
+    '2026-11-18T21:00:00.000Z GET /rest/v1/roster?select=id,company_id&company_id=eq.a 200 rest',
+    '2026-11-18T21:00:00.001Z GET /rest/v1/roster?company_id=eq.a 200 rest',
+    '2026-11-18T21:00:00.002Z GET /rest/v1/roster?company_id=eq.a%27 400 rest',
+    '2026-11-18T21:00:00.003Z PATCH /rest/v1/roster?id=eq.b 204 rest',
+    '2026-11-18T21:00:00.004Z GET /rest/v1/rpc/my_companies 200 rest',
+    '2026-11-18T21:00:00.005Z GET /rest/v1/records?select=*&company_id=eq.a 200 rest',
+    '2026-11-18T21:00:00.006Z POST /auth/v1/token?grant_type=password 200 auth',
+  ];
+  const found = tableAnswers(lines);
+  assert.deepEqual(Object.keys(found).sort(), ['GET /rest/v1/records', 'GET /rest/v1/roster', 'PATCH /rest/v1/roster']);
+  assert.deepEqual(found['GET /rest/v1/roster'], { requests: 3, ok: 2, okFromTheDescription: 1, byStatus: { 200: 2, 400: 1 } });
+  assert.equal(found['GET /rest/v1/records'].okFromTheDescription, 0);
+  assert.match(describeTableAnswers(found).verdict, /both reached the tables/);
+  assert.match(describeTableAnswers(tableAnswers([lines[0], lines[5]])).verdict, /Only the recorded requests/);
+  assert.match(describeTableAnswers(tableAnswers([lines[2]])).verdict, /were not scanned/);
+  assert.match(describeTableAnswers({}).verdict, /were not scanned/);
+});
+
+test('the guard\'s log is read into what it passed outside, on this machine, and refused', () => {
+  const lines = [
+    { verdict: 'allowed', method: 'CONNECT', target: 'api.stackhawk.com:443' },
+    { verdict: 'allowed', method: 'CONNECT', target: '127.0.0.1:54321', local: true },
+    { verdict: 'allowed', method: 'CONNECT', target: '127.0.0.1:54321', local: true },
+    { verdict: 'refused', method: 'CONNECT', target: 'accounts.google.com:443' },
+  ].map((entry) => JSON.stringify(entry));
+  assert.deepEqual(guardSummary([...lines, 'not json']), { outside: ['api.stackhawk.com:443'], local: ['127.0.0.1:54321'], localTunnels: 2, refused: ['accounts.google.com:443'], failed: [] });
+});
+
 // ---- The scan inputs ----------------------------------------------------------------------------
 
 /** A stack folder with made-up files of the shape the real stack writes. */
@@ -146,7 +298,24 @@ function madeUpStack() {
     host: '127.0.0.1:54321',
     basePath: '/rest/v1',
     schemes: ['https'],
-    paths: { '/': { get: {} }, '/roster': { get: {}, post: {}, patch: {}, delete: {} }, '/rpc/my_companies': { get: {}, post: {} } },
+    parameters: {
+      select: { name: 'select', in: 'query', required: false, type: 'string' },
+      limit: { name: 'limit', in: 'query', required: false, type: 'string' },
+      preferCount: { name: 'Prefer', in: 'header', required: false, type: 'string', enum: ['count=none'] },
+      'rowFilter.roster.id': { name: 'id', in: 'query', required: false, type: 'string' },
+      'rowFilter.roster.company_id': { name: 'company_id', in: 'query', required: false, type: 'string' },
+      'rowFilter.roster.first_name': { name: 'first_name', in: 'query', required: false, type: 'string' },
+    },
+    paths: {
+      '/': { get: {} },
+      '/roster': {
+        get: { parameters: ['rowFilter.roster.id', 'rowFilter.roster.company_id', 'rowFilter.roster.first_name', 'select', 'limit', 'preferCount'].map((name) => ({ $ref: `#/parameters/${name}` })) },
+        post: {},
+        patch: { parameters: ['rowFilter.roster.id', 'rowFilter.roster.first_name'].map((name) => ({ $ref: `#/parameters/${name}` })) },
+        delete: {},
+      },
+      '/rpc/my_companies': { get: {}, post: {} },
+    },
   };
   const webhook = {
     openapi: '3.0.3',
@@ -168,17 +337,17 @@ test('the inputs hold what the configs read, every path with its prefix, and no 
     const vars = readEnvFile(made.envFile);
 
     // Every ${VAR} the three configs name is in scan.env, but the ones a run sets itself.
-    const repo = path.resolve(import.meta.dirname, '../../..');
-    const setByTheRun = new Set(['APP_ENV', 'APP_HOST', 'HAWK_AGENT', 'COMMIT_SHA', 'BRANCH_NAME']);
-    for (const config of ['stackhawk-api.yml', 'stackhawk-dashboard.yml', 'stackhawk-site.yml']) {
-      const text = readFileSync(path.join(repo, config), 'utf8').split('\n').filter((line) => !line.trim().startsWith('#')).join('\n');
+    const setByTheRun = new Set(['APP_ENV', 'APP_HOST', 'HAWK_AGENT', 'COMMIT_SHA', 'BRANCH_NAME', 'PROFILE_SCAN_MODE', 'FULL_SCAN_PROFILE']);
+    for (const config of CONFIGS) {
+      const text = configText(config);
       for (const [, name] of text.matchAll(/\$\{([A-Z0-9_]+)(?::[^}]*)?\}/g)) {
         if (!setByTheRun.has(name)) assert.ok(name in vars, `${config} reads ${name}, which scan.env does not hold`);
       }
       // No config holds a key, a password or an id of its own.
       assert.doesNotMatch(text, /sb_(publishable|secret)_|whsec_|eyJ[A-Za-z0-9_-]{10,}|hawk\.[A-Za-z0-9]{10,}/, config);
-      assert.match(text, /host: \$\{APP_HOST:https:\/\/127\.0\.0\.1:\d+\}/, `${config} must scan this machine`);
     }
+    assert.equal(vars.SCAN_OUTBOUND_PROXY, 'http://127.0.0.1:4480');
+    assert.equal(`${vars.SCAN_GUARD_HOST}:${vars.SCAN_GUARD_PORT}`, '127.0.0.1:4480');
 
     const all = ['scan.env', 'openapi-scan.json', 'api-seed.har'].map((name) => readFileSync(path.join(made.folder, name), 'utf8')).join('\n');
     assert.ok(!all.includes(fixtures.keys.secret), 'the secret key was written');
@@ -190,6 +359,11 @@ test('the inputs hold what the configs read, every path with its prefix, and no 
     assert.equal(description.basePath, '/');
     assert.deepEqual(Object.keys(description.paths), ['/rest/v1/', '/rest/v1/roster', '/rest/v1/rpc/my_companies', '/functions/v1/stripe-webhook']);
     assert.equal(made.pairs.length, 8);
+    // A table read keeps the filters the config fills and the Prefer header, and nothing else;
+    // a write keeps everything, so a made-up filter still turns it down.
+    const refs = (operation) => operation.parameters.map((p) => p.$ref.replace('#/parameters/', ''));
+    assert.deepEqual(refs(description.paths['/rest/v1/roster'].get), ['rowFilter.roster.id', 'rowFilter.roster.company_id', 'preferCount']);
+    assert.deepEqual(refs(description.paths['/rest/v1/roster'].patch), ['rowFilter.roster.id', 'rowFilter.roster.first_name']);
 
     // Every recorded request goes to the local server, and the only roster row named is the
     // one nobody holds.

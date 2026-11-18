@@ -7,9 +7,11 @@
 //
 // It writes, into <home>/scan and readable by the owner only:
 //   scan.env           every ${VAR} the configs name: ids, the made-up accounts, the local
-//                      publishable key, and the paths of the two files below
+//                      publishable key, the scan guard's address, and the paths of the two files
+//                      below
 //   openapi-scan.json  PostgREST's description and the webhook's in one Swagger 2.0 file, every
-//                      path with its prefix
+//                      path with its prefix, and a table read asking for nothing but the rows the
+//                      config gives real values for
 //   api-seed.har       one well-formed request for each call the description cannot render
 //
 // Everything in these files is made up or made at random on this machine, and none of it goes in
@@ -24,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { GUARD_HOST, GUARD_PORT, GUARD_URL } from './egress-guard.mjs';
 import { LOCAL_SERVER, homeFrom, layout, readArgs } from './sites/layout.mjs';
 
 /** A well-formed id that names no row. */
@@ -45,6 +48,35 @@ export function readEnvFile(file) {
 
 const shellQuoted = (value) => `'${String(value).replaceAll(`'`, `'\\''`)}'`;
 
+/**
+ * The columns a table read filters on in the scan, by table. stackhawk-api.yml gives each of them
+ * a real value ("eq.<id>") under customVariables, for GET; a test holds the two to each other.
+ */
+export const TABLE_FILTERS = { companies: ['id'], roster: ['company_id', 'id'] };
+export const DEFAULT_TABLE_FILTERS = ['company_id'];
+export const filtersOf = (table) => TABLE_FILTERS[table] ?? DEFAULT_TABLE_FILTERS;
+
+/**
+ * A table read as the description has it, with only the parameters a scanner can fill well.
+ *
+ * PostgREST describes every read with select, order, Range, limit, offset and a filter for each
+ * column, all optional and all plain strings. A scanner fills them with made-up words, and
+ * PostgREST answers any of those 400 before a row or a policy is looked at ("select=John Doe" is
+ * "column roster.John Doe does not exist"). So a read keeps the filters the config gives real
+ * values for, and the Prefer header, whose one value is listed; the rest are left out, and the
+ * table's own columns and ordering are asked for by the recorded requests. Writes are left as they
+ * are: a write with a made-up filter is turned down, and that is what keeps the scan from
+ * changing rows it did not mean to.
+ */
+function trimmedRead(operation, table, shared) {
+  const keep = new Set(filtersOf(table).map((column) => `rowFilter.${table}.${column}`));
+  const named = (parameter) => (parameter.$ref ?? '').replace(/^#\/parameters\//, '');
+  const kept = (operation.parameters ?? []).filter((parameter) => keep.has(named(parameter)) || named(parameter) === 'preferCount');
+  for (const name of keep) if (!kept.some((parameter) => named(parameter) === name)) throw new Error(`The description has no filter ${name} for the scan to fill.`);
+  for (const parameter of kept) if (parameter.$ref && !shared?.[named(parameter)]) throw new Error(`The description names ${parameter.$ref} and does not define it.`);
+  return { ...operation, parameters: kept };
+}
+
 /** PostgREST's description as a signed-in account, and the webhook's, in one file. */
 function mergedDescription(rest, webhook) {
   if (rest.swagger !== '2.0' || rest.basePath !== '/rest/v1') throw new Error('The PostgREST description is not the shape this script knows.');
@@ -52,7 +84,10 @@ function mergedDescription(rest, webhook) {
   // app.host stays at the origin, because sign-in, the tables and the function live under three
   // prefixes. So every path here carries its own prefix and the file's base path is "/".
   const paths = {};
-  for (const [name, item] of Object.entries(rest.paths)) paths[`${rest.basePath}${name}`] = item;
+  for (const [name, item] of Object.entries(rest.paths)) {
+    const table = /^\/([a-z_]+)$/.exec(name)?.[1];
+    paths[`${rest.basePath}${name}`] = table && item.get ? { ...item, get: trimmedRead(item.get, table, rest.parameters) } : item;
+  }
   for (const [name, item] of Object.entries(webhook.paths)) {
     const operations = {};
     for (const [method, op] of Object.entries(item)) {
@@ -218,6 +253,9 @@ export function writeScanInputs({ home, appId }) {
     SCAN_ROSTER_B1: b1Row,
     SCAN_REQUEST_P1: fixtures.pendingJoinRequest.id,
     SCAN_CODE_B: B.joinCode,
+    SCAN_OUTBOUND_PROXY: GUARD_URL,
+    SCAN_GUARD_HOST: GUARD_HOST,
+    SCAN_GUARD_PORT: String(GUARD_PORT),
     OPENAPI_SCAN: path.join(out, 'openapi-scan.json'),
     SEED_HAR: path.join(out, 'api-seed.har'),
   };

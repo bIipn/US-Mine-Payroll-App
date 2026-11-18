@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 // A proxy on 127.0.0.1 that a security scan is run through, so that the scanner and the browser
-// it drives can reach StackHawk's own servers and nothing else outside this machine.
+// it drives can reach StackHawk's own servers, the three scan targets on this machine, and
+// nothing else.
 //
-//   node egress-guard.mjs [--port 4480] [--log <file>] [--allow host,host]
+//   node egress-guard.mjs [--port 4480] [--log <file>] [--allow host,host] [--local 127.0.0.1:port,...]
 //
-// Why it is there: the private copies of the website and the dashboard still link to the live
-// sites, and a scanner's crawl follows links. The scanner sends everything that is not on
-// 127.0.0.1 through the proxy its environment names. Give it this one, and a request for any
-// other host is answered 403 here and goes nowhere, whatever the machine's own network allows.
-// Every request it lets through or refuses is one line in the log, so after a scan the log says
-// what the scanner tried to reach.
+// Why it is there: a scanner's crawl can be led off its host, and its browser makes calls of its
+// own. The scanning engine has two ways out, and each scan config gives this guard to both:
+// hawk.outboundProxy for its sign-in and its calls to StackHawk, and network.connection.httpProxy
+// (under hawk.config) for its crawl, its attacks and what it fetches for its browser. up.mjs gives
+// it to the hawk launcher as its HTTPS proxy. What they send off this machine is answered 403 here
+// and goes nowhere, whatever the machine's own network allows. Every request it lets through or
+// refuses is one line in the log. The log covers what was sent through the guard and nothing
+// else: a connection made around it is not in it, which is why up.mjs also refuses to run hawk
+// where a live host can be reached by name.
 //
 // It allows a CONNECT to port 443 of the hosts on its list, and hands it to the proxy named in
-// HTTPS_PROXY when there is one. It never reads what goes through a tunnel. Anything else is
-// refused: another host, another port, a plain HTTP request.
+// HTTPS_PROXY when there is one. It allows a CONNECT to the three scan targets on this machine
+// (the local server, the website copy and the dashboard copy), because the engine's sign-in sends
+// those through it, and makes that one itself, never through another proxy. It never reads what
+// goes through a tunnel. Anything else is refused: another host, another port of this machine
+// (the database ports among them), a plain HTTP request.
 
 import { appendFileSync } from 'node:fs';
 import http from 'node:http';
@@ -21,11 +28,24 @@ import net from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { DASHBOARD_PORT, HOST, LOCAL_SERVER, WEBSITE_PORT } from './sites/layout.mjs';
+
 export const GUARD_HOST = '127.0.0.1';
 export const GUARD_PORT = 4480;
 
+/** The address the scan configs give the scanning engine as its outbound proxy. */
+export const GUARD_URL = `http://${GUARD_HOST}:${GUARD_PORT}`;
+
 /** What a scan needs outside this machine: the platform it reports to, signs in to and updates from. */
 export const STACKHAWK_HOSTS = ['api.stackhawk.com', 'auth.stackhawk.com', 'download.stackhawk.com'];
+
+/** The scan targets on this machine: the local server, the website copy and the dashboard copy. */
+export const LOCAL_TARGETS = [`${HOST}:${new URL(LOCAL_SERVER).port}`, `${HOST}:${WEBSITE_PORT}`, `${HOST}:${DASHBOARD_PORT}`];
+
+/** Whether a CONNECT target is one of the scan targets on this machine, named exactly. */
+export function isLocalTarget(target, locals) {
+  return typeof target === 'string' && locals.includes(target.toLowerCase());
+}
 
 /** Whether a CONNECT target ("host:port") may pass. Names are compared whole: no pattern, no suffix. */
 export function mayPass(target, allowed) {
@@ -43,7 +63,7 @@ export function upstreamFrom(env = process.env) {
 }
 
 /** Starts the guard. Resolves with the server once it is listening. */
-export function startGuard({ port = GUARD_PORT, allowed = STACKHAWK_HOSTS, upstream = upstreamFrom(), logFile = null } = {}) {
+export function startGuard({ port = GUARD_PORT, allowed = STACKHAWK_HOSTS, locals = LOCAL_TARGETS, upstream = upstreamFrom(), logFile = null } = {}) {
   const log = (line) => {
     if (logFile) appendFileSync(logFile, `${JSON.stringify({ at: new Date().toISOString(), ...line })}\n`);
   };
@@ -58,19 +78,22 @@ export function startGuard({ port = GUARD_PORT, allowed = STACKHAWK_HOSTS, upstr
     }
     log({ verdict: 'refused', method: request.method, target: host, why: 'not a CONNECT' });
     response.writeHead(403, { 'Content-Type': 'text/plain', Connection: 'close' });
-    response.end('The scan guard passes nothing but HTTPS to StackHawk.\n');
+    response.end('The scan guard passes nothing but HTTPS to StackHawk and to the scan targets on this machine.\n');
   });
 
   server.on('connect', (request, client, head) => {
     const target = request.url;
     client.on('error', () => {});
-    if (!mayPass(target, allowed)) {
+    const local = isLocalTarget(target, locals);
+    if (!local && !mayPass(target, allowed)) {
       log({ verdict: 'refused', method: 'CONNECT', target });
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nThe scan guard does not let a scan reach this host.\n');
       return;
     }
     const [host, portText] = target.split(':');
-    const out = upstream ? net.connect(upstream.port, upstream.host) : net.connect(Number(portText), host);
+    // A target on this machine is reached directly: the machine's own proxy is for the outside.
+    const via = local ? null : upstream;
+    const out = via ? net.connect(via.port, via.host) : net.connect(Number(portText), host);
     const refuse = (status, why) => {
       log({ verdict: 'failed', method: 'CONNECT', target, why });
       if (client.writable) client.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`);
@@ -78,8 +101,8 @@ export function startGuard({ port = GUARD_PORT, allowed = STACKHAWK_HOSTS, upstr
     };
     out.on('error', (error) => refuse('502 Bad Gateway', error.code ?? error.message));
     out.on('connect', () => {
-      if (!upstream) {
-        log({ verdict: 'allowed', method: 'CONNECT', target });
+      if (!via) {
+        log({ verdict: 'allowed', method: 'CONNECT', target, ...(local ? { local: true } : {}) });
         client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
         if (head.length > 0) out.write(head);
         client.pipe(out);
@@ -134,6 +157,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   };
   const port = Number(value('port') ?? GUARD_PORT);
   const allowed = (value('allow') ?? STACKHAWK_HOSTS.join(',')).split(',').map((host) => host.trim().toLowerCase()).filter(Boolean);
+  const localList = value('local');
+  const locals = localList === null ? LOCAL_TARGETS : localList === 'none' ? [] : localList.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+  if (locals.some((t) => !/^127\.0\.0\.1:\d+$/.test(t))) {
+    console.error('--local takes 127.0.0.1:<port> targets only, separated by commas, or "none".');
+    process.exit(1);
+  }
   const logFile = value('log') ? path.resolve(value('log')) : null;
   const upstream = upstreamFrom();
   // The guard must never be its own upstream.
@@ -141,8 +170,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     console.error(`HTTPS_PROXY names this guard's own address. Start the guard with the machine's own proxy in HTTPS_PROXY, or with none.`);
     process.exit(1);
   }
-  startGuard({ port, allowed, upstream, logFile }).then((server) => {
-    console.log(`Scan guard: http://${GUARD_HOST}:${port} passes HTTPS to ${allowed.join(', ')}${upstream ? ` by way of ${upstream.host}:${upstream.port}` : ''} and refuses everything else.`);
+  startGuard({ port, allowed, locals, upstream, logFile }).then((server) => {
+    console.log(`Scan guard: http://${GUARD_HOST}:${port} passes HTTPS to ${allowed.join(', ')}${upstream ? ` by way of ${upstream.host}:${upstream.port}` : ''}, tunnels to ${locals.join(', ') || 'nothing on this machine'}, and refuses everything else.`);
     const stop = () => { server.close(); server.closeAllConnections(); process.exit(0); };
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);

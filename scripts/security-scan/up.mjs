@@ -16,30 +16,44 @@
 //   node up.mjs down [--stack]              stops the site servers and the guard, and the stack if asked
 //
 // Everything it makes goes in the private folder named by --home or MINEMUSTER_SCAN_DIR, which is
-// never inside the repository. Every address it starts or scans is on 127.0.0.1.
+// never inside the repository: hawk is run from there, with its session files there too. Every
+// address it starts or scans is on 127.0.0.1, and it runs no hawk command while a live host can be
+// reached by name from this machine or while the scan guard is down.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { lookup } from 'node:dns/promises';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import https from 'node:https';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { GUARD_HOST, GUARD_PORT, STACKHAWK_HOSTS } from './egress-guard.mjs';
+import { describeTableAnswers, guardSummary, tableAnswers } from './after-scan.mjs';
+import { GUARD_HOST, GUARD_PORT, GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS } from './egress-guard.mjs';
 import { inputsFolder, readEnvFile, writeScanInputs } from './scan-inputs.mjs';
 import { DASHBOARD_PORT, HOST, LOCAL_SERVER, REPO, WEBSITE_PORT, homeFrom, layout, readArgs } from './sites/layout.mjs';
+import { hostsThatMustNotResolve, isThisMachine, liveKeys, liveLinksIn } from './sites/live.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEBSITE = `https://${HOST}:${WEBSITE_PORT}`;
 const DASHBOARD = `https://${HOST}:${DASHBOARD_PORT}`;
 const GUARD = `http://${GUARD_HOST}:${GUARD_PORT}`;
 
-/** The three surfaces, in the order they are scanned: the one with the most at stake first. */
+/**
+ * The three surfaces, in the order they are scanned: the one with the most at stake first. The
+ * server's profile mode is given both ways: the flags show in the command that run.txt keeps, and
+ * the variables are what its config's tags read, so the scan's record says which mode it ran in.
+ */
 const SURFACES = {
-  api: { config: 'stackhawk-api.yml', host: LOCAL_SERVER, env: 'Development-api', flags: ['--profile-scan-mode=primary-full', '--full-scan-profile=A1'], spec: true, auth: true },
-  dashboard: { config: 'stackhawk-dashboard.yml', host: DASHBOARD, env: 'Development-dashboard', flags: [], spec: false, auth: false },
-  site: { config: 'stackhawk-site.yml', host: WEBSITE, env: 'Development-site', flags: [], spec: false, auth: false },
+  api: {
+    config: 'stackhawk-api.yml', host: LOCAL_SERVER, env: 'Development-api', spec: true, auth: true,
+    flags: ['--profile-scan-mode=primary-full', '--full-scan-profile=A1'],
+    vars: { PROFILE_SCAN_MODE: 'primary-full', FULL_SCAN_PROFILE: 'A1' },
+  },
+  dashboard: { config: 'stackhawk-dashboard.yml', host: DASHBOARD, env: 'Development-dashboard', flags: [], vars: {}, spec: false, auth: false },
+  site: { config: 'stackhawk-site.yml', host: WEBSITE, env: 'Development-site', flags: [], vars: {}, spec: false, auth: false },
 };
+const configPath = (surface) => path.join(REPO, surface.config);
 
 const say = (text = '') => process.stdout.write(`${text}\n`);
 const fail = (message) => { throw new Error(message); };
@@ -60,13 +74,24 @@ let home;
 let at;
 let stackDir;
 let runDir;
+let sessionsDir;
+let workDir;
 function places() {
   args = readArgs(own);
   home = homeFrom(args);
   at = layout(home);
   stackDir = path.dirname(at.stackEnv);
   runDir = path.join(home, 'run');
-  mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  // hawk keeps a scan's working files, and for a while a copy of the StackHawk key, in its session
+  // folder. Here that is a private folder, and the key's copies are taken away after each run.
+  sessionsDir = path.join(home, 'hawk-sessions');
+  // hawk writes some files into the folder it is run from (a SARIF report, for one). It is run from
+  // here, never from the repository.
+  workDir = path.join(inputsFolder(home), 'work');
+  for (const folder of [runDir, sessionsDir, workDir]) {
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    chmodSync(folder, 0o700);
+  }
 }
 
 // ---- Small tools --------------------------------------------------------------------------------
@@ -209,6 +234,33 @@ function throughGuard(target) {
   });
 }
 
+/**
+ * The live hosts this machine can reach by name, with the addresses they resolve to. None may: the
+ * scan guard refuses them to everything sent through it, and this is what stops whatever is not.
+ * A host that resolves only to this machine (a hosts-file block) is as good as none.
+ */
+async function liveHostsThatResolve() {
+  const found = [];
+  for (const host of hostsThatMustNotResolve()) {
+    let addresses = [];
+    try {
+      addresses = (await lookup(host, { all: true })).map((entry) => entry.address);
+    } catch {
+      continue; // No answer, which is what is wanted.
+    }
+    const outside = addresses.filter((address) => !isThisMachine(address));
+    if (outside.length > 0) found.push(`${host} (${outside.join(', ')})`);
+  }
+  return found;
+}
+
+async function needSafeNetwork() {
+  const reachable = await liveHostsThatResolve();
+  if (reachable.length > 0) {
+    fail(`These live hosts can be reached by name from this machine: ${reachable.join('; ')}. No hawk command is run here until none can, because part of the scanner could reach them around the scan guard. Block them for the scan (a hosts-file line sending each to 0.0.0.0 will do), then try again.`);
+  }
+}
+
 // ---- Ready or not -------------------------------------------------------------------------------
 
 /**
@@ -237,6 +289,18 @@ async function readiness() {
   let dashCode = '';
   for (const script of scripts) dashCode += (await ask(`${DASHBOARD}${script}`)).text;
   note('The dashboard copy calls the local server with its key', dashCode.includes(LOCAL_SERVER) && dashCode.includes(key), scripts.join(', ') || 'no script found');
+
+  // Neither copy leads off this machine: no link to the live sites or to Stripe, and not the
+  // live key, in what a crawl is served first (stage.mjs has checked every file already).
+  const served = { [`${WEBSITE}/contact.js`]: form.text, [`${DASHBOARD}/`]: dashPage.text };
+  for (const page of ['/', '/pricing', '/contact', '/security', '/privacy', '/terms', '/robots.txt', '/sitemap.xml', '/no-such-page']) served[`${WEBSITE}${page}`] = (await ask(`${WEBSITE}${page}`)).text;
+  for (const script of scripts) {
+    served[`${DASHBOARD}${script}`] = dashCode;
+    served[`${DASHBOARD}${script}.map`] = (await ask(`${DASHBOARD}${script}.map`)).text;
+  }
+  const liveKey = liveKeys();
+  const leads = Object.entries(served).flatMap(([url, text]) => [...liveLinksIn(text).map((link) => `${url}: ${link}`), ...(liveKey.some((k) => text.includes(k)) ? [`${url}: the live key`] : [])]);
+  note('Neither copy links to the live sites or to Stripe, or holds the live key', leads.length === 0, leads.length === 0 ? `${Object.keys(served).length} answers read` : leads.slice(0, 5).join('; '));
 
   // The four accounts of the server config sign in, and the session check tells them from the key alone.
   const testPath = `${LOCAL_SERVER}/rest/v1/rpc/my_companies`;
@@ -309,15 +373,24 @@ async function readiness() {
     note('The description file is there to check', false, 'scan.env or openapi-scan.json is missing: run "up" again');
   }
 
-  // The guard: StackHawk passes, anything else does not.
+  // The guard: StackHawk and the three scan targets pass, anything else does not.
   if (await listening(GUARD_PORT, GUARD_HOST)) {
     const allowed = await throughGuard(`${STACKHAWK_HOSTS[0]}:443`);
     const refused = await throughGuard('example.com:443');
     note('The scan guard lets StackHawk through', allowed === 200, `CONNECT ${STACKHAWK_HOSTS[0]}:443 -> ${allowed}`);
     note('The scan guard refuses any other host', refused === 403, `CONNECT example.com:443 -> ${refused}`);
+    const locals = [];
+    for (const target of LOCAL_TARGETS) locals.push(`${target} -> ${await throughGuard(target)}`);
+    note('The scan guard passes the three scan targets on this machine', locals.every((line) => line.endsWith('-> 200')), `CONNECT ${locals.join(', ')}`);
+    const database = await throughGuard(`${HOST}:54322`);
+    note('The scan guard refuses any other port of this machine', database === 403, `CONNECT ${HOST}:54322 (the database) -> ${database}`);
   } else {
     note('The scan guard is running', false, `nothing listens on ${GUARD}`);
   }
+
+  // Nothing live can be reached by name, whatever goes around the guard.
+  const reachable = await liveHostsThatResolve();
+  note('No live host can be reached by name from this machine', reachable.length === 0, reachable.length === 0 ? `${hostsThatMustNotResolve().length} hosts asked, none resolves` : reachable.join('; '));
   return results;
 }
 
@@ -346,9 +419,10 @@ const git = (...gitArgs) => spawnSync('git', gitArgs, { cwd: REPO, encoding: 'ut
 
 /**
  * The environment a hawk command gets: the key, the values the configs read, the commit and
- * branch tags, and the scan guard as its only way out of this machine.
+ * branch tags, the private session folder, and the scan guard as its only way out of this
+ * machine. The server's profile mode is set for the server's surface and for nothing else.
  */
-function hawkEnv() {
+function hawkEnv(surface = null) {
   const inputs = readEnvFile(path.join(inputsFolder(home), 'scan.env'));
   if (!inputs.APP_ID) fail('scan.env is missing: run "node up.mjs" first.');
   const env = { ...process.env, ...inputs };
@@ -357,13 +431,19 @@ function hawkEnv() {
   env.API_KEY = key;
   env.COMMIT_SHA = git('rev-parse', 'HEAD');
   env.BRANCH_NAME = git('rev-parse', '--abbrev-ref', 'HEAD');
-  // These would send a scan to another application, environment or host than its config names.
-  for (const name of ['STACKHAWK_ENV', 'HAWK_ENV', 'HAWK_APPLICATION_ID', 'APP_ENV', 'APP_HOST', 'REPO_DIR', 'ENV_FILE']) delete env[name];
+  // These would send a scan to another application, environment or host than its config names,
+  // or run one in another mode than its surface's.
+  for (const name of ['STACKHAWK_ENV', 'HAWK_ENV', 'HAWK_APPLICATION_ID', 'APP_ENV', 'APP_HOST', 'REPO_DIR', 'ENV_FILE', 'PROFILE_SCAN_MODE', 'FULL_SCAN_PROFILE']) delete env[name];
+  Object.assign(env, surface?.vars ?? {});
+  env.SESSION_HOME = sessionsDir;
   // An agent names itself in HAWK_AGENT before it calls this (README.md). A name that is set
   // but empty would make an empty tag, which the scanner refuses.
   for (const name of ['HAWK_AGENT', '_STACKHAWK_AGENT']) if (env[name] === '') delete env[name];
-  // The guard, for the launcher, for the scanner's Java side and for a browser that reads the
-  // environment. Only this machine is reached without it.
+  // The guard. The scanning engine is given it by its config: hawk.outboundProxy for its sign-in
+  // and its calls to StackHawk (OUTBOUND_PROXY_HOST is the launcher's name for the same), and
+  // network.connection.httpProxy for everything it scans and fetches. That client reads none of
+  // the variables below. The launcher, and anything else that does read them, is given it here.
+  env.OUTBOUND_PROXY_HOST = GUARD_URL;
   const trust = (process.env.JAVA_TOOL_OPTIONS ?? '').split(/\s+/).filter((word) => /^-Djavax\.net\.ssl\.trustStore(Type|Password)?=/.test(word));
   env.JAVA_TOOL_OPTIONS = [
     ...trust,
@@ -382,10 +462,42 @@ async function needGuard() {
 
 const hawkBin = () => process.env.HAWK_BIN || 'hawk';
 
-/** Runs one hawk command from the repository root and waits for it. Output goes where `stdio` says. */
-function hawk(hawkArgs, { stdio = 'inherit', limitMinutes = 15 } = {}) {
+let keyCopiesRemoved = 0;
+
+/** Takes away the copies of the StackHawk key that hawk leaves in its session folders. Says how many. */
+function removeKeyCopies() {
+  let removed = 0;
+  const walk = (folder, depth) => {
+    let names = [];
+    try {
+      names = readdirSync(folder);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = path.join(folder, name);
+      if (name.startsWith('.tmp-tokens-')) {
+        rmSync(full, { force: true });
+        removed++;
+      } else if (depth < 3 && statSync(full, { throwIfNoEntry: false })?.isDirectory()) {
+        walk(full, depth + 1);
+      }
+    }
+  };
+  walk(sessionsDir, 0);
+  return removed;
+}
+
+/**
+ * Runs one hawk command and waits for it, from a private folder and never from the repository,
+ * and only while the guard is up and no live host can be reached by name. Output goes where
+ * `stdio` says.
+ */
+async function hawk(hawkArgs, { stdio = 'inherit', limitMinutes = 15, cwd = workDir, surface = null } = {}) {
+  await needGuard();
+  await needSafeNetwork();
   return new Promise((resolve) => {
-    const child = spawn(hawkBin(), hawkArgs, { cwd: REPO, env: hawkEnv(), stdio, detached: true });
+    const child = spawn(hawkBin(), hawkArgs, { cwd, env: hawkEnv(surface), stdio, detached: true });
     const timer = setTimeout(() => {
       try {
         process.kill(-child.pid, 'SIGKILL');
@@ -410,6 +522,7 @@ function hawk(hawkArgs, { stdio = 'inherit', limitMinutes = 15 } = {}) {
       clearTimeout(timer);
       process.off('SIGINT', onInt);
       process.off('SIGTERM', onTerm);
+      keyCopiesRemoved = removeKeyCopies();
       resolve(code);
     };
     child.on('error', (error) => { say(error.message); done(127); });
@@ -419,9 +532,12 @@ function hawk(hawkArgs, { stdio = 'inherit', limitMinutes = 15 } = {}) {
 
 function surfaceNamed(name) {
   if (!SURFACES[name]) fail('Say which surface: api, dashboard or site.');
-  if (!existsSync(path.join(REPO, SURFACES[name].config))) fail(`${SURFACES[name].config} is not at the repository root.`);
+  if (!existsSync(configPath(SURFACES[name]))) fail(`${SURFACES[name].config} is not at the repository root.`);
   return SURFACES[name];
 }
+
+/** In arguments handed on to hawk, a config named by its bare name is given its full path. */
+const withFullConfigPaths = (hawkArgs) => hawkArgs.map((arg) => Object.values(SURFACES).find((surface) => surface.config === arg) ? configPath(Object.values(SURFACES).find((surface) => surface.config === arg)) : arg);
 
 /** What a validation printed, without the ANSI colours, with keys and tokens taken out. */
 function lastWords(file) {
@@ -435,19 +551,20 @@ function lastWords(file) {
 
 async function validate(name) {
   const surface = surfaceNamed(name);
-  await needGuard();
   const folder = path.join(inputsFolder(home), 'validate');
   mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const steps = [['config', ['validate', 'config', surface.config]]];
-  if (surface.spec) steps.push(['api', ['validate', 'api', '--hawk-mem', '2g', '--no-progress', surface.config]]);
-  if (surface.auth) steps.push(['auth', ['validate', 'auth', '--hawk-mem', '2g', '--no-progress', ...surface.flags, surface.config]]);
+  const config = configPath(surface);
+  const session = ['--session-home', sessionsDir];
+  const steps = [['config', ['validate', 'config', ...session, config]]];
+  if (surface.spec) steps.push(['api', ['validate', 'api', '--hawk-mem', '2g', '--no-progress', ...session, config]]);
+  if (surface.auth) steps.push(['auth', ['validate', 'auth', '--hawk-mem', '2g', '--no-progress', ...session, ...surface.flags, config]]);
   let allGood = true;
   for (const [step, hawkArgs] of steps) {
     // The output holds the local key and a made-up account's token, so it is kept private and
     // only its verdict is printed.
     const file = path.join(folder, `${name}-${step}.out`);
     const out = openSync(file, 'w', 0o600);
-    const code = await hawk(hawkArgs, { stdio: ['ignore', out, out] });
+    const code = await hawk(hawkArgs, { stdio: ['ignore', out, out], cwd: folder, surface });
     say(`hawk ${hawkArgs.slice(0, 2).join(' ')} ${surface.config}: exit ${code}`);
     for (const line of lastWords(file)) say(`    ${line}`);
     if (code !== 0) {
@@ -456,13 +573,14 @@ async function validate(name) {
       break;
     }
   }
-  if (surface.auth) await hawk(['perch', 'stop'], { stdio: 'ignore' }); // Nothing of the scanner may be left running.
+  if (surface.auth) await hawk(['perch', 'stop'], { stdio: 'ignore', cwd: folder }); // Nothing of the scanner may be left running.
   return allGood ? 0 : 1;
 }
 
 async function scan(name, parent) {
   const surface = surfaceNamed(name);
   await needGuard();
+  await needSafeNetwork();
   const action = parent ? 'rescan' : 'scan';
   const others = spawnSync('pgrep', ['-x', 'hawk'], { encoding: 'utf8' }).stdout.trim();
   if (others) fail('Another hawk command is still running. One at a time.');
@@ -475,16 +593,17 @@ async function scan(name, parent) {
   const stamp = new Date().toISOString().replace(/[-:]|\.\d+/g, '');
   const out = path.join(inputsFolder(home), name, `${stamp}-${action}`);
   mkdirSync(out, { recursive: true, mode: 0o700 });
-  const hawkArgs = [action, '--hawk-mem', process.env.MINEMUSTER_SCAN_HAWK_MEM || '4g', '--no-progress', '--json-output', ...surface.flags];
+  const hawkArgs = [action, '--hawk-mem', process.env.MINEMUSTER_SCAN_HAWK_MEM || '4g', '--no-progress', '--json-output', '--session-home', sessionsDir, ...surface.flags];
   if (parent) hawkArgs.push('--scan-id', parent);
-  hawkArgs.push(surface.config);
+  hawkArgs.push(configPath(surface));
   const limit = Number(process.env.MINEMUSTER_SCAN_MINUTES || 110);
-  const env = hawkEnv();
+  const env = hawkEnv(surface);
   const runFile = path.join(out, 'run.txt');
   writeFileSync(runFile, [
     `surface=${name} action=${action} config=${surface.config} target=${surface.host}`,
     `commit=${env.COMMIT_SHA} branch=${env.BRANCH_NAME} agent=${env.HAWK_AGENT ?? 'none (hawk fills in its own)'}`,
-    `command=${hawkBin()} ${hawkArgs.join(' ')}`,
+    `command=${Object.entries(surface.vars).map(([k, v]) => `${k}=${v} `).join('')}${hawkBin()} ${hawkArgs.join(' ')}`,
+    `run_from=${out} outbound_proxy=${env.SCAN_OUTBOUND_PROXY} session_home=${sessionsDir}`,
     `started=${new Date().toISOString()}`,
     '',
   ].join('\n'), { mode: 0o600 });
@@ -508,13 +627,15 @@ async function scan(name, parent) {
   const gatewayLog = path.join(stackDir, 'run', 'gateway.log');
   const gatewayLinesBefore = existsSync(gatewayLog) ? readFileSync(gatewayLog, 'utf8').split('\n').length : 0;
   say(`StackHawk | ${action} of ${name} (${surface.host}) started - it takes minutes, and its output goes to ${out}`);
-  const code = await hawk(hawkArgs, { stdio: ['ignore', openSync(path.join(out, 'scan.json'), 'w', 0o600), openSync(path.join(out, 'scan.err'), 'w', 0o600)], limitMinutes: limit });
+  const code = await hawk(hawkArgs, { stdio: ['ignore', openSync(path.join(out, 'scan.json'), 'w', 0o600), openSync(path.join(out, 'scan.err'), 'w', 0o600)], limitMinutes: limit, cwd: out, surface });
   clearInterval(sampler);
 
-  // What the scanner asked the guard for while it ran: the proof of where it tried to go.
+  // What the scanner sent through the guard while it ran. That is where it tried to go by the
+  // guard; a connection made around the guard is not in this log.
   const guardLines = existsSync(guardLog) ? readFileSync(guardLog, 'utf8').split('\n').slice(Math.max(0, guardLinesBefore - 1)).filter(Boolean) : [];
   writeFileSync(path.join(out, 'guard.jsonl'), guardLines.length > 0 ? `${guardLines.join('\n')}\n` : '', { mode: 0o600 });
-  const refused = [...new Set(guardLines.map((line) => JSON.parse(line)).filter((line) => line.verdict === 'refused').map((line) => line.target))];
+  const guarded = guardSummary(guardLines);
+  const refused = guarded.refused;
   let id = '';
   try {
     id = JSON.parse(readFileSync(path.join(out, 'scan.json'), 'utf8')).scan?.id ?? '';
@@ -522,20 +643,36 @@ async function scan(name, parent) {
     // No JSON: the scan did not start, and scan.err says why.
   }
   // What the local server answered while the scan ran, by status. Almost nothing but 401 means
-  // the key or the sign-in did not reach the scanner's requests.
+  // the key or the sign-in did not reach the scanner's requests. And table by table: whether the
+  // recorded requests and the description's reads reached any rows.
   const answered = {};
+  let tables = null;
   if (name === 'api' && existsSync(gatewayLog)) {
-    for (const line of readFileSync(gatewayLog, 'utf8').split('\n').slice(Math.max(0, gatewayLinesBefore - 1))) {
+    const lines = readFileSync(gatewayLog, 'utf8').split('\n').slice(Math.max(0, gatewayLinesBefore - 1));
+    for (const line of lines) {
       const status = /^\S+ [A-Z]+ \S+ (\d{3})\b/.exec(line)?.[1];
       if (status) answered[status] = (answered[status] ?? 0) + 1;
     }
+    tables = describeTableAnswers(tableAnswers(lines));
   }
   const answers = Object.entries(answered).map(([status, n]) => `${status}:${n}`).join(',') || 'none';
-  appendFileSync(runFile, [`ended=${new Date().toISOString()}`, `exit=${code}`, `scan_id=${id || 'none'}`, `peak_used_mb=${peak}`, `hosts_refused_by_the_guard=${refused.join(',') || 'none'}`, ...(name === 'api' ? [`server_answers_by_status=${answers}`] : []), ''].join('\n'));
+  appendFileSync(runFile, [
+    `ended=${new Date().toISOString()}`, `exit=${code}`, `scan_id=${id || 'none'}`, `peak_used_mb=${peak}`,
+    `guard_passed_outside=${guarded.outside.join(',') || 'none'}`,
+    `guard_passed_on_this_machine=${guarded.local.join(',') || 'none'} (${guarded.localTunnels} tunnels)`,
+    `hosts_refused_by_the_guard=${refused.join(',') || 'none'}`,
+    ...(name === 'api' ? [`server_answers_by_status=${answers}`, ...tables.lines.map((line) => `table_answers ${line}`), `tables=${tables.verdict}`] : []),
+    `key_copies_removed_from_sessions=${keyCopiesRemoved}`,
+    '',
+  ].join('\n'));
   writeFileSync(path.join(out, 'exit.code'), `${code}\n`);
   say(`StackHawk | ${action} of ${name} ended with exit code ${code} - scan id ${id || 'none'} - ${out}`);
-  say(refused.length > 0 ? `The scanner asked for these hosts outside this machine and was refused: ${refused.join(', ')}` : 'The scanner asked for no host outside this machine but StackHawk.');
-  if (name === 'api') say(`The local server's answers during the scan, by status: ${answers}`);
+  say(refused.length > 0 ? `Sent through the scan guard and refused there: ${refused.join(', ')}` : 'Nothing the scanner sent through the scan guard was refused.');
+  say(`The guard passed ${guarded.outside.join(', ') || 'nothing outside this machine'}, and ${guarded.localTunnels} tunnels to the scan targets on this machine. The guard's log holds what was sent through it and nothing else; the check that no live host resolves here is what covers the rest.`);
+  if (name === 'api') {
+    say(`The local server's answers during the scan, by status: ${answers}`);
+    say(`Tables: ${tables.verdict} (run.txt has each table)`);
+  }
   return code;
 }
 
@@ -566,8 +703,8 @@ async function up() {
 
   say('\n2. The copies of the website and the dashboard');
   if (args['no-stage']) say('   Left as they are (--no-stage).');
-  // The contact form is given the local server's key, so it goes through on the copy.
-  else if (nodeScript('sites/stage.mjs', ['--local-key']).status !== 0) fail('The copies were not made (sites/README.md).');
+  // The copies hold the local server's address and key, and link only to each other.
+  else if (nodeScript('sites/stage.mjs', []).status !== 0) fail('The copies were not made (sites/README.md).');
   const sitesLog = path.join(runDir, 'site-requests.jsonl');
   const sitesPid = await startDetached('sites', 'sites/serve-vercel.mjs', ['--log', sitesLog], [WEBSITE_PORT, DASHBOARD_PORT]);
   say(`   Served by pid ${sitesPid}; one line for each answer in ${sitesLog}`);
@@ -617,8 +754,7 @@ async function main() {
       if (!operands[1]) fail('A rescan needs the id of the surface\'s first full scan.');
       return scan(operands[0], operands[1]);
     case 'hawk':
-      await needGuard();
-      return hawk(passed);
+      return hawk(withFullConfigPaths(passed));
     case 'stack': return stack(passed).status ?? 1;
     case 'down': await down(); return 0;
     default: return fail(`"${command}" is not a command. See the top of up.mjs.`);

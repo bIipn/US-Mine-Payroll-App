@@ -14,6 +14,7 @@ Everything that is made goes in a private folder outside the repository, named w
 ## The pieces
 
 - `stage.mjs` makes the two copies and writes what it did to `<home>/sites/stage-report.json`.
+- `live.mjs` lists what a copy must never lead to, and where each live link goes instead. `up.mjs` uses the same list for its check that no live host resolves on this machine.
 - `serve-vercel.mjs` serves a folder over HTTPS on 127.0.0.1, going by a `vercel.json`.
 - `vercel-rules.mjs` holds the rules the server follows, as functions that open no file and no socket.
 - `layout.mjs` knows where the copies live, the three local addresses and which certificate to use.
@@ -43,26 +44,30 @@ The servers use the certificate the local server's step made (`<home>/stack/tls`
 
 ## What `stage.mjs` changes
 
-The live server's address is read from `connect-src` in the two `vercel.json` files. The script moves exactly one address and stops if the files name none or more than one.
+The live server's address is read from `connect-src` in the two `vercel.json` files, and its publishable key from `site/contact.js` and `dashboard/src/lib/config.ts`. The script moves exactly one address and stops if the files name none or more than one.
 
-**The website.** Every file of `site/` is copied as it is, but two. In `contact.js` and in `vercel.json` the live server's address becomes `https://127.0.0.1:54321`, once in each. The script then checks its own work. If any of this fails it stops with an error and takes the copy away, so a copy is whole and checked or it is not there:
+**The website.** Every file of `site/` is copied, with three kinds of change:
 
-- the copy holds the same files as `site/`, and all but those two are the same byte for byte;
-- those two differ from `site/` by the address and nothing else;
+- In `contact.js` and in `vercel.json` the live server's address becomes `https://127.0.0.1:54321`, once in each.
+- In `contact.js` the live server's publishable key becomes the local server's, read from `<home>/stack/env.json`, so the form goes through on the copy. Until the local server's step has written its key, a placeholder that opens nothing is used, and the script says what is missing.
+- Every link to the live sites and to Stripe is moved onto the copies (`live.mjs`): `https://app.minemuster.com` becomes the dashboard copy, `https://127.0.0.1:4444`; `https://minemuster.com` becomes the website copy, `https://127.0.0.1:4443`; and Stripe's pages (`billing.stripe.com`, `buy.stripe.com`, `stripe.com`) become an address on the website copy under `/not-in-the-copy/`, with the host kept in the path, which is answered with the 404 page. So "Start free trial" opens the dashboard copy at `/?start=trial`, `robots.txt` and `sitemap.xml` name the copy's own pages, and a crawl that follows any link stays on this machine. Prose that names a site without an address, such as "the office dashboard at app.minemuster.com", is left as it is.
+
+The script then checks its own work. If any of this fails it stops with an error and takes the copy away, so a copy is whole and checked or it is not there:
+
+- the copy holds the same files as `site/`, and every file it did not change is the same byte for byte;
+- every file it changed is `site/`'s once the address, the key and the links are put back, and nothing else differs;
 - in each Content-Security-Policy every directive is as it was, in the same order, except the one address in `connect-src`;
-- the live server's host, or any other Supabase project's, is named nowhere in the copy.
+- nothing in the copy names the live server or any other Supabase project, holds the live key, or links to the live sites or to Stripe, written in any way (`http:` or `https:`, with no scheme, or with escaped slashes).
 
-The policy for the pages carries the hashes of their inline scripts. No page is changed, so no hash can break, and the script shows it: it works out the hash of every inline script a browser would run on every page and looks for it in the `script-src` that page is served with. The home page has two (the line that marks the page as having JavaScript, and the import map); the other pages have the first alone; `/demo` is served with `'unsafe-inline'`.
-
-The contact form sends the live server's publishable key, and the local server turns that key away, so on the copy the form says the message did not go through. `--local-key` also gives the copy's `contact.js` the local server's key, read from `<home>/stack/env.json`, and then the form goes through. Without it, the address is the only thing changed.
+The policy for the pages carries the hashes of their inline scripts. The inline scripts a browser runs name no link, so no hash can break, and the script shows it: it works out the hash of every inline script a browser would run on every page and looks for it in the `script-src` that page is served with. The home page has two (the line that marks the page as having JavaScript, and the import map); the other pages have the first alone; `/demo` is served with `'unsafe-inline'`. The pages' structured data (`application/ld+json`) does name the site, and is moved like any other link; a browser does not run it, so no policy covers it.
 
 **The dashboard.** `vite build` is run in `dashboard/` with `--outDir <home>/sites/dashboard`, `VITE_SUPABASE_URL=https://127.0.0.1:54321` and `VITE_SUPABASE_PUBLISHABLE_KEY` set to the local server's key. `dashboard/dist` is not touched. The dashboard takes any address `supabase-js` takes, and its build refuses only a secret key (`isSecretKey`), so the local values are accepted as they are. Until the local server's step has written its key, the build is made with a placeholder that opens nothing, and the script says what is missing.
 
 The copy of `dashboard/vercel.json` is written beside the build, as `<home>/sites/dashboard.vercel.json`, because Vercel's build output has no `vercel.json` in it. Its `connect-src` is moved the same way and checked the same way.
 
-The built code must not name the live server, and the script stops and takes the build away if it does. The source maps do: they carry the source files as text, and `src/lib/config.ts` names the live server as the default. That text is moved as well, so the host is nowhere in the copy.
+The built code must not name the live server or hold its key, and the script stops and takes the build away if it does. The source maps do: they carry the source files as text, and `src/lib/config.ts` names the live server and its key as the defaults. That text is changed as well, to the local server and its key, so neither is anywhere in the copy. The links to the live sites and to Stripe are moved the same way as on the website, in the built code and in the maps: the trial's payment link, the billing portal and the contact page all lead to the copies. The same final check is made.
 
-**Links are left as they are.** The pages still link to `app.minemuster.com`, `minemuster.com` and Stripe's billing pages, and the report lists every host a copy names. No page loads anything from them. A crawler that follows every link would leave the copy, so the scanner has to be told to stay on 127.0.0.1.
+The report lists, for each copy, how many of each live link were moved and every host the copy still names. What is left is library code and namespaces (`www.w3.org`, `github.com`, `reactnavigation.org` and the like in `/demo`'s packed app), which no page loads; the scan guard refuses them all the same.
 
 ## How the server decides
 
@@ -136,7 +141,7 @@ These are from Vercel's documentation, or are a guess, and nothing here checked 
 - `node --test "sites/test/*.node.mjs"`: 27 tests. Every `source` in the two files becomes the expression Vercel makes of it and matches the paths it should and no others, the negative lookahead included; every path on the website gets exactly one policy; redirects never leave the site; nothing outside the list of files can be asked for; and the server's own answers, over HTTP on a free port, with made-up files.
 - `compare-with-vercel.mjs`, with Vercel's package installed in the private folder: the same route tables.
 - `check-sites.mjs`, in Chromium: the seven pages of the website load with no policy violation, no failed request and no error; the 3D logo draws; `/demo` opens the app; a path that is not there gives the 404 page with status 404; `/pricing.html` ends at `/pricing`; the dashboard shows its sign-in screen at `/`, at a deep link and at `/?start=trial`. Every request went to `127.0.0.1:4443` or `127.0.0.1:4444`.
-- With `--send-form`, the contact form's one request went to `127.0.0.1:54321`. The local server turned it away, as it does the live key; in a copy made with `--local-key` it took the message.
+- With `--send-form`, the contact form's one request went to `127.0.0.1:54321`. In the first copies, which kept the live key, the local server turned it away; with the local key, which every copy now has, it took the message.
 - With `--sign-in`, the dashboard copy signed in as the made-up supervisor of the local server's first company and opened its Overview, with no policy violation and no failed request. Every request went to `127.0.0.1:4444` or `127.0.0.1:54321`.
 
 Not checked: the copies in any browser but Chromium.

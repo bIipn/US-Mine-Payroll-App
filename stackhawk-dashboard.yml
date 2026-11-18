@@ -13,10 +13,14 @@
 #
 # Assumed, with nobody to ask when this was written:
 # - Routes expected: the build's 15 files, and the app itself at any other address, since the
-#   live site rewrites every path to it.
-# - The crawl's browser stays on this host. The copy still links to the live sites, so the scan
-#   is run through scripts/security-scan/egress-guard.mjs, which lets the scanner reach
-#   StackHawk and nothing else outside this machine.
+#   live site rewrites every path to it. A crawl that is not signed in can reach 11 of the 15 at
+#   most: not the two source maps (named only in a comment at the end of a script), not
+#   fonts/OFL.txt (linked from nowhere), and not the logoArt script (loaded only for a company
+#   with the traced logo, behind the sign-in).
+# - The crawl's browser stays on this machine. The copy's links to the live sites and to Stripe
+#   are moved onto the copies when it is made (scripts/security-scan/sites/stage.mjs), and the
+#   scanner and its browser are run through scripts/security-scan/egress-guard.mjs, which lets
+#   them reach StackHawk and the scan targets on 127.0.0.1 and nothing else.
 
 app:
   applicationId: ${APP_ID}
@@ -26,6 +30,18 @@ app:
 hawk:
   # Any finding ends the scan with exit code 42.
   failureThreshold: low
+  # The scan guard (scripts/security-scan/egress-guard.mjs), for both of the scanning engine's
+  # ways out. hawk.outboundProxy is what its sign-in and its calls to StackHawk use. The three
+  # network.connection.httpProxy lines are what its crawl, its attacks and what it fetches for its
+  # browser use. The guard passes StackHawk and the three scan targets on 127.0.0.1, and refuses
+  # everything else. Seen on this machine: the sign-in reaches 127.0.0.1 through the guard, and the
+  # rest of the engine reaches it directly.
+  outboundProxy:
+    host: ${SCAN_OUTBOUND_PROXY}
+  config:
+    - network.connection.httpProxy.enabled=true
+    - network.connection.httpProxy.host=${SCAN_GUARD_HOST}
+    - network.connection.httpProxy.port=${SCAN_GUARD_PORT}
   spider:
     base: true
     # The pages are drawn by JavaScript, so the crawl needs a browser.

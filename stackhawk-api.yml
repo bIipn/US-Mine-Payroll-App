@@ -12,14 +12,18 @@
 # junk sent there locks the scan's own accounts out (a changed password, or the limit on
 # sign-ins by caller address). The scanner still signs in there.
 #
-# Scan it with "node scripts/security-scan/up.mjs scan api". That adds the profile mode
-# (--profile-scan-mode=primary-full --full-scan-profile=A1), without which the four accounts get
-# two rules and nothing else, and it runs the scanner through the scan guard.
+# Scan it with "node scripts/security-scan/up.mjs scan api". That sets the profile mode
+# (PROFILE_SCAN_MODE=primary-full and FULL_SCAN_PROFILE=A1, the variables the scanner reads for
+# --profile-scan-mode and --full-scan-profile), without which the four accounts get two rules and
+# nothing else, and it runs the scanner through the scan guard. The two tags at the end read the
+# same variables and have no default, so a run that does not set them stops before it starts, and
+# the scan's record says which mode it ran in.
 #
 # Assumed, with nobody to ask when this was written:
 # - Routes expected: 61 method and path pairs on 28 paths, counted from the description file.
 #   PostgREST lists every method on every table, so 19 of them are there only to be refused by
-#   the grants.
+#   the grants. A table read in the description asks only for the filters given values below; the
+#   reads with their columns and ordering are among the recorded requests.
 # - The first account, A1, is the supervisor of the first made-up company and gets every rule.
 #   Its own sign-in is in the part that is not attacked.
 # - The other company's ids under forbiddenVariables document the boundary. The preset rules
@@ -147,6 +151,10 @@ app:
       success: ".*200.*"
       requestHeaders:
         apikey: ${SCAN_PUBLISHABLE_KEY}
+    # Said outright: left out, the scanner reports session verification as off, and a session lost
+    # in the middle of the scan would go unnoticed.
+    sessionVerification:
+      disabled: false
     # A1 is the supervisor of the first company and gets every rule. The others get the two
     # rules that look for one account reaching what belongs to another: an employee of the same
     # company, the supervisor of another company, and an account that has joined nothing.
@@ -172,9 +180,11 @@ app:
           username: ${SCAN_N1_EMAIL}
           password: ${SCAN_N1_PASSWORD}
 
+  # The key, and the made-up accounts' access tokens, are kept out of the evidence uploaded.
   redact:
     headers:
       - apikey
+      - Authorization
 
 # Every request to the gateway carries the publishable key in "apikey".
 hawkAddOn:
@@ -188,6 +198,18 @@ hawkAddOn:
 hawk:
   # Any finding ends the scan with exit code 42.
   failureThreshold: low
+  # The scan guard (scripts/security-scan/egress-guard.mjs), for both of the scanning engine's
+  # ways out. hawk.outboundProxy is what its sign-in and its calls to StackHawk use. The three
+  # network.connection.httpProxy lines are what its crawl, its attacks and what it fetches for its
+  # browser use. The guard passes StackHawk and the three scan targets on 127.0.0.1, and refuses
+  # everything else. Seen on this machine: the sign-in reaches 127.0.0.1 through the guard, and the
+  # rest of the engine reaches it directly.
+  outboundProxy:
+    host: ${SCAN_OUTBOUND_PROXY}
+  config:
+    - network.connection.httpProxy.enabled=true
+    - network.connection.httpProxy.host=${SCAN_GUARD_HOST}
+    - network.connection.httpProxy.port=${SCAN_GUARD_PORT}
   spider:
     # No pages to crawl: the routes come from the description file and from the requests below.
     base: false
@@ -212,3 +234,8 @@ tags:
     value: ${BRANCH_NAME:none}
   - name: git_origin
     value: biipn/us-mine-payroll-app
+  # No default: see the top of this file.
+  - name: profile_scan_mode
+    value: ${PROFILE_SCAN_MODE}
+  - name: full_scan_profile
+    value: ${FULL_SCAN_PROFILE}

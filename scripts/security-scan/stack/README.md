@@ -114,6 +114,10 @@ These could not be learned without a request to the live project, which this job
 - Whether the platform checks a key's checksum before it looks the key up. Here any unknown key is "Invalid API key".
 - Whether the platform hands the first entry of a client's own `X-Forwarded-For` on to the database. Here it does, as Cloudflare and Envoy are documented to: the contact form's limit for each sender can then be sidestepped by sending a new header each time, which `supabase/README.md` already names as what is left.
 - The live project's Supabase Auth settings: its limits, its site address and redirect list, its password rules, and whether the legacy JWT keys are still accepted.
+- Whether `pg_graphql` is on in the live project (Database, then Extensions, in Supabase's dashboard). Here the image has it (1.6.3) but it is not installed, so `/graphql/v1` answers "pg_graphql extension is not enabled". If it is on in the live project, the live server answers a whole GraphQL surface over the tables that this stack does not have: the stack should then run `create extension pg_graphql` after the migrations, and the server's scan should be given `app.graphqlConf`.
+- How the live project signs access tokens (Auth, then JWT signing keys). Here Supabase Auth signs them ES256, and PostgREST also takes an HS256 token signed with the stack's own legacy secret (seen on 18 November 2026, calling `my_companies` as A1: the ES256 token as issued, 200; the same claims signed HS256 with the legacy secret, 200; `alg: none`, a wrong secret or a changed expiry, 401). A reviewer's read of the live project's PostgREST settings the same day listed a legacy JWT secret among them; whether the live project still accepts tokens signed with it is not known.
+
+Until the owner has looked at these, a finding that turns on one of them describes this stack, not the live server. The owner's two answers on the extensions and the signing keys go here when they are known.
 
 ## Rules
 
