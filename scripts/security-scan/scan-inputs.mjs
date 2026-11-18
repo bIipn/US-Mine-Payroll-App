@@ -49,12 +49,40 @@ export function readEnvFile(file) {
 const shellQuoted = (value) => `'${String(value).replaceAll(`'`, `'\\''`)}'`;
 
 /**
- * The columns a table read filters on in the scan, by table. stackhawk-api.yml gives each of them
- * a real value ("eq.<id>") under customVariables, for GET; a test holds the two to each other.
+ * The columns a table read filters on in the scan, by table, and the made-up thing each one is
+ * given ("eq.<its id>"). The value goes into the description as the filter's default: the scanner
+ * uses a parameter's default, and leaves customVariables out of query parameters (seen on 18
+ * November 2026, HawkScan 6.7.4: every read built from the description got made-up words).
  */
 export const TABLE_FILTERS = { companies: ['id'], roster: ['company_id', 'id'] };
 export const DEFAULT_TABLE_FILTERS = ['company_id'];
 export const filtersOf = (table) => TABLE_FILTERS[table] ?? DEFAULT_TABLE_FILTERS;
+const TABLE_FILTER_VALUES = { 'companies.id': 'companyA', 'roster.id': 'rosterA3', company_id: 'companyA' };
+const tableFilterValue = (table, column) => TABLE_FILTER_VALUES[`${table}.${column}`] ?? TABLE_FILTER_VALUES[column];
+
+/**
+ * The inputs of each function the scan gives a made-up value to, by function, and which value.
+ * They go into the description as defaults, for the query of a GET and the body of a POST.
+ */
+export const FUNCTION_INPUTS = {
+  is_member: { company_id: 'companyA' },
+  is_supervisor: { company_id: 'companyA' },
+  push_records: { company_id: 'companyA' },
+  rotate_join_code: { company_id: 'companyA' },
+  company_billing: { p_company_id: 'companyA' },
+  approve_join_request: { request_id: 'requestP1', roster_id: 'rosterA3' },
+  deny_join_request: { request_id: 'requestP1' },
+  lift_join_bar: { request_id: 'requestP1' },
+  release_roster_claim: { roster_id: 'rosterA3' },
+  company_by_code: { code: 'codeB' },
+  join_company: { code: 'codeB' },
+};
+
+/** The made-up things FUNCTION_INPUTS and TABLE_FILTER_VALUES name, from the stack's fixtures. */
+function madeUpValues(fixtures) {
+  const A = fixtures.companies.A;
+  return { companyA: A.id, rosterA3: A.roster.A3.rosterId, requestP1: fixtures.pendingJoinRequest.id, codeB: fixtures.companies.B.joinCode };
+}
 
 /**
  * A table read as the description has it, with only the parameters a scanner can fill well.
@@ -68,17 +96,46 @@ export const filtersOf = (table) => TABLE_FILTERS[table] ?? DEFAULT_TABLE_FILTER
  * are: a write with a made-up filter is turned down, and that is what keeps the scan from
  * changing rows it did not mean to.
  */
-function trimmedRead(operation, table, shared) {
+function trimmedRead(operation, table, shared, values) {
   const keep = new Set(filtersOf(table).map((column) => `rowFilter.${table}.${column}`));
   const named = (parameter) => (parameter.$ref ?? '').replace(/^#\/parameters\//, '');
   const kept = (operation.parameters ?? []).filter((parameter) => keep.has(named(parameter)) || named(parameter) === 'preferCount');
   for (const name of keep) if (!kept.some((parameter) => named(parameter) === name)) throw new Error(`The description has no filter ${name} for the scan to fill.`);
   for (const parameter of kept) if (parameter.$ref && !shared?.[named(parameter)]) throw new Error(`The description names ${parameter.$ref} and does not define it.`);
-  return { ...operation, parameters: kept };
+  // Each filter is written out in place with its value as the default, since a shared parameter
+  // has one default for every table that points at it.
+  const filled = kept.map((parameter) => {
+    if (!keep.has(named(parameter))) return parameter;
+    const filter = shared[named(parameter)];
+    const value = values[tableFilterValue(table, filter.name)];
+    if (value === undefined) throw new Error(`No made-up value is named for ${table}.${filter.name}.`);
+    return { ...filter, default: `eq.${value}` };
+  });
+  return { ...operation, parameters: filled };
+}
+
+/** A function's operations, with each input the scan gives a value to defaulting to that value. */
+function filledFunction(item, name, values) {
+  const inputs = FUNCTION_INPUTS[name];
+  if (!inputs) return item;
+  const valueOf = (input) => (input in inputs ? values[inputs[input]] : undefined);
+  const operations = {};
+  for (const [method, operation] of Object.entries(item)) {
+    const parameters = (operation.parameters ?? []).map((parameter) => {
+      if (parameter.in === 'query' && valueOf(parameter.name) !== undefined) return { ...parameter, default: valueOf(parameter.name) };
+      if (parameter.in === 'body' && parameter.schema?.properties) {
+        const properties = Object.fromEntries(Object.entries(parameter.schema.properties).map(([input, schema]) => [input, valueOf(input) === undefined ? schema : { ...schema, default: valueOf(input) }]));
+        return { ...parameter, schema: { ...parameter.schema, properties } };
+      }
+      return parameter;
+    });
+    operations[method] = { ...operation, parameters };
+  }
+  return operations;
 }
 
 /** PostgREST's description as a signed-in account, and the webhook's, in one file. */
-function mergedDescription(rest, webhook) {
+function mergedDescription(rest, webhook, values) {
   if (rest.swagger !== '2.0' || rest.basePath !== '/rest/v1') throw new Error('The PostgREST description is not the shape this script knows.');
   const webhookBase = new URL(webhook.servers[0].url).pathname.replace(/\/$/, '');
   // app.host stays at the origin, because sign-in, the tables and the function live under three
@@ -86,7 +143,8 @@ function mergedDescription(rest, webhook) {
   const paths = {};
   for (const [name, item] of Object.entries(rest.paths)) {
     const table = /^\/([a-z_]+)$/.exec(name)?.[1];
-    paths[`${rest.basePath}${name}`] = table && item.get ? { ...item, get: trimmedRead(item.get, table, rest.parameters) } : item;
+    const fn = /^\/rpc\/([a-z_]+)$/.exec(name)?.[1];
+    paths[`${rest.basePath}${name}`] = table && item.get ? { ...item, get: trimmedRead(item.get, table, rest.parameters, values) } : fn ? filledFunction(item, fn, values) : item;
   }
   for (const [name, item] of Object.entries(webhook.paths)) {
     const operations = {};
@@ -124,15 +182,17 @@ function seedRequests({ gateway, key, fixtures, webhookBase }) {
 
   const entries = [];
   const add = (method, route, { query = {}, body, headers = {} } = {}) => {
-    const url = new URL(gateway + route);
-    for (const [name, value] of Object.entries(query)) url.searchParams.append(name, value);
+    // Commas stay as they are: the scanner encodes a "%2C" in a recorded request a second time.
+    const encoded = (text) => encodeURIComponent(text).replaceAll('%2C', ',');
+    const search = Object.entries(query).map(([name, value]) => `${encoded(name)}=${encoded(value)}`).join('&');
+    const url = `${gateway}${route}${search ? `?${search}` : ''}`;
     const all = { Accept: 'application/json', apikey: key, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers };
     const asked = {
       method,
-      url: url.toString(),
+      url,
       httpVersion: 'HTTP/1.1',
       headers: Object.entries(all).map(([name, value]) => ({ name, value })),
-      queryString: [...url.searchParams].map(([name, value]) => ({ name, value })),
+      queryString: Object.entries(query).map(([name, value]) => ({ name, value: String(value) })),
       cookies: [],
       headersSize: -1,
       bodySize: -1,
@@ -237,7 +297,7 @@ export function writeScanInputs({ home, appId }) {
   const a3Row = A.roster.A3.rosterId; // On the roster and held by nobody: the one roster row the scanner is given.
   const b1Row = B.roster.B1.rosterId;
 
-  const { description, webhookBase } = mergedDescription(read('openapi-authenticated.gateway.json'), read('openapi-stripe-webhook.json'));
+  const { description, webhookBase } = mergedDescription(read('openapi-authenticated.gateway.json'), read('openapi-stripe-webhook.json'), madeUpValues(fixtures));
   const entries = seedRequests({ gateway, key, fixtures, webhookBase });
 
   const vars = {

@@ -14,7 +14,7 @@ import { after, before, test } from 'node:test';
 
 import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from '../after-scan.mjs';
 import { GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS, isLocalTarget, mayPass, startGuard, upstreamFrom } from '../egress-guard.mjs';
-import { TABLE_FILTERS, filtersOf, readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
+import { FUNCTION_INPUTS, TABLE_FILTERS, filtersOf, readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
 import { LINK_MOVES, NOT_IN_THE_COPY, isThisMachine, liveLinksIn, moveLinks, undoLinks } from '../sites/live.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '../../..');
@@ -195,18 +195,20 @@ test('the server config keeps the key and the tokens out of the evidence, and ca
   for (const config of ['stackhawk-dashboard.yml', 'stackhawk-site.yml']) assert.doesNotMatch(configText(config), /PROFILE_SCAN_MODE|FULL_SCAN_PROFILE/);
 });
 
-test('each column a table read keeps is given a real value for GET by the server config', () => {
-  // The customVariables entries for the tables, read loosely: field, path, methods, value.
+test('the server config gives no table filter a customVariables value, and its function values agree with the description', () => {
+  // The scanner leaves customVariables out of query parameters, so a table filter's value is the
+  // description's default (see the inputs test). An entry here for a table would read as covering
+  // the table when it does not.
   const text = configText('stackhawk-api.yml');
   const custom = text.slice(text.indexOf('customVariables:'), text.indexOf('forbiddenVariables:'));
-  const entries = [...custom.matchAll(/- field: (\w+)\n\s+path: "([^"]+)"\n(?:\s+requestMethods:\n((?:\s+- \w+\n)+))?\s+values:\n\s+- (\S+)/g)]
-    .map(([, field, pathPattern, methods, value]) => ({ field, path: new RegExp(pathPattern), methods: methods ? [...methods.matchAll(/- (\w+)/g)].map((m) => m[1]) : null, value }));
+  const entries = [...custom.matchAll(/- field: (\w+)\n\s+path: "([^"]+)"/g)].map(([, field, pathPattern]) => ({ field, path: new RegExp(pathPattern) }));
   const tables = ['companies', 'roster', 'records', 'record_history', 'join_requests', 'notifications', 'billing_subscriptions', 'billing_overrides'];
-  for (const table of tables) {
-    const route = `https://127.0.0.1:54321/rest/v1/${table}`;
-    const given = entries.filter((e) => e.path.test(route) && e.methods?.includes('GET')).map((e) => e.field).sort();
-    assert.deepEqual([...new Set(given)], [...filtersOf(table)].sort(), table);
-    for (const entry of entries.filter((e) => e.path.test(route))) assert.match(entry.value, /^\$\{SCAN_[A-Z0-9_]+_EQ\}$/, `${table} ${entry.field} must be written eq.<id>`);
+  for (const table of tables) assert.equal(entries.filter((e) => e.path.test(`/rest/v1/${table}`)).length, 0, table);
+  // Each function entry names inputs the description gives a value to.
+  for (const entry of entries) {
+    const functions = Object.keys(FUNCTION_INPUTS).filter((name) => entry.path.test(`/rest/v1/rpc/${name}`));
+    assert.ok(functions.length > 0, `${entry.field} names no function the scan gives values to`);
+    for (const name of functions) assert.ok(entry.field in FUNCTION_INPUTS[name], `${name} has no ${entry.field}`);
   }
   assert.deepEqual(Object.keys(TABLE_FILTERS).sort(), ['companies', 'roster']);
 });
@@ -328,6 +330,10 @@ function madeUpStack() {
         delete: {},
       },
       '/rpc/my_companies': { get: {}, post: {} },
+      '/rpc/company_billing': {
+        get: { parameters: [{ format: 'uuid', in: 'query', name: 'p_company_id', required: true, type: 'string' }] },
+        post: { parameters: [{ in: 'body', name: 'args', required: true, schema: { properties: { p_company_id: { format: 'uuid', type: 'string' } }, required: ['p_company_id'], type: 'object' } }] },
+      },
     },
   };
   const webhook = {
@@ -370,18 +376,29 @@ test('the inputs hold what the configs read, every path with its prefix, and no 
 
     const description = JSON.parse(readFileSync(path.join(made.folder, 'openapi-scan.json'), 'utf8'));
     assert.equal(description.basePath, '/');
-    assert.deepEqual(Object.keys(description.paths), ['/rest/v1/', '/rest/v1/roster', '/rest/v1/rpc/my_companies', '/functions/v1/stripe-webhook']);
-    assert.equal(made.pairs.length, 8);
-    // A table read keeps the filters the config fills and the Prefer header, and nothing else;
-    // a write keeps everything, so a made-up filter still turns it down.
-    const refs = (operation) => operation.parameters.map((p) => p.$ref.replace('#/parameters/', ''));
-    assert.deepEqual(refs(description.paths['/rest/v1/roster'].get), ['rowFilter.roster.id', 'rowFilter.roster.company_id', 'preferCount']);
-    assert.deepEqual(refs(description.paths['/rest/v1/roster'].patch), ['rowFilter.roster.id', 'rowFilter.roster.first_name']);
+    assert.deepEqual(Object.keys(description.paths), ['/rest/v1/', '/rest/v1/roster', '/rest/v1/rpc/my_companies', '/rest/v1/rpc/company_billing', '/functions/v1/stripe-webhook']);
+    assert.equal(made.pairs.length, 10);
+    // A table read keeps only the filters it has values for, written into the description as
+    // each filter's default (the scanner uses a default, and ignores customVariables for a query
+    // parameter), and the Prefer header. A write keeps everything, so a made-up filter still turns
+    // it down.
+    const A = fixtures.companies.A;
+    const shown = (parameter) => (parameter.$ref ? parameter.$ref.replace('#/parameters/', '') : `${parameter.name}=${parameter.default}`);
+    assert.deepEqual(description.paths['/rest/v1/roster'].get.parameters.map(shown), [`id=eq.${A.roster.A3.rosterId}`, `company_id=eq.${A.id}`, 'preferCount']);
+    assert.deepEqual(description.paths['/rest/v1/roster'].patch.parameters.map(shown), ['rowFilter.roster.id', 'rowFilter.roster.first_name']);
+    // A function's inputs get the made-up values the scan is meant to use, in the query and in the body.
+    assert.equal(description.paths['/rest/v1/rpc/company_billing'].get.parameters[0].default, A.id);
+    assert.equal(description.paths['/rest/v1/rpc/company_billing'].post.parameters[0].schema.properties.p_company_id.default, A.id);
 
     // Every recorded request goes to the local server, and the only roster row named is the
     // one nobody holds.
     const har = JSON.parse(readFileSync(path.join(made.folder, 'api-seed.har'), 'utf8'));
     for (const entry of har.log.entries) assert.equal(new URL(entry.request.url).origin, 'https://127.0.0.1:54321');
+    // A comma in a recorded request is written as it is: the scanner encodes a "%2C" a second
+    // time, and PostgREST then reads the list of columns as one name it does not know.
+    const rosterRead = har.log.entries.find((entry) => entry.request.method === 'GET' && new URL(entry.request.url).pathname === '/rest/v1/roster');
+    assert.match(rosterRead.request.url, /select=id,company_id,/);
+    for (const entry of har.log.entries) assert.doesNotMatch(entry.request.url, /%2C/i);
     assert.ok(!all.includes(fixtures.companies.B.roster.B1.rosterId) || vars.SCAN_ROSTER_B1 === fixtures.companies.B.roster.B1.rosterId);
     const contact = har.log.entries.find((entry) => entry.request.url.endsWith('/rpc/submit_contact_request'));
     assert.equal(JSON.parse(contact.request.postData.text).p_website, '', 'the hidden field must stay empty, or the function does nothing');
