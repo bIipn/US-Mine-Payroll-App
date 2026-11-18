@@ -36,8 +36,13 @@ export const GUARD_PORT = 4480;
 /** The address the scan configs give the scanning engine as its outbound proxy. */
 export const GUARD_URL = `http://${GUARD_HOST}:${GUARD_PORT}`;
 
-/** What a scan needs outside this machine: the platform it reports to, signs in to and updates from. */
-export const STACKHAWK_HOSTS = ['api.stackhawk.com', 'auth.stackhawk.com', 'download.stackhawk.com'];
+/**
+ * What a scan needs outside this machine: the platform it reports to, signs in to and updates from,
+ * and the store it uploads each finding's evidence and the scan's results to (StackHawk's bucket
+ * scan-results.prod.stackhawk.com, which the engine reaches at the regional S3 host). Without the
+ * last, the scan runs but StackHawk never gets what it found.
+ */
+export const STACKHAWK_HOSTS = ['api.stackhawk.com', 'auth.stackhawk.com', 'download.stackhawk.com', 's3.us-west-2.amazonaws.com'];
 
 /** The scan targets on this machine: the local server, the website copy and the dashboard copy. */
 export const LOCAL_TARGETS = [`${HOST}:${new URL(LOCAL_SERVER).port}`, `${HOST}:${WEBSITE_PORT}`, `${HOST}:${DASHBOARD_PORT}`];

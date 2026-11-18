@@ -37,8 +37,12 @@ test('only port 443 of a listed host may pass, and names are compared whole', ()
   }
 });
 
-test('the list is StackHawk and nothing of MineMuster, Supabase or Stripe', () => {
-  for (const host of STACKHAWK_HOSTS) assert.match(host, /^[a-z]+\.stackhawk\.com$/);
+test('the list is StackHawk and its results store, and nothing of MineMuster, Supabase, Stripe or Vercel', () => {
+  // The engine uploads each finding's evidence and the scan's results to StackHawk's bucket on S3
+  // (scan-results.prod.stackhawk.com, reached at the regional S3 host). Without it the scan runs but
+  // StackHawk is never sent what it found.
+  assert.deepEqual(STACKHAWK_HOSTS, ['api.stackhawk.com', 'auth.stackhawk.com', 'download.stackhawk.com', 's3.us-west-2.amazonaws.com']);
+  for (const host of STACKHAWK_HOSTS) assert.doesNotMatch(host, /minemuster|supabase|stripe|vercel/);
 });
 
 test('on this machine only the three scan targets may pass, named exactly', () => {
