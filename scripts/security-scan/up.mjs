@@ -28,7 +28,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describeTableAnswers, guardSummary, tableAnswers } from './after-scan.mjs';
+import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from './after-scan.mjs';
 import { GUARD_HOST, GUARD_PORT, GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS } from './egress-guard.mjs';
 import { inputsFolder, readEnvFile, writeScanInputs } from './scan-inputs.mjs';
 import { DASHBOARD_PORT, HOST, LOCAL_SERVER, REPO, WEBSITE_PORT, homeFrom, layout, readArgs } from './sites/layout.mjs';
@@ -660,6 +660,7 @@ async function scan(name, parent) {
     `ended=${new Date().toISOString()}`, `exit=${code}`, `scan_id=${id || 'none'}`, `peak_used_mb=${peak}`,
     `guard_passed_outside=${guarded.outside.join(',') || 'none'}`,
     `guard_passed_on_this_machine=${guarded.local.join(',') || 'none'} (${guarded.localTunnels} tunnels)`,
+    `went_through_the_guard=${guardVerdict(guarded).ok ? 'yes' : 'NO'}`,
     `hosts_refused_by_the_guard=${refused.join(',') || 'none'}`,
     ...(name === 'api' ? [`server_answers_by_status=${answers}`, ...tables.lines.map((line) => `table_answers ${line}`), `tables=${tables.verdict}`] : []),
     `key_copies_removed_from_sessions=${keyCopiesRemoved}`,
@@ -668,7 +669,8 @@ async function scan(name, parent) {
   writeFileSync(path.join(out, 'exit.code'), `${code}\n`);
   say(`StackHawk | ${action} of ${name} ended with exit code ${code} - scan id ${id || 'none'} - ${out}`);
   say(refused.length > 0 ? `Sent through the scan guard and refused there: ${refused.join(', ')}` : 'Nothing the scanner sent through the scan guard was refused.');
-  say(`The guard passed ${guarded.outside.join(', ') || 'nothing outside this machine'}, and ${guarded.localTunnels} tunnels to the scan targets on this machine. The guard's log holds what was sent through it and nothing else; the check that no live host resolves here is what covers the rest.`);
+  say(`The guard passed ${guarded.outside.join(', ') || 'nothing outside this machine'} outside this machine.`);
+  say(guardVerdict(guarded).line);
   if (name === 'api') {
     say(`The local server's answers during the scan, by status: ${answers}`);
     say(`Tables: ${tables.verdict} (run.txt has each table)`);

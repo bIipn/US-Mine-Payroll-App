@@ -33,8 +33,8 @@ hawk:
   # ways out. hawk.outboundProxy is what its sign-in and its calls to StackHawk use. The three
   # network.connection.httpProxy lines are what its crawl, its attacks and what it fetches for its
   # browser use. The guard passes StackHawk and the three scan targets on 127.0.0.1, and refuses
-  # everything else. Seen on this machine: the sign-in reaches 127.0.0.1 through the guard, and the
-  # rest of the engine reaches it directly.
+  # everything else. Seen on this machine: the sign-in, the engine and its browser all reach
+  # 127.0.0.1 through the guard, and the guard refuses localhost, so name every target 127.0.0.1.
   outboundProxy:
     host: ${SCAN_OUTBOUND_PROXY}
   config:

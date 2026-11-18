@@ -45,3 +45,6 @@ yarn-error.*
 
 # Python caches from running the scripts
 __pycache__/
+
+# HawkScan output, if a scan is ever run by hand from here
+*.sarif

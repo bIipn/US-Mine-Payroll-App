@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 
-import { describeTableAnswers, guardSummary, tableAnswers } from '../after-scan.mjs';
+import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from '../after-scan.mjs';
 import { GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS, isLocalTarget, mayPass, startGuard, upstreamFrom } from '../egress-guard.mjs';
 import { TABLE_FILTERS, filtersOf, readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
 import { LINK_MOVES, NOT_IN_THE_COPY, isThisMachine, liveLinksIn, moveLinks, undoLinks } from '../sites/live.mjs';
@@ -270,6 +270,15 @@ test('the guard\'s log is read into what it passed outside, on this machine, and
     { verdict: 'refused', method: 'CONNECT', target: 'accounts.google.com:443' },
   ].map((entry) => JSON.stringify(entry));
   assert.deepEqual(guardSummary([...lines, 'not json']), { outside: ['api.stackhawk.com:443'], local: ['127.0.0.1:54321'], localTunnels: 2, refused: ['accounts.google.com:443'], failed: [] });
+});
+
+test('a scan that sent nothing to the scan targets through the guard is called out as having gone around it', () => {
+  const none = { outside: ['api.stackhawk.com:443'], local: [], localTunnels: 0, refused: [], failed: [] };
+  assert.equal(guardVerdict(none).ok, false);
+  assert.match(guardVerdict(none).line, /went around the guard/);
+  const some = { outside: ['api.stackhawk.com:443'], local: ['127.0.0.1:4443'], localTunnels: 812, refused: ['accounts.google.com:443'], failed: [] };
+  assert.equal(guardVerdict(some).ok, true);
+  assert.match(guardVerdict(some).line, /812 tunnels/);
 });
 
 // ---- The scan inputs ----------------------------------------------------------------------------

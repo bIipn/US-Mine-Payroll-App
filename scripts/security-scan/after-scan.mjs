@@ -41,6 +41,19 @@ export function describeTableAnswers(found) {
 }
 
 /** What the scan guard passed and refused, from its log lines (JSON, one a line). */
+/**
+ * Whether the scan went through the guard. The engine and its browser send even their requests for
+ * the scan targets on 127.0.0.1 through it, so a scan that reached its target leaves local tunnels
+ * in the guard's log. None at all means the engine went around the guard, and nothing in the log
+ * says where it went.
+ */
+export function guardVerdict(summary) {
+  if (summary.localTunnels === 0) {
+    return { ok: false, line: 'The guard passed no tunnels to the scan targets: the engine went around the guard, so its log says nothing about where the scan went. Do not trust this run until that is explained.' };
+  }
+  return { ok: true, line: `The scan went through the guard: ${summary.localTunnels} tunnels to the scan targets on this machine.` };
+}
+
 export function guardSummary(lines) {
   const entries = lines.map((line) => {
     try {
