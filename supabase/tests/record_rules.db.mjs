@@ -1,9 +1,10 @@
 // What push_records checks inside a change (migrations 20261117000100 to
-// 0400): a phone that never pulls cannot undo what someone else wrote, a copy
-// is not an edit, a member changes only what the app lets them change, a
-// resent batch writes nothing, one change the server will not take never
-// stops the rest, the size of what a call can make the server build or keep
-// is bounded, and a client pulls what changed by seq.
+// 0400, and 0900 for who completes a maintenance request): a phone that never
+// pulls cannot undo what someone else wrote, a copy is not an edit, a member
+// changes only what the app lets them change, a resent batch writes nothing,
+// one change the server will not take never stops the rest, the size of what
+// a call can make the server build or keep is bounded, and a client pulls
+// what changed by seq.
 //
 // The records are shaped like the app's own (src/domain/types.ts), with
 // made-up people, units and areas. The companies are "Test Pit A" and "Test
@@ -426,6 +427,178 @@ describe('what an employee may change', () => {
     const added = newId('eq');
     const c = change('equipment', added, unitOf(added));
     assert.deepEqual(await push(riley, [c]), { accepted: [], ignored: set('supervisor_only', c) });
+  });
+});
+
+// ---- Who completes a maintenance request ------------------------------------------------------------------
+//
+// A request is assigned by a supervisor, and worked by a supervisor or the person it is assigned to
+// (AGENTS.md; assignMrf, startMrf and completeMrf in src/store/useStore.ts). The server cannot tell yet
+// which roster person an account is, so it holds the part it can tell without that (migration
+// 20261117000900): a crew account's new request is open and unassigned, a request nobody is assigned to
+// is worked by a supervisor only (started, moved back, completed), and a crew account's history never
+// names who it is assigned to.
+
+describe('a maintenance request, and who completes it', () => {
+  /** What completing a request writes, as completeMrf does. */
+  const completed = (record, by = 'emp_riley', at = T + 2 * HOUR) => ({
+    ...record,
+    status: 'completed',
+    completedAt: at,
+    completedBy: by,
+    timeSpent: 150,
+    remarks: 'Bled the brakes',
+    history: [...record.history, { at, by, status: 'completed', note: 'Bled the brakes' }],
+  });
+  const opening = { at: T, by: 'emp_riley', status: 'open' };
+  const without = (record, field) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== field));
+
+  it('from a crew account, a new one is open and unassigned: one completed, assigned or carrying what completing writes is set aside, and nothing is written', async () => {
+    const before = await snapshot();
+    const changes = [
+      (id) => completed(mrfOf(id)),
+      (id) => completed(mrfOf(id), 'emp_maria'),
+      (id) => mrfOf(id, { status: 'completed' }),
+      (id) => mrfOf(id, { status: 'closed' }), // a status the app does not have
+      (id) => mrfOf(id, { status: 'in_progress', history: [opening, { at: T + HOUR, by: 'emp_riley', status: 'in_progress' }] }),
+      (id) => without(mrfOf(id), 'status'),
+      (id) => mrfOf(id, { assignedTo: 'emp_maria' }),
+      (id) => mrfOf(id, { assignedTo: 'emp_riley', history: [opening, { at: T, by: 'emp_sam', status: 'open', assignedTo: 'emp_riley' }] }),
+      (id) => mrfOf(id, { completedAt: T + HOUR }),
+      (id) => mrfOf(id, { completedBy: 'emp_maria' }),
+      (id) => mrfOf(id, { timeSpent: 150 }),
+      (id) => mrfOf(id, { remarks: 'Bled the brakes' }),
+      (id) => mrfOf(id, { history: [opening, { at: T + HOUR, by: 'emp_maria', status: 'completed', note: 'Bled the brakes' }] }),
+      (id) => mrfOf(id, { history: [opening, { at: T, by: 'emp_sam', status: 'open', assignedTo: 'emp_maria' }] }),
+      // A history that is not a list, as createMrf never writes one: a completed entry is not let in that way.
+      (id) => mrfOf(id, { history: { 0: opening, 1: { at: T + HOUR, by: 'emp_maria', status: 'completed', note: 'Bled the brakes' } } }),
+      (id) => mrfOf(id, { history: 'completed' }),
+      (id) => mrfOf(id, { history: 0 }),
+    ].map((of) => {
+      const id = newId('mrf');
+      return change('mrf', id, of(id));
+    });
+    for (const account of [riley, bo]) {
+      assert.deepEqual(await push(account, changes), { accepted: [], ignored: set('supervisor_only', ...changes) });
+    }
+    assert.deepEqual(await snapshot(), before);
+  });
+
+  it('from a crew account, a new one as the app makes it is taken, empty fields and all', async () => {
+    const id = newId('mrf');
+    const plain = await taken(riley, change('mrf', id, mrfOf(id)));
+    assert.deepEqual((await stored('mrf', id)).data, plain.record);
+    const other = newId('mrf');
+    const nulls = mrfOf(other, { assignedTo: null, completedAt: null, completedBy: null, timeSpent: null, remarks: null });
+    await taken(bo, change('mrf', other, nulls));
+    assert.deepEqual((await stored('mrf', other)).data, nulls);
+    // A history left out, or null, is no entry at all.
+    for (const record of [without(mrfOf(newId('mrf')), 'history'), mrfOf(newId('mrf'), { history: null })]) {
+      await taken(riley, change('mrf', record.id, record));
+      assert.deepEqual((await stored('mrf', record.id)).data, record);
+    }
+  });
+
+  it("from a crew account, one sent on their own checklist or exam is taken, and so is the link back on it", async () => {
+    const card = newId('insp');
+    const checked = await taken(riley, change('inspection', card, inspectionOf(card)));
+    const forCard = newId('mrf');
+    await taken(riley, change('mrf', forCard, mrfOf(forCard, { inspectionId: card, items: [{ label: 'Brakes', note: 'Soft pedal' }], meter: 4200 })));
+    await taken(riley, change('inspection', card, inspectionOf(card, { mrfId: forCard }), checked.rev));
+
+    const exam = newId('exam');
+    const signed = await taken(riley, change('exam', exam, examOf(exam)));
+    const forExam = newId('mrf');
+    const { equipmentId, ...fromExam } = mrfOf(forExam, { location: 'Wash bay', description: 'Guard off the tail pulley', examId: exam, findingKey: 'row:r2', taggedOut: false });
+    await taken(riley, change('mrf', forExam, fromExam));
+    const linked = examOf(exam);
+    linked.rows[1] = { ...linked.rows[1], mrfId: forExam };
+    await taken(riley, change('exam', exam, linked, signed.rev));
+    assert.equal((await stored('exam', exam)).data.rows[1].mrfId, forExam);
+    assert.equal(equipmentId, 'eq_l7');
+  });
+
+  it('with nobody assigned, a crew account does not work it: it does not start it, move it back, add to its history, complete it or write what completing it writes; a supervisor does', async () => {
+    const id = newId('mrf');
+    const opened = await taken(riley, change('mrf', id, mrfOf(id)));
+    const base = opened.record;
+    const before = await snapshot();
+    const tries = [
+      { ...base, status: 'in_progress', history: [...base.history, { at: T + HOUR, by: 'emp_riley', status: 'in_progress', note: 'Locked out' }] }, // starting it
+      { ...base, status: 'in_progress' },
+      { ...base, history: [...base.history, { at: T + HOUR, by: 'emp_riley', status: 'open', note: 'Still soft this morning' }] },
+      { ...base, history: [...base.history, { at: T + HOUR, by: 'emp_bo', status: 'in_progress' }] },
+      completed(base), // the person who sent it
+      completed(base, 'emp_bo'),
+      { ...base, status: 'completed' },
+      { ...base, status: 'closed' },
+      { ...base, completedAt: T + HOUR },
+      { ...base, completedBy: 'emp_riley' },
+      { ...base, timeSpent: 150 },
+      { ...base, remarks: 'Bled the brakes' },
+      { ...base, history: [...base.history, { at: T + HOUR, by: 'emp_riley', status: 'completed', note: 'Bled the brakes' }] },
+      { ...base, history: [...base.history, { at: T + HOUR, by: 'emp_sam', status: 'open', assignedTo: 'emp_riley' }] },
+    ];
+    for (const account of [riley, bo]) {
+      for (const record of tries) {
+        const c = change('mrf', id, record, opened.rev);
+        assert.deepEqual(await push(account, [c]), { accepted: [], ignored: set('supervisor_only', c) }, JSON.stringify(record));
+      }
+    }
+    assert.deepEqual(await snapshot(), before);
+
+    // A supervisor closes it.
+    const closed = await taken(boss, change('mrf', id, completed(base, 'emp_sam'), opened.rev));
+    const row = await stored('mrf', id);
+    assert.deepEqual([row.data, row.updated_by], [closed.record, boss]);
+
+    // Started by a supervisor and still nobody's: the same.
+    const other = newId('mrf');
+    const sent = await taken(riley, change('mrf', other, mrfOf(other)));
+    const started = await taken(deputy, change('mrf', other, { ...sent.record, status: 'in_progress', history: [...sent.record.history, { at: T + HOUR, by: 'emp_dee', status: 'in_progress' }] }, sent.rev));
+    for (const record of [
+      completed(started.record),
+      { ...started.record, status: 'open', history: [...started.record.history, { at: T + 2 * HOUR, by: 'emp_riley', status: 'open' }] }, // moved back
+      { ...started.record, status: 'open' },
+      { ...started.record, history: [...started.record.history, { at: T + 2 * HOUR, by: 'emp_riley', status: 'in_progress', note: 'Parts ordered' }] },
+    ]) {
+      const fromCrew = change('mrf', other, record, started.rev);
+      assert.deepEqual(await push(riley, [fromCrew]), { accepted: [], ignored: set('supervisor_only', fromCrew) }, JSON.stringify(record));
+    }
+    assert.deepEqual((await stored('mrf', other)).data, started.record);
+    await taken(deputy, change('mrf', other, completed(started.record, 'emp_dee'), started.rev));
+    assert.equal((await stored('mrf', other)).data.status, 'completed');
+  });
+
+  it('assigned to someone, it is worked from a crew account as before, completing it included, and its history names nobody new as assigned', async () => {
+    const assign = async (to) => {
+      const id = newId('mrf');
+      const sent = await taken(riley, change('mrf', id, mrfOf(id)));
+      const record = { ...sent.record, assignedTo: to, history: [...sent.record.history, { at: T + HOUR / 2, by: 'emp_sam', status: 'open', assignedTo: to }] };
+      return taken(boss, change('mrf', id, record, sent.rev));
+    };
+
+    // The person it is assigned to starts it with a note, and completes it.
+    const forMaria = await assign('emp_maria');
+    const started = await taken(maria, change('mrf', forMaria.id, { ...forMaria.record, status: 'in_progress', history: [...forMaria.record.history, { at: T + HOUR, by: 'emp_maria', status: 'in_progress', note: 'Locked out' }] }, forMaria.rev));
+    for (const history of [
+      [...started.record.history, { at: T + HOUR, by: 'emp_maria', status: 'in_progress', assignedTo: 'emp_bo' }],
+      [...started.record.history, { at: T + HOUR, by: 'emp_sam', status: 'in_progress', assignedTo: 'emp_maria' }],
+    ]) {
+      const c = change('mrf', forMaria.id, { ...started.record, history }, started.rev);
+      assert.deepEqual(await push(maria, [c]), { accepted: [], ignored: set('supervisor_only', c) });
+    }
+    const done = await taken(maria, change('mrf', forMaria.id, completed(started.record, 'emp_maria'), started.rev));
+    assert.deepEqual((await stored('mrf', forMaria.id)).data, done.record);
+    const reopened = change('mrf', forMaria.id, { ...done.record, status: 'open' }, done.rev);
+    assert.deepEqual(await push(maria, [reopened]), { accepted: [], ignored: set('supervisor_only', reopened) });
+
+    // Still taken for now from a crew account that is not the person it is assigned to, whatever it
+    // names as completed by: the server cannot tell yet which roster person an account is. The
+    // two-way sync work, which links each account to the app's employee id, closes this.
+    const forBo = await assign('emp_bo');
+    const byAnother = await taken(riley, change('mrf', forBo.id, completed(forBo.record, 'emp_maria'), forBo.rev));
+    assert.deepEqual((await stored('mrf', forBo.id)).data, byAnother.record);
   });
 });
 

@@ -180,7 +180,7 @@ export function RequestPage({ id }: { id: string }) {
           . Tell them apart by the date and the unit.
         </Notice>
       ) : null}
-      {doubt ? <Notice tone="warn" title="Check who completed it">{doubt.why}. The server takes any member’s change to a request.</Notice> : null}
+      {doubt ? <Notice tone="warn" title="Check who completed it">{doubt.why}. The server takes the work on a request assigned to someone from any member’s account; on one nobody is assigned to, only a supervisor’s.</Notice> : null}
       <div className="split">
         <div className="desk">
           <MrfPaper mrf={mrf} unit={unit} nameOf={people.name} />

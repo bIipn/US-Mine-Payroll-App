@@ -482,6 +482,21 @@ describe('maintenance requests', () => {
     });
   });
 
+  it('starts open and unassigned with nothing of its completion, as the server takes it from a crew account', () => {
+    // The server sets aside a crew account's new request that is not (migration 20261117000900), so
+    // nothing passed in can start one any other way, from a supervisor either.
+    const extra = { status: 'completed', assignedTo: 'e06', completedAt: at(7, 0), completedBy: 'e06', timeSpent: 150, remarks: 'Done' };
+    for (const as of ['employee', 'supervisor'] as const) {
+      s().signInDemo(as);
+      const result = s().createMrf({ location: 'Bagging plant', priority: 'high', description: `Belt is fraying, seen by the ${as}`, taggedOut: false, ...extra } as Parameters<ReturnType<typeof s>['createMrf']>[0]);
+      if (!result.ok) throw new Error(result.error);
+      const made = saved(result.mrf.id);
+      expect(made.status).toBe('open');
+      for (const field of ['assignedTo', 'completedAt', 'completedBy', 'timeSpent', 'remarks'] as const) expect(made[field]).toBeUndefined();
+      expect(made.history.map((h) => [h.status, h.assignedTo])).toEqual([['open', undefined]]);
+    }
+  });
+
   it('is sent once, however many times the button lands', () => {
     const first = request();
     const before = s().mrfs.length;

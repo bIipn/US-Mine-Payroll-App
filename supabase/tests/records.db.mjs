@@ -283,15 +283,22 @@ describe('who may send records', () => {
     assert.deepEqual(await push(employeeA, a.id, [gone]), { accepted: [], ignored: ignoredAs('supervisor_only', gone) });
   });
 
-  it('any member works a maintenance request or a unit someone else sent, but does not delete one', async () => {
-    const request = await sent(supervisorA, 'mrf');
+  it('any member works a maintenance request assigned to someone, or a unit someone else sent, but does not delete one', async () => {
+    const request = await sent(supervisorA, 'mrf', { assignedTo: 'emp-1' });
     const unit = await sent(supervisorA, 'equipment');
-    const worked = change('mrf', request.id, { ...request.record, status: 'complete', remarks: 'Guard bolted back on' }, request.change.rev);
+    const closing = { status: 'completed', completedAt: 1763340000000, completedBy: 'emp-1', remarks: 'Guard bolted back on' };
+    const worked = change('mrf', request.id, { ...request.record, ...closing }, request.change.rev);
     const checked = change('equipment', unit.id, { ...unit.record, status: 'out_of_service', meter: 1208 }, unit.change.rev);
     assert.deepEqual(await push(employeeA, a.id, [worked, checked]), { accepted: accepted(worked, checked), ignored: [] });
 
     const row = await stored(a.id, 'mrf', request.id);
-    assert.deepEqual([row.data.status, row.created_by, row.updated_by, row.version], ['complete', supervisorA, employeeA, 2]);
+    assert.deepEqual([row.data.status, row.created_by, row.updated_by, row.version], ['completed', supervisorA, employeeA, 2]);
+
+    // With nobody assigned, completing it is a supervisor's (migration 20261117000900).
+    const nobodys = await sent(supervisorA, 'mrf');
+    const closed = change('mrf', nobodys.id, { ...nobodys.record, ...closing }, nobodys.change.rev);
+    assert.deepEqual(await push(employeeA, a.id, [closed]), { accepted: [], ignored: ignoredAs('supervisor_only', closed) });
+    assert.deepEqual((await stored(a.id, 'mrf', nobodys.id)).data, nobodys.record);
     assert.equal((await stored(a.id, 'equipment', unit.id)).data.status, 'out_of_service');
 
     const before = await snapshot(a.id);
@@ -420,7 +427,8 @@ describe('two phones changing the same record', () => {
   });
 
   it("a member's change made from a version someone else has replaced is set aside", async () => {
-    const request = await sent(employeeA, 'mrf');
+    // Assigned to someone, so that the crew may work it at all (migration 20261117000900).
+    const request = await sent(supervisorA, 'mrf', { assignedTo: 'emp-2' });
     const theirs = change('mrf', request.id, { ...request.record, status: 'in_progress' }, request.change.rev);
     const mine = change('mrf', request.id, { ...request.record, status: 'open', remarks: 'Waiting on parts' }, request.change.rev);
     assert.deepEqual(await push(coworkerA, a.id, [theirs]), { accepted: accepted(theirs), ignored: [] });
