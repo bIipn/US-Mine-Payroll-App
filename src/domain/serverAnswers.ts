@@ -251,6 +251,8 @@ export function serverWords(e: ServerProblem | null | undefined): string {
       return 'You are signed out of the company server. Sign in again.';
     case '22023':
       return 'The server could not take what was typed. Type your name in ordinary letters, the way it is on the roster.';
+    // "Not found, or not yours": PT404 (HTTP 404) from migration 20261117000600 on, P0002 (HTTP 500) before it.
+    case 'PT404':
     case 'P0002':
       return 'That company was not found, or you are no longer on its roster. See your supervisor.';
     case 'PGRST202':
@@ -273,6 +275,8 @@ export function pushTrouble(e: ServerProblem | null | undefined): SendError {
     case 'PGRST303':
       return sendError('signed_out', 'You are signed out of the company server.');
     case '42501':
+    // "No such company": PT404 (HTTP 404) from migration 20261117000600 on, P0002 (HTTP 500) on a server before it.
+    case 'PT404':
     case 'P0002':
       return sendError('not_member', 'This account is not on the company’s roster any more.');
     case 'PGRST202':

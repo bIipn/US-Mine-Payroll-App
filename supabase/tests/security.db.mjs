@@ -1,6 +1,7 @@
 // The database's own guarantees, read from the catalog: every function
 // searches pg_catalog first and the temporary schema last, EXECUTE goes only
-// to the roles that need it, row level security is on for every table, each
+// to the roles that need it, every refusal is a code PostgREST answers with a
+// 4xx, row level security is on for every table, each
 // role holds exactly the privileges it should, no column keeps planner
 // statistics, and the migrations leave what Supabase provides alone.
 
@@ -173,6 +174,99 @@ describe('functions', () => {
       }
       assert.deepEqual(callers, CALLABLE_BY[fn.name] ?? [], fn.name);
     }
+  });
+});
+
+// ---- Refusals -----------------------------------------------------------------------------------
+//
+// PostgREST answers the SQLSTATE a function raises with an HTTP status: a PTnnn code with nnn, 42501
+// with 401 or 403, 22023 and 23514 with 400, and P0002, 55000 and the rest of the classes P0 and 55
+// with 500, which tells the caller, and a scanner, that the server failed when it only said no. So
+// every refusal a function makes on purpose is a code it answers with a 4xx.
+const ANSWERED_WITH_4XX = { 42501: '401 or 403', 22023: '400', 23514: '400', PT404: '404', PT409: '409', PT429: '429' };
+// Not a refusal: two push_records calls overlapped at REPEATABLE READ or SERIALIZABLE, and the second
+// is told to try again (supabase/README.md, "When a function refuses").
+const TRY_AGAIN = { push_records: '40001' };
+
+// "Not found, or not the caller's" is PT404 and "not in a state to do that" PT409 (P0002 and 55000
+// before migration 20261117000600), each with the words it had, in the order the function raises them.
+const NOT_FOUND = 'PT404';
+const WRONG_STATE = 'PT409';
+const NO_SUCH_REQUEST = [NOT_FOUND, 'No such join request.'];
+const ALREADY_DECIDED = [WRONG_STATE, 'That join request has already been decided.'];
+const NOT_FOUND_OR_WRONG_STATE = {
+  approve_join_request: [
+    NO_SUCH_REQUEST,
+    NO_SUCH_REQUEST,
+    ALREADY_DECIDED,
+    [WRONG_STATE, 'That person is already on the roster.', 'Deny the request to close it.'],
+    [NOT_FOUND, 'No such roster row.'],
+    [WRONG_STATE, 'That roster row is not active.'],
+    [WRONG_STATE, 'That roster row is already claimed.', 'Approve with replace_claim to hand it to this person in one step, or release it first.'],
+  ],
+  company_billing: [[NOT_FOUND, 'No such company.']],
+  deny_join_request: [NO_SUCH_REQUEST, NO_SUCH_REQUEST, ALREADY_DECIDED],
+  lift_join_bar: [NO_SUCH_REQUEST],
+  push_records: [[NOT_FOUND, 'No such company.']],
+  release_roster_claim: [[NOT_FOUND, 'No such roster row.']],
+  roster_before_write: [[WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.']],
+  rotate_join_code: [[NOT_FOUND, 'No such company.']],
+};
+
+/** Every function of the migrations in schema public, with its source. */
+async function publicSources() {
+  return db.adminRows(`
+    select p.proname as name, p.prosrc as src
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+    order by p.proname`);
+}
+
+const LITERAL = /^'(?:[^']|'')*'$/;
+const unquote = (literal) => (literal && LITERAL.test(literal) ? literal.slice(1, -1).replaceAll("''", "'") : literal);
+
+/** Each `raise exception using ...;` in a function's source: its errcode, message and hint, as written. */
+function raisesOf(src) {
+  return [...src.matchAll(/raise\s+exception\s+using\s+((?:'(?:[^']|'')*'|[^';])*);/gi)].map(([, clauses]) => {
+    const clause = (name) => new RegExp(`\\b${name}\\s*=\\s*((?:'(?:[^']|'')*'|[^',])+)`, 'i').exec(clauses)?.[1].trim() ?? null;
+    return { code: unquote(clause('errcode')), message: clause('message'), hint: clause('hint'), text: clauses.replace(/\s+/g, ' ').trim() };
+  });
+}
+
+describe('refusals', () => {
+  it('are each a code PostgREST answers with a 4xx, never one it answers with a 5xx', async () => {
+    let raises = 0;
+    for (const fn of await publicSources()) {
+      for (const raise of raisesOf(fn.src)) {
+        raises += 1;
+        if (raise.code === TRY_AGAIN[fn.name]) continue;
+        assert.ok(Object.hasOwn(ANSWERED_WITH_4XX, raise.code), `${fn.name} raises ${raise.code}, which PostgREST does not answer with a 4xx: ${raise.text}`);
+      }
+    }
+    assert.ok(raises >= 70, `only ${raises} raises were read: the reader has missed some`);
+  });
+
+  it('keep their words: not found is PT404 and not in a state to do that is PT409', async () => {
+    const found = {};
+    for (const fn of await publicSources()) {
+      const these = raisesOf(fn.src).filter((raise) => raise.code === NOT_FOUND || raise.code === WRONG_STATE);
+      if (these.length) found[fn.name] = these.map((raise) => [raise.code, unquote(raise.message), ...(raise.hint ? [unquote(raise.hint)] : [])]);
+    }
+    assert.deepEqual(found, NOT_FOUND_OR_WRONG_STATE);
+  });
+
+  it('with a PT code, have a message that is a constant on one line: PostgREST writes it into the HTTP status line', async () => {
+    let checked = 0;
+    for (const fn of await publicSources()) {
+      for (const raise of raisesOf(fn.src).filter((one) => /^PT/.test(one.code ?? ''))) {
+        checked += 1;
+        // Printable ASCII only: a line break in it would end the status line and start a header of the caller's choosing.
+        assert.match(raise.message ?? '', /^'(?:[\x20-\x26\x28-\x7e]|'')+'$/, `${fn.name}: ${raise.text}`);
+      }
+    }
+    assert.ok(checked >= 17, `only ${checked} PT codes were read`);
   });
 });
 

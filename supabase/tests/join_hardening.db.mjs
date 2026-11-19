@@ -17,9 +17,11 @@ import {
   addToRoster,
   join,
   newMember,
+  NOT_FOUND,
   rosterRow,
   startCompany,
   startDatabase,
+  WRONG_STATE,
 } from './harness.mjs';
 
 const ZWSP = String.fromCharCode(0x200b);
@@ -59,7 +61,7 @@ describe('an unclaimed supervisor row', () => {
 
     // It cannot touch the real supervisors' notifications or release their claim.
     assert.equal(await db.as(second).affected('update public.notifications set read_at = now() where company_id = $1', [company.id]), 0);
-    await assert.rejects(db.as(second).call('release_roster_claim', { roster_id: company.ownRow }), (error) => error.code === 'P0002');
+    await assert.rejects(db.as(second).call('release_roster_claim', { roster_id: company.ownRow }), (error) => error.code === NOT_FOUND);
     assert.equal(await db.as(company.owner).call('is_supervisor', { company_id: company.id }), true);
     assert.ok((await unreadOf(company)) >= 1, 'the supervisors still have the join_request notice to see');
   });
@@ -225,6 +227,6 @@ describe('joining settles the account own pending request', () => {
     assert.equal((await db.adminRows('select status from public.join_requests where id = $1', [requestId]))[0].status, 'withdrawn');
     // Taking them off later and approving the old request cannot bring them back, because it is settled.
     await db.as(company.owner).affected('update public.roster set active = false where id = $1', [row.id]);
-    await assert.rejects(db.as(company.owner).call('approve_join_request', { request_id: requestId }), (error) => error.code === '55000');
+    await assert.rejects(db.as(company.owner).call('approve_join_request', { request_id: requestId }), (error) => error.code === WRONG_STATE);
   });
 });

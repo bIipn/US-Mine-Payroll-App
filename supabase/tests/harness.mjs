@@ -215,8 +215,10 @@ export async function refused(promise, code, message) {
 
 export const NOT_SIGNED_IN = '42501';
 export const NO_PRIVILEGE = '42501';
-export const NOT_FOUND = 'P0002';
-export const WRONG_STATE = '55000';
+// PostgREST answers a PTnnn code with HTTP nnn. P0002 and 55000, the codes these refusals had before
+// migration 20261117000600, it answers with 500.
+export const NOT_FOUND = 'PT404';
+export const WRONG_STATE = 'PT409';
 export const BAD_INPUT = '22023';
 export const LAST_SUPERVISOR = '23514';
 

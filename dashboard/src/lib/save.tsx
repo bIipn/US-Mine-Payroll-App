@@ -7,7 +7,7 @@ import { nextView } from './billing';
 import { useBilling } from './billingState';
 import { billingRefusal, CONFLICT_WORDS, followNewer, loadedRow, saveRecord, type Saved, type Want, type WrittenKind } from './changes';
 import { useCompany } from './company';
-import { messageOf, Problem } from './errors';
+import { mayHaveLostRole, messageOf, Problem } from './errors';
 import type { RecordRow } from './server';
 import { Notice } from '../ui/kit';
 
@@ -77,7 +77,7 @@ export function useSaver() {
       if (saved.reason === 'supervisor_only') void ctx.recheckRole();
       return { ok: false, changed: false, words: saved.words };
     } catch (e) {
-      if (e instanceof Problem && (e.code === '42501' || e.code === 'P0002')) void ctx.recheckRole();
+      if (e instanceof Problem && mayHaveLostRole(e.code)) void ctx.recheckRole();
       return { ok: false, changed: false, words: messageOf(e) };
     }
   }, []);

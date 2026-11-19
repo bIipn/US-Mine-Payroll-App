@@ -263,6 +263,14 @@ describe('why records did not go', () => {
     expect(pushTrouble({ code: 'PGRST001' }).trouble).toBe('unreachable');
     expect(pushTrouble({ code: 'XX000', status: 400 }).trouble).toBe('server');
   });
+
+  it('reads “no such company” as an account off the roster, as the server answers it now (PT404, HTTP 404) and as it did before (P0002, HTTP 500)', () => {
+    const offTheRoster = { trouble: 'not_member', message: 'This account is not on the company’s roster any more.' };
+    expect(pushTrouble({ code: 'PT404', message: 'No such company.', status: 404 })).toMatchObject(offTheRoster);
+    expect(pushTrouble({ code: 'P0002', message: 'No such company.', status: 500 })).toMatchObject(offTheRoster);
+    // A 404 that is PostgREST's own, not the function's refusal, is not read as one.
+    expect(pushTrouble({ code: 'PGRST202', status: 404 }).trouble).toBe('server');
+  });
 });
 
 describe('when something goes wrong', () => {
@@ -278,6 +286,7 @@ describe('when something goes wrong', () => {
     expect(serverWords({ code: 'PGRST301' })).toMatch(/Sign in again/);
     expect(serverWords({ code: '22023' })).toMatch(/ordinary letters/);
     expect(serverWords({ code: 'P0002' })).toMatch(/not found/);
+    expect(serverWords({ code: 'PT404', status: 404 })).toBe(serverWords({ code: 'P0002', status: 500 }));
     expect(serverWords({ code: 'PGRST202' })).toMatch(/not ready/);
     expect(serverWords({ code: 'XX000', message: 'boom' })).toMatch(/Try again in a minute/);
   });

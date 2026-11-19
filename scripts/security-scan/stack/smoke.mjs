@@ -4,6 +4,8 @@
 // expected. It changes the data (it sends records and a Stripe event): run
 // `reset` afterwards.
 
+import { randomUUID } from 'node:crypto';
+import { PLATFORM_HEADERS } from './gateway.mjs';
 import { call, readJson, signIn, writePrivate } from './lib.mjs';
 import { sendStripeEvent } from './seed.mjs';
 
@@ -19,15 +21,19 @@ export async function smoke(secrets, files) {
     lines.push(text);
     process.stdout.write(`${text}\n`);
   };
-  /** One check: `expect` is a status, and `also` a test of the answer. */
+  /** The headers the live gateway sends on every answer that this one leaves out or sends otherwise. */
+  const unheaded = (answer) => Object.entries(PLATFORM_HEADERS).filter(([name, value]) => answer.headers[name] !== value).map(([name]) => name);
+  /** One check: `expect` is a status, and `also` a test of the answer. Every answer must carry the live gateway's headers too. */
   const check = (what, answer, expect, also = () => true) => {
-    const ok = answer.status === expect && Boolean(also(answer));
+    const missing = unheaded(answer);
+    const ok = answer.status === expect && Boolean(also(answer)) && missing.length === 0;
     if (!ok) failed += 1;
-    show(`${ok ? 'ok  ' : 'FAIL'} ${what}\n       -> ${answer.status} ${answer.text.replace(/\s+/g, ' ').slice(0, 260)}`);
+    show(`${ok ? 'ok  ' : 'FAIL'} ${what}\n       -> ${answer.status} ${answer.text.replace(/\s+/g, ' ').slice(0, 260)}${missing.length ? `\n       -> without ${missing.join(', ')}` : ''}`);
   };
   const rpc = (name, token, body, extra = {}) => call('POST', `/rest/v1/rpc/${name}`, { key, token, body, ...extra });
 
-  show(`Smoke tests of the local scan stack, ${new Date().toISOString()}. Every name is made up.\n`);
+  show(`Smoke tests of the local scan stack, ${new Date().toISOString()}. Every name is made up.`);
+  show(`Every answer must also carry ${Object.entries(PLATFORM_HEADERS).map(([name, value]) => `${name}: ${value}`).join(' and ')}, as the live gateway's do.\n`);
 
   show('-- The key');
   check('anon calls company_by_code with company A\'s join code', await rpc('company_by_code', undefined, { code: A.joinCode }), 200, (a) => a.json[0]?.name === 'Test Pit A' && a.json[0]?.state === 'CA');
@@ -55,19 +61,24 @@ export async function smoke(secrets, files) {
   }
 
   show('\n-- One company sees nothing of another');
-  show('   (A function that refuses with SQLSTATE P0002, "not found", is answered by PostgREST with HTTP 500.)');
+  show('   (A function that refuses "not found, or not yours" raises PT404, which PostgREST answers with HTTP 404: the same for another company\'s real id as for a made-up one.)');
   check('A2 reads the roster: only company A\'s three rows', await call('GET', '/rest/v1/roster?select=company_id', { key, token: tokens.A2 }), 200, (a) => a.json.length === 3 && a.json.every((row) => row.company_id === A.id));
   check('A2 asks for company B\'s roster: nothing', await call('GET', `/rest/v1/roster?company_id=eq.${B.id}`, { key, token: tokens.A2 }), 200, (a) => a.json.length === 0);
   check('A2 asks for company B\'s records: nothing', await call('GET', `/rest/v1/records?company_id=eq.${B.id}`, { key, token: tokens.A2 }), 200, (a) => a.json.length === 0);
   check('A2 asks for company B\'s record history: nothing', await call('GET', `/rest/v1/record_history?company_id=eq.${B.id}`, { key, token: tokens.A2 }), 200, (a) => a.json.length === 0);
   check('A2 asks for company B itself: nothing', await call('GET', `/rest/v1/companies?id=eq.${B.id}`, { key, token: tokens.A2 }), 200, (a) => a.json.length === 0);
-  check('A2 sends a record to company B: no such company', await rpc('push_records', tokens.A2, { company_id: B.id, changes: [] }), 500, (a) => a.json.code === 'P0002');
-  check('B1 rotates company A\'s join code: no such company', await rpc('rotate_join_code', tokens.B1, { company_id: A.id }), 500, (a) => a.json.code === 'P0002');
-  check('B1 approves the request waiting in company A: not found', await rpc('approve_join_request', tokens.B1, { request_id: fixtures.pendingJoinRequest.id }), 500, (a) => a.json.code === 'P0002');
-  check('B1 asks for company A\'s billing: no such company', await rpc('company_billing', tokens.B1, { p_company_id: A.id }), 500, (a) => a.json.code === 'P0002');
+  check('A2 sends a record to company B: no such company', await rpc('push_records', tokens.A2, { company_id: B.id, changes: [] }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
+  check('B1 rotates company A\'s join code: no such company', await rpc('rotate_join_code', tokens.B1, { company_id: A.id }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
+  check('B1 approves the request waiting in company A: not found', await rpc('approve_join_request', tokens.B1, { request_id: fixtures.pendingJoinRequest.id }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such join request.');
+  check('B1 asks for company A\'s billing: no such company', await rpc('company_billing', tokens.B1, { p_company_id: A.id }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
+  check('B1 asks for the billing of a company that does not exist: the same answer', await rpc('company_billing', tokens.B1, { p_company_id: randomUUID() }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
+  check('B1 asks for company A\'s billing by GET: the same answer', await call('GET', `/rest/v1/rpc/company_billing?p_company_id=${A.id}`, { key, token: tokens.B1 }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
   check('company A\'s join code still works afterwards', await rpc('company_by_code', undefined, { code: A.joinCode }), 200, (a) => a.json.length === 1);
   check('A1 reads company A\'s billing: a trial', await rpc('company_billing', tokens.A1, { p_company_id: A.id }), 200, (a) => a.json.access === 'trial' && a.json.status === 'trialing');
-  check('A2, an employee, is refused company A\'s billing', await rpc('company_billing', tokens.A2, { p_company_id: A.id }), 500, (a) => a.json.code === 'P0002');
+  check('A2, an employee, is refused company A\'s billing', await rpc('company_billing', tokens.A2, { p_company_id: A.id }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
+  show('   (A function that refuses "not in a state to do that" raises PT409, which PostgREST answers with HTTP 409, the hint kept.)');
+  check('A1 approves the waiting request onto A2\'s row, which A2 holds: already claimed, nothing changed', await rpc('approve_join_request', tokens.A1, { request_id: fixtures.pendingJoinRequest.id, roster_id: A.roster.A2.rosterId }), 409,
+    (a) => a.json.code === 'PT409' && a.json.message === 'That roster row is already claimed.' && /replace_claim/.test(a.json.hint ?? ''));
   check('A1 reads the request waiting for a supervisor', await call('GET', '/rest/v1/join_requests?select=status,reason', { key, token: tokens.A1 }), 200, (a) => a.json.length === 1 && a.json[0].status === 'pending');
   check('N1, who joined nothing, reads no roster', await call('GET', '/rest/v1/roster', { key, token: tokens.N1 }), 200, (a) => a.json.length === 0);
 

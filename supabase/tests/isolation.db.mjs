@@ -9,6 +9,7 @@ import {
   newMember,
   nobody,
   NO_PRIVILEGE,
+  NOT_FOUND,
   startCompany,
   startDatabase,
 } from './harness.mjs';
@@ -137,7 +138,7 @@ describe('a member of company A', () => {
       for (const secret of secrets) assert.ok(!text.includes(secret), `${text} mentions ${secret}`);
     }
     // And they are refusals, not something that half worked.
-    for (const error of errors) assert.ok(['42501', 'P0002'].includes(error.code), JSON.stringify(error));
+    for (const error of errors) assert.ok([NO_PRIVILEGE, NOT_FOUND].includes(error.code), JSON.stringify(error));
     assert.ok(errors.some((e) => e.code === NO_PRIVILEGE && /row-level security/.test(e.message)));
   });
 });
@@ -167,6 +168,6 @@ describe('an account in both companies', () => {
     assert.deepEqual((await as.rows('select id from public.join_requests')).map((r) => r.id), [requestA.id]);
     assert.equal(await as.affected("update public.roster set title = 'Taken' where company_id = $1", [b.id]), 0);
     const error = await errorOf(as.call('deny_join_request', { request_id: requestB.id }));
-    assert.equal(error.code, 'P0002');
+    assert.equal(error.code, NOT_FOUND);
   });
 });

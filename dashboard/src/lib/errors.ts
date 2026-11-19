@@ -19,6 +19,24 @@ interface ErrorLike {
 
 const NO_SERVER = 'Could not reach the MineMuster server. Check this computer’s connection, then try again.';
 
+/**
+ * A function's "not found, or not yours": PT404 (HTTP 404) from migration
+ * 20261117000600 on, and P0002 (which PostgREST answers with HTTP 500) on a
+ * server where that migration has not run yet. Read by the code, never by the
+ * status: PostgREST answers 404 for a function that does not exist, too.
+ */
+export const isNotFound = (code: unknown) => code === 'PT404' || code === 'P0002';
+
+/** A function's "not in a state to do that": PT409 (HTTP 409) from migration 20261117000600 on, 55000 (HTTP 500) before it. */
+export const isWrongState = (code: unknown) => code === 'PT409' || code === '55000';
+
+/**
+ * Whether a refusal can mean the account is no longer a supervisor of the
+ * company: turned down for want of the role, or told the company is not there
+ * (a supervisor function says that to everyone who is not one of its supervisors).
+ */
+export const mayHaveLostRole = (code: unknown) => code === '42501' || isNotFound(code);
+
 /** A Supabase auth error as a sentence. */
 export function authProblem(error: unknown): Problem {
   const e = (error ?? {}) as ErrorLike;
@@ -54,16 +72,14 @@ export function dataProblem(error: unknown, doing = 'That'): Problem {
   const code = typeof e.code === 'string' ? e.code : '';
   const message = typeof e.message === 'string' ? e.message : '';
   if (isOffline(e)) return new Problem(NO_SERVER, 'offline');
+  if (isNotFound(code)) return new Problem(`${doing} did not work: it was not found. Someone may have changed it. Reload the page.`, code);
+  if (isWrongState(code)) return new Problem(`${doing} did not work: it has already been done or decided. Reload the page to see where it stands.`, code);
   switch (code) {
     case '42501':
       return new Problem(`${doing} is not allowed for this account. Only a supervisor of the company can do it. Sign out and back in if your role changed.`, code);
     case 'PGRST301':
     case 'PGRST303':
       return new Problem('Your sign-in has run out. Sign in again.', code);
-    case 'P0002':
-      return new Problem(`${doing} did not work: it was not found. Someone may have changed it. Reload the page.`, code);
-    case '55000':
-      return new Problem(`${doing} did not work: it has already been done or decided. Reload the page to see where it stands.`, code);
     case '23514':
       return /supervisor/i.test(message) || !message
         ? new Problem('A company has to keep at least one supervisor who can sign in. Make someone else a supervisor first.', code)

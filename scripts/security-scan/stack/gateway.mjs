@@ -12,18 +12,23 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import { pathToFileURL } from 'node:url';
 import { GATEWAY_URL, HOST, PORTS, loadSecrets, paths, signJwt } from './lib.mjs';
 
-const secrets = loadSecrets();
-const files = paths();
-
 /**
- * Response headers of the hosted gateway that could not be checked without a
- * request to the live project, which this job never makes. HSTS is believed to
- * be sent on every answer of a project's address. One `curl -sI` of the live
- * project by its owner settles it; change this list to match.
+ * Response headers put on every answer here, in place of any a service sends.
+ * These two are what the live project's API sends on its answers, as its
+ * headers were read once for the security review of November 2026; nothing in
+ * this stack sent that request. What else the hosted gateway adds is not known
+ * (README.md, "What is not known").
  */
-const PLATFORM_HEADERS = { 'strict-transport-security': 'max-age=31536000; includeSubDomains; preload' };
+export const PLATFORM_HEADERS = {
+  'strict-transport-security': 'max-age=31536000; includeSubDomains; preload',
+  'x-content-type-options': 'nosniff',
+};
+
+/** The answer to a request Node's parser cannot read, written straight to the socket: with the same headers. */
+export const BAD_REQUEST = `HTTP/1.1 400 Bad Request\r\n${Object.entries(PLATFORM_HEADERS).map(([name, value]) => `${name}: ${value}\r\n`).join('')}content-length: 0\r\nconnection: close\r\n\r\n`;
 
 /** The gateway's CORS policy, as the self-hosted configuration sets it. */
 const CORS = { methods: 'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD,CONNECT,TRACE', headers: '*', expose: '*', maxAge: '3600' };
@@ -47,15 +52,6 @@ const ROUTES = [
 ];
 
 const UPSTREAM = { auth: PORTS.auth, rest: PORTS.rest, functions: PORTS.functions };
-
-// A key's role reaches the services as a short-lived token signed with the
-// project's signing key. It never leaves this machine.
-const kept = {};
-function roleToken(role) {
-  const now = Date.now();
-  if (!kept[role] || kept[role].until < now) kept[role] = { token: signJwt(secrets, { role }, 600), until: now + 300000 };
-  return kept[role].token;
-}
 
 function send(res, status, headers, body = '') {
   res.writeHead(status, { ...PLATFORM_HEADERS, ...headers, 'content-length': Buffer.byteLength(body) });
@@ -96,138 +92,165 @@ function firstQueryValue(query, name) {
 
 const withoutQueryKey = (query, name) => query.split('&').filter((part) => part && part.split('=')[0] !== name).join('&');
 
-function log(req, status, route) {
-  const shown = req.url.replace(/([?&]apikey=)[^&]*/g, '$1...');
-  process.stdout.write(`${new Date().toISOString()} ${req.method} ${shown} ${status} ${route}\n`);
-}
+const writeLine = (line) => process.stdout.write(`${new Date().toISOString()} ${line}\n`);
 
-function onRequest(req, res) {
-  const origin = req.headers.origin;
-  const [rawPath, ...rest] = req.url.split('?');
-  let query = rest.join('?');
-
-  // Envoy turns these away before it routes anything.
-  if (/%2f|%5c/i.test(rawPath) || Object.keys(req.headers).some((name) => name.includes('_'))) {
-    log(req, 400, 'rejected');
-    return send(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
-  }
-  let pathName;
-  try {
-    pathName = normalise(rawPath);
-  } catch {
-    log(req, 400, 'rejected');
-    return send(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
+/**
+ * The gateway: an HTTPS server with `tls` ({ key, cert }), or a plain HTTP one
+ * without (the tests). `secrets` holds the two keys and the signing key,
+ * `upstream` the port of each service, and `say` takes a line for the log.
+ * It is not listening yet.
+ */
+export function createGateway({ secrets, tls, upstream = UPSTREAM, say = writeLine }) {
+  // A key's role reaches the services as a short-lived token signed with the
+  // project's signing key. It never leaves this machine.
+  const kept = {};
+  function roleToken(role) {
+    const now = Date.now();
+    if (!kept[role] || kept[role].until < now) kept[role] = { token: signJwt(secrets, { role }, 600), until: now + 300000 };
+    return kept[role].token;
   }
 
-  const route = ROUTES.find((entry) => (entry.exact ? pathName === entry.exact : pathName.startsWith(entry.prefix)));
-  if (!route) {
-    log(req, 404, 'none');
-    return json(res, 404, { error: 'requested path is invalid' });
+  function log(req, status, route) {
+    const shown = req.url.replace(/([?&]apikey=)[^&]*/g, '$1...');
+    say(`${req.method} ${shown} ${status} ${route}`);
   }
-  const gatewayCors = route.name !== 'functions';
-  const corsHeaders = gatewayCors && origin ? { 'access-control-allow-origin': origin, 'access-control-expose-headers': CORS.expose } : {};
 
-  // A preflight is answered by the gateway itself, before any key is asked for.
-  if (gatewayCors && req.method === 'OPTIONS' && origin && req.headers['access-control-request-method']) {
-    log(req, 200, `${route.name} preflight`);
-    return send(res, 200, {
-      'access-control-allow-origin': origin,
-      'access-control-allow-methods': CORS.methods,
-      'access-control-allow-headers': CORS.headers,
-      'access-control-max-age': CORS.maxAge,
+  function onRequest(req, res) {
+    const origin = req.headers.origin;
+    const [rawPath, ...rest] = req.url.split('?');
+    let query = rest.join('?');
+
+    // Envoy turns these away before it routes anything.
+    if (/%2f|%5c/i.test(rawPath) || Object.keys(req.headers).some((name) => name.includes('_'))) {
+      log(req, 400, 'rejected');
+      return send(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
+    }
+    let pathName;
+    try {
+      pathName = normalise(rawPath);
+    } catch {
+      log(req, 400, 'rejected');
+      return send(res, 400, { 'content-type': 'text/plain' }, 'Bad Request');
+    }
+
+    const route = ROUTES.find((entry) => (entry.exact ? pathName === entry.exact : pathName.startsWith(entry.prefix)));
+    if (!route) {
+      log(req, 404, 'none');
+      return json(res, 404, { error: 'requested path is invalid' });
+    }
+    const gatewayCors = route.name !== 'functions';
+    const corsHeaders = gatewayCors && origin ? { 'access-control-allow-origin': origin, 'access-control-expose-headers': CORS.expose } : {};
+
+    // A preflight is answered by the gateway itself, before any key is asked for.
+    if (gatewayCors && req.method === 'OPTIONS' && origin && req.headers['access-control-request-method']) {
+      log(req, 200, `${route.name} preflight`);
+      return send(res, 200, {
+        'access-control-allow-origin': origin,
+        'access-control-allow-methods': CORS.methods,
+        'access-control-allow-headers': CORS.headers,
+        'access-control-max-age': CORS.maxAge,
+      });
+    }
+
+    const headers = { ...req.headers };
+    delete headers.host;
+    delete headers.connection;
+    let apikey = typeof headers.apikey === 'string' ? headers.apikey : '';
+
+    if (route.name === 'functions') {
+      // The platform checks no key here; the function decides. A key that starts
+      // with sb_ is still looked up, and its role handed on in sb-api-key.
+      delete headers['sb-api-key'];
+      const bearer = /^bearer\s+(.+)$/i.exec(headers.authorization ?? '')?.[1] ?? '';
+      const refuse = (message) => {
+        log(req, 401, route.name);
+        return send(res, 401, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' }, message);
+      };
+      if (bearer.startsWith('sb_') && apikey && apikey !== bearer) return refuse('Conflicting API keys');
+      const key = apikey || (bearer.startsWith('sb_') ? bearer : '');
+      if (key.startsWith('sb_')) {
+        if (key === secrets.secretKey) headers['sb-api-key'] = roleToken('service_role');
+        else if (key === secrets.publishableKey) headers['sb-api-key'] = roleToken('anon');
+        else return refuse('Invalid API key');
+      }
+    } else if (!route.open) {
+      if (!apikey) apikey = firstQueryValue(query, 'apikey') ?? '';
+      const role = apikey === secrets.publishableKey ? 'anon' : apikey === secrets.secretKey ? 'service_role' : null;
+      const refuse = (status, body) => {
+        log(req, status, route.name);
+        return json(res, status, body, corsHeaders);
+      };
+      if (!apikey) return refuse(401, REFUSALS.missing);
+      if (!role) return refuse(401, REFUSALS.invalid);
+      if (role === 'service_role' && /mozilla\//i.test(headers['user-agent'] ?? '')) return refuse(401, REFUSALS.browser);
+      if (route.adminOnly && role !== 'service_role') {
+        log(req, 403, route.name);
+        return send(res, 403, { 'content-type': 'text/plain', ...corsHeaders }, 'RBAC: access denied');
+      }
+      // A user's token goes on as it came. With none, or with the key itself
+      // repeated in Authorization as supabase-js sends it, the key's role does.
+      const authorization = headers.authorization ?? '';
+      const userToken = authorization.startsWith('Bearer ') && !authorization.startsWith('Bearer sb_');
+      const otherKey = authorization.startsWith('Bearer sb_') && authorization.slice(7) !== apikey;
+      if (!userToken && !otherKey) headers.authorization = `Bearer ${roleToken(role)}`;
+      delete headers.apikey;
+      query = withoutQueryKey(query, 'apikey');
+    }
+
+    if (!route.to) {
+      log(req, 404, `${route.name} (not run here)`);
+      return json(res, 404, { message: 'This service is not part of the local stack.' }, corsHeaders);
+    }
+
+    const peer = (req.socket.remoteAddress ?? HOST).replace(/^::ffff:/, '');
+    headers['x-forwarded-for'] = headers['x-forwarded-for'] ? `${headers['x-forwarded-for']}, ${peer}` : peer;
+    headers['sb-forwarded-for'] = peer;
+    headers['x-forwarded-proto'] = 'https';
+    headers['x-forwarded-host'] ??= req.headers.host ?? `${HOST}:${PORTS.gateway}`;
+    headers['x-forwarded-port'] ??= String(PORTS.gateway);
+    if (route.rewrite !== undefined) headers['x-forwarded-prefix'] ??= route.prefix ?? route.exact;
+    for (const [name, value] of Object.entries(route.add ?? {})) headers[name] ??= value;
+
+    const matched = route.exact ?? route.prefix;
+    const onward = route.rewrite === undefined ? pathName : `${route.rewrite}${pathName.slice(matched.length)}`;
+    const target = `${onward.replace(/^\/{2,}/, '/')}${query ? `?${query}` : ''}`;
+
+    const forward = http.request({ host: HOST, port: upstream[route.to], method: req.method, path: target, headers }, (answer) => {
+      const out = { ...answer.headers };
+      delete out.connection;
+      delete out['keep-alive'];
+      // The hosted project is behind Cloudflare, which puts its own name in Server: the service's is not shown.
+      delete out.server;
+      log(req, answer.statusCode, route.name);
+      res.writeHead(answer.statusCode, { ...out, ...PLATFORM_HEADERS, ...corsHeaders });
+      answer.pipe(res);
     });
+    forward.setTimeout(route.timeout ?? 30000, () => forward.destroy(new Error('timeout')));
+    forward.on('error', (error) => {
+      if (res.headersSent) return res.destroy();
+      const timedOut = error.message === 'timeout';
+      log(req, timedOut ? 504 : 503, route.name);
+      return send(res, timedOut ? 504 : 503, { 'content-type': 'text/plain', ...corsHeaders }, timedOut ? 'upstream request timeout' : 'no healthy upstream');
+    });
+    req.pipe(forward);
   }
 
-  const headers = { ...req.headers };
-  delete headers.host;
-  delete headers.connection;
-  let apikey = typeof headers.apikey === 'string' ? headers.apikey : '';
-
-  if (route.name === 'functions') {
-    // The platform checks no key here; the function decides. A key that starts
-    // with sb_ is still looked up, and its role handed on in sb-api-key.
-    delete headers['sb-api-key'];
-    const bearer = /^bearer\s+(.+)$/i.exec(headers.authorization ?? '')?.[1] ?? '';
-    const refuse = (message) => {
-      log(req, 401, route.name);
-      return send(res, 401, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' }, message);
-    };
-    if (bearer.startsWith('sb_') && apikey && apikey !== bearer) return refuse('Conflicting API keys');
-    const key = apikey || (bearer.startsWith('sb_') ? bearer : '');
-    if (key.startsWith('sb_')) {
-      if (key === secrets.secretKey) headers['sb-api-key'] = roleToken('service_role');
-      else if (key === secrets.publishableKey) headers['sb-api-key'] = roleToken('anon');
-      else return refuse('Invalid API key');
+  const handle = (req, res) => {
+    try {
+      onRequest(req, res);
+    } catch (error) {
+      say(`gateway error: ${error.message}`);
+      if (!res.headersSent) send(res, 500, { 'content-type': 'text/plain' }, 'Internal Server Error');
     }
-  } else if (!route.open) {
-    if (!apikey) apikey = firstQueryValue(query, 'apikey') ?? '';
-    const role = apikey === secrets.publishableKey ? 'anon' : apikey === secrets.secretKey ? 'service_role' : null;
-    const refuse = (status, body) => {
-      log(req, status, route.name);
-      return json(res, status, body, corsHeaders);
-    };
-    if (!apikey) return refuse(401, REFUSALS.missing);
-    if (!role) return refuse(401, REFUSALS.invalid);
-    if (role === 'service_role' && /mozilla\//i.test(headers['user-agent'] ?? '')) return refuse(401, REFUSALS.browser);
-    if (route.adminOnly && role !== 'service_role') {
-      log(req, 403, route.name);
-      return send(res, 403, { 'content-type': 'text/plain', ...corsHeaders }, 'RBAC: access denied');
-    }
-    // A user's token goes on as it came. With none, or with the key itself
-    // repeated in Authorization as supabase-js sends it, the key's role does.
-    const authorization = headers.authorization ?? '';
-    const userToken = authorization.startsWith('Bearer ') && !authorization.startsWith('Bearer sb_');
-    const otherKey = authorization.startsWith('Bearer sb_') && authorization.slice(7) !== apikey;
-    if (!userToken && !otherKey) headers.authorization = `Bearer ${roleToken(role)}`;
-    delete headers.apikey;
-    query = withoutQueryKey(query, 'apikey');
-  }
-
-  if (!route.to) {
-    log(req, 404, `${route.name} (not run here)`);
-    return json(res, 404, { message: 'This service is not part of the local stack.' }, corsHeaders);
-  }
-
-  const peer = (req.socket.remoteAddress ?? HOST).replace(/^::ffff:/, '');
-  headers['x-forwarded-for'] = headers['x-forwarded-for'] ? `${headers['x-forwarded-for']}, ${peer}` : peer;
-  headers['sb-forwarded-for'] = peer;
-  headers['x-forwarded-proto'] = 'https';
-  headers['x-forwarded-host'] ??= req.headers.host ?? `${HOST}:${PORTS.gateway}`;
-  headers['x-forwarded-port'] ??= String(PORTS.gateway);
-  if (route.rewrite !== undefined) headers['x-forwarded-prefix'] ??= route.prefix ?? route.exact;
-  for (const [name, value] of Object.entries(route.add ?? {})) headers[name] ??= value;
-
-  const matched = route.exact ?? route.prefix;
-  const onward = route.rewrite === undefined ? pathName : `${route.rewrite}${pathName.slice(matched.length)}`;
-  const target = `${onward.replace(/^\/{2,}/, '/')}${query ? `?${query}` : ''}`;
-
-  const upstream = http.request({ host: HOST, port: UPSTREAM[route.to], method: req.method, path: target, headers }, (answer) => {
-    const out = { ...answer.headers };
-    delete out.connection;
-    delete out['keep-alive'];
-    // The hosted project is behind Cloudflare, which puts its own name in Server: the service's is not shown.
-    delete out.server;
-    log(req, answer.statusCode, route.name);
-    res.writeHead(answer.statusCode, { ...out, ...PLATFORM_HEADERS, ...corsHeaders });
-    answer.pipe(res);
-  });
-  upstream.setTimeout(route.timeout ?? 30000, () => upstream.destroy(new Error('timeout')));
-  upstream.on('error', (error) => {
-    if (res.headersSent) return res.destroy();
-    const timedOut = error.message === 'timeout';
-    log(req, timedOut ? 504 : 503, route.name);
-    return send(res, timedOut ? 504 : 503, { 'content-type': 'text/plain', ...corsHeaders }, timedOut ? 'upstream request timeout' : 'no healthy upstream');
-  });
-  req.pipe(upstream);
+  };
+  const options = { maxHeaderSize: 64 * 1024 };
+  const server = tls ? https.createServer({ ...options, key: tls.key, cert: tls.cert }, handle) : http.createServer(options, handle);
+  server.on('clientError', (_error, socket) => socket.end(BAD_REQUEST));
+  return server;
 }
 
-const server = https.createServer({ key: fs.readFileSync(files.key), cert: fs.readFileSync(files.cert), maxHeaderSize: 64 * 1024 }, (req, res) => {
-  try {
-    onRequest(req, res);
-  } catch (error) {
-    process.stdout.write(`${new Date().toISOString()} gateway error: ${error.message}\n`);
-    if (!res.headersSent) send(res, 500, { 'content-type': 'text/plain' }, 'Internal Server Error');
-  }
-});
-server.on('clientError', (_error, socket) => socket.end('HTTP/1.1 400 Bad Request\r\nconnection: close\r\n\r\n'));
-server.listen(PORTS.gateway, HOST, () => process.stdout.write(`${new Date().toISOString()} gateway listening on ${GATEWAY_URL}\n`));
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  const files = paths();
+  const server = createGateway({ secrets: loadSecrets(), tls: { key: fs.readFileSync(files.key), cert: fs.readFileSync(files.cert) } });
+  server.listen(PORTS.gateway, HOST, () => writeLine(`gateway listening on ${GATEWAY_URL}`));
+}

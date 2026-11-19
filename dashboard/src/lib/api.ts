@@ -2,7 +2,7 @@ import type { Change } from '@app/domain/sync';
 import type { Role } from '@app/domain/types';
 
 import { billingAnswer, type BillingView } from './billing';
-import { authProblem, dataProblem, Problem } from './errors';
+import { authProblem, dataProblem, isNotFound, Problem } from './errors';
 import type { Deletion, VersionRow } from './history';
 import type {
   CompanyChoice,
@@ -371,8 +371,9 @@ export async function pushRecords(companyId: string, changes: Change[]): Promise
   const { data, error } = await supabase.rpc('push_records', { company_id: companyId, changes });
   if (error) {
     // The server gives a company the account is not in the same answer as one that does not exist.
-    if ((error as { code?: string }).code === 'P0002') {
-      throw new Problem('Nothing was saved: this account is not on the company’s roster any more. Sign out and back in, or ask another supervisor.', 'P0002');
+    const code = (error as { code?: string }).code;
+    if (isNotFound(code)) {
+      throw new Problem('Nothing was saved: this account is not on the company’s roster any more. Sign out and back in, or ask another supervisor.', code);
     }
     throw dataProblem(error, 'Saving');
   }

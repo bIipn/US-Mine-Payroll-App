@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import { companyBilling } from './api';
 import { nextView, type BillingView } from './billing';
+import { mayHaveLostRole } from './errors';
 
 /**
  * Where the open company's billing stands, for its supervisors. Asked when the
@@ -40,7 +41,7 @@ export function BillingProvider({ companyId, recheckRole, children }: { companyI
     const answer = await companyBilling(companyId);
     if (mine === turn.current) setView((had) => nextView(had, answer));
     // Turned down for want of the role: the account may no longer be a supervisor here.
-    if (answer.kind === 'failed' && (answer.code === '42501' || answer.code === 'P0002')) void recheckRole();
+    if (answer.kind === 'failed' && mayHaveLostRole(answer.code)) void recheckRole();
     return answer;
   }, [companyId, recheckRole]);
 

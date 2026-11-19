@@ -186,11 +186,13 @@ When a function refuses, the error's code says why:
 |---|---|
 | `42501` | Not signed in, an anonymous sign-in where an account is needed, an account Supabase Auth has banned or soft-deleted, or a write the API does not allow ("permission denied"). |
 | `22023` | Something typed is missing or not allowed: a blank name, a name with a control or invisible character or with letters of more than one alphabet, a name that only looks like one on the roster, a state that is not a postal code, an unknown time zone, a role that is not employee or supervisor, a logo path outside the company's own storage, a call to `push_records` whose changes are not a list or number more than 200, a contact form field that is missing or too long, or an `apply_stripe_event` call with something that is not a Stripe event. |
-| `P0002` | Not found, or not the caller's to act on. The two look the same on purpose. |
-| `55000` | Not in a state to do that: a request already decided, a row already claimed or taken off, a person already on the roster. |
+| `PT404` | Not found, or not the caller's to act on. The two look the same on purpose. PostgREST answers it with HTTP 404. (Before migration `20261117000600` this was `P0002`, which PostgREST answers with 500.) |
+| `PT409` | Not in a state to do that: a request already decided, a row already claimed or taken off, a person already on the roster. PostgREST answers it with HTTP 409. (`55000` before `20261117000600`, also answered with 500.) |
 | `23514` | It would leave the company without an active supervisor. (Also a check constraint, such as a state that is not one of the 51, or a pay period over 16 KiB as text, over 64 KiB as stored, or holding a number no browser sends.) |
 | `PT429` | The contact form's limits: too many messages from one email address, from one sender, or from everyone in the last hour. PostgREST answers it with HTTP 429. |
 | `40001` | Two changes to the same company's supervisors overlapped at REPEATABLE READ or SERIALIZABLE. Try again. (PostgREST runs at READ COMMITTED, where the second waits and gets `23514` instead.) Also two `push_records` calls from one company at once, at those levels: the second has to try again. |
+
+PostgREST picks the HTTP status from the code: a `PTnnn` code is HTTP nnn, with its message and hint kept in the body; `42501` is 401 without a sign-in and 403 with one; `22023` and `23514` are 400. Every refusal is one of these, never a code PostgREST answers with 500 (`security.db.mjs` reads every function to check); the `40001` above is not a refusal. Read the code, not the status: PostgREST also answers 404 for a function that does not exist (`PGRST202`) and 409 for a duplicate (`23505`). A client should still read `P0002` and `55000` as these two, for a server where `20261117000600` has not run yet; the phone and the dashboard do. PostgREST writes a `PTnnn` code's message into the HTTP status line too (`HTTP/1.1 404 No such company.`), so such a message is always a constant on one line, never text from the request: a line break in it would start a header.
 
 ## The records
 
@@ -274,7 +276,7 @@ The phone marks `accepted` and `ignored` as sent (`markSent`, `readPushAnswer`):
 
 A deletion (`rev: "deleted"`, `record: null`) keeps the row, marked deleted and emptied, and adds the deletion to the history. A supervisor's deletion of a record the server never had writes nothing and is accepted. An employee's deletion gets `supervisor_only` whether or not the record is there, so a deletion tells nobody which ids exist; it also means a phone dropping old denied punches (the app keeps the last 200) never deletes them on the server.
 
-The caller must be an active member of the company. An account that is not, a member taken off the roster and a company that does not exist all get the same `P0002` ("No such company."). anon cannot call it at all.
+The caller must be an active member of the company. An account that is not, a member taken off the roster and a company that does not exist all get the same `PT404` ("No such company.", HTTP 404). anon cannot call it at all.
 
 Who may send what, in short:
 
@@ -399,7 +401,7 @@ It raises (`22023`) only for something that is not a Stripe event at all (not an
 
 ### Where a company stands
 
-`company_billing(p_company_id)` is for the company's supervisors (an account Supabase Auth has banned or soft-deleted is none); anyone else is told there is no such company (`P0002`), as by every supervisor function. It answers:
+`company_billing(p_company_id)` is for the company's supervisors (an account Supabase Auth has banned or soft-deleted is none); anyone else is told there is no such company (`PT404`, HTTP 404), as by every supervisor function. It answers:
 
 ```json
 { "access": "trial", "status": "trialing", "trial_end": "2026-12-01T17:00:00+00:00", "current_period_end": "2026-12-01T17:00:00+00:00", "cancel_at_period_end": false, "running": 1, "had_trial": true }
@@ -560,7 +562,7 @@ There are 411 tests, in about a minute, and 26 more that need a real server (bel
 | `anon.db.mjs` | `anon` calls `company_by_code` and the contact form and nothing else, and reads nothing |
 | `names.db.mjs` | Name matching, against `findOnRoster` itself, Greek names in capitals included; one `todo` test shows what `roster.ts` still has to fold the same way |
 | `notifications.db.mjs` | One for each join and new request, seen by that company's supervisors only |
-| `security.db.mjs` | `search_path` (pg_catalog first, pg_temp last), EXECUTE grants, row level security, each role's privileges, no planner statistics on any column, and that the migrations leave Supabase's own schema and roles alone and only ever read Vault |
+| `security.db.mjs` | `search_path` (pg_catalog first, pg_temp last), EXECUTE grants, that every refusal is a code PostgREST answers with a 4xx and a `PTnnn` code's message a constant on one line, row level security, each role's privileges, no planner statistics on any column, and that the migrations leave Supabase's own schema and roles alone and only ever read Vault |
 | `records.db.mjs` | Sending a record and reading it back, sending it twice, who may write each kind (`supervisor_only`, `not_yours`), private fields, deleting, conflicts, malformed changes and the size limit, who reads what in each company, a history nobody changes or removes, and `my_companies` |
 | `billing.db.mjs` | Stripe's events: only MineMuster's change anything, another business's checkouts and subscriptions change nothing, an event delivered twice is applied once, a checkout ties a subscription to an existing company once, an older event never overwrites a newer one and an ended subscription stays ended, odd values never raise; `company_billing` from trial to active to past due to ended, comped with and without `until`, a running subscription before one that ended; one free trial for each company, two trials at once counted once and said to be running, a checkout with no status a trial for an hour only, another person's checkout changing nothing a paying company is told, a comped company told of a subscription still charged; Stripe's test mode set aside; a supervisor reads the records only while the company has MineMuster, the crew as before, and phones send either way; who reads the billing tables and calls the functions; the signing secret from Vault |
 | `billing_races.db.mjs` | Needs a real server: the same Stripe event delivered twice at once is applied once, two events for one subscription at once keep the newer, two contact messages at once cannot both slip under a limit |

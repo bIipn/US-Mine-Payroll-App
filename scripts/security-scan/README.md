@@ -113,7 +113,7 @@ Check each scan before reading its findings as the whole truth, by its id (`run.
 - `run.txt` names no host refused by the guard, or the ones it names are understood. A refusal is the guard doing its work (a browser's own calls to Google are expected); a host of MineMuster's, Supabase's or Stripe's there means something tried to leave the copy, and is worth finding.
 - A finding about response headers, CORS, the wording of a refusal or the HTTP version on the server describes the stand-in gateway, not Supabase's (`stack/README.md`, "What is not known"). Mark each as needing a look at the live server's answer, which the owner makes, before it counts.
 
-Two answers look like trouble on the server and are not an attack getting through. A function that refuses a caller answers 500 with `P0002` ("No such company."): that is a real, small fault to fix, not a leak. A table the account may not read answers 200 with `[]`: that is row level security refusing.
+Two answers look like trouble on the server and are not an attack getting through. A function that refuses a caller answers 404 with `PT404` ("No such company."), or 409 with `PT409` ("That join request has already been decided."): it said no, and the same no for a real id of another company as for a made-up one. Before migration `20261117000600` these were 500 with `P0002` and `55000`, which the first two scans reported as Application Error Disclosure; a 500 from a function now is worth a look. A table the account may not read answers 200 with `[]`: that is row level security refusing.
 
 ### After a fix
 

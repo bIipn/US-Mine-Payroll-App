@@ -157,6 +157,14 @@ describe('the answer from company_billing', () => {
   it('says what went wrong when the call fails, and keeps the code', () => {
     const turnedDown = billingAnswer({ data: null, error: { code: '42501', message: 'Only a supervisor can see billing.' }, status: 403 });
     expect(turnedDown).toMatchObject({ kind: 'failed', code: '42501' });
+    // Not this company's supervisor: "No such company.", PT404 (HTTP 404) now, P0002 (HTTP 500) before migration 20261117000600.
+    for (const [code, status] of [['PT404', 404], ['P0002', 500]] as const) {
+      expect(billingAnswer({ data: null, error: { code, message: 'No such company.' }, status })).toMatchObject({
+        kind: 'failed',
+        code,
+        message: expect.stringMatching(/^Checking billing did not work: it was not found/),
+      });
+    }
     const offline = billingAnswer({ data: null, error: { message: 'TypeError: Failed to fetch' } });
     expect(offline).toEqual({ kind: 'failed', message: 'Could not reach the MineMuster server. Check this computer’s connection, then try again.', code: 'offline' });
     expect(billingAnswer({ data: null, error: { message: 'AbortError: signal is aborted without reason' } })).toMatchObject({ kind: 'failed', code: 'timeout' });
