@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 
-import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from '../after-scan.mjs';
+import { describeTableAnswers, guardSummary, guardVerdict, routeIsMissing, tableAnswers } from '../after-scan.mjs';
 import { otherScannerStill } from '../one-at-a-time.mjs';
 import { GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS, isLocalTarget, mayPass, startGuard, upstreamFrom } from '../egress-guard.mjs';
 import { FUNCTION_INPUTS, TABLE_FILTERS, filtersOf, readEnvFile, writeScanInputs } from '../scan-inputs.mjs';
@@ -300,6 +300,16 @@ test('a scanner that is closing is waited for, and one that keeps running is nam
   looks = 0;
   assert.equal(await otherScannerStill(() => { looks += 1; return ''; }, { tries: 10, sleep }), '');
   assert.equal(looks, 1);
+});
+
+test('a function that refuses with its own 404 is there; a 404 from PostgREST or the gateway is not', () => {
+  // Since migration 20261117000600 a function refuses "not found, or not yours" with PT404 (HTTP 404).
+  assert.equal(routeIsMissing({ status: 404, text: '{"code":"PT404","message":"No such company."}' }), false);
+  assert.equal(routeIsMissing({ status: 404, text: '{"code":"PGRST202","message":"Could not find the function"}' }), true);
+  assert.equal(routeIsMissing({ status: 404, text: '{"code":"PGRST205","message":"Could not find the table"}' }), true);
+  assert.equal(routeIsMissing({ status: 404, text: 'Not found' }), true);
+  assert.equal(routeIsMissing({ status: 0, text: 'connect ECONNREFUSED' }), true);
+  for (const status of [200, 204, 400, 401, 403, 409, 429, 500]) assert.equal(routeIsMissing({ status, text: '{}' }), false, String(status));
 });
 
 // ---- The scan inputs ----------------------------------------------------------------------------

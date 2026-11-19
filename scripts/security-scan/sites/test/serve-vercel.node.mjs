@@ -88,7 +88,7 @@ test('a page: the rules for its path, Vercel\'s defaults, and the headers Vercel
 
   const demo = await ask('/demo');
   assert.equal(demo.headers['x-robots-tag'], 'noindex');
-  assert.match(demo.headers['content-security-policy'], /script-src 'self' 'unsafe-inline'/);
+  assert.match(demo.headers['content-security-policy'], /script-src 'self' 'sha256-[A-Za-z0-9+/=]+'; style-src/);
   assert.equal(demo.headers['content-disposition'], 'inline; filename="demo"');
 });
 

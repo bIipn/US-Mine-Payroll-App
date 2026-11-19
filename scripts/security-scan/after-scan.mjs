@@ -71,3 +71,19 @@ export function guardSummary(lines) {
     failed: hosts((entry) => entry.verdict === 'failed'),
   };
 }
+
+/**
+ * Whether an answer means the route is not there. A function that refuses "not found, or not
+ * yours" answers 404 with its own code PT404 (migration 20261117000600): it ran, so its route is
+ * there. Any other 404 (PostgREST's PGRST202 for a function it cannot find, PGRST205 for a table,
+ * the gateway's own) and no answer at all mean it is not.
+ */
+export function routeIsMissing({ status, text }) {
+  if (status === 0) return true;
+  if (status !== 404) return false;
+  try {
+    return JSON.parse(text)?.code !== 'PT404';
+  } catch {
+    return true;
+  }
+}

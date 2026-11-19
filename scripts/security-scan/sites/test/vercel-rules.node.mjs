@@ -98,7 +98,7 @@ test('the website: the strict policy everywhere but the demo, which has its own'
 
   for (const path of ['/demo', '/demo/', '/demo/anything']) {
     const demo = headersFor(site, path);
-    assert.match(header(demo, 'Content-Security-Policy'), /script-src 'self' 'unsafe-inline'; .*connect-src 'none'/, path);
+    assert.match(header(demo, 'Content-Security-Policy'), /script-src 'self' 'sha256-[A-Za-z0-9+/=]+'; .*connect-src 'none'/, path);
     assert.equal(header(demo, 'X-Robots-Tag'), 'noindex', path);
     assert.match(header(demo, 'Permissions-Policy'), /geolocation=\(self\)/, path);
   }

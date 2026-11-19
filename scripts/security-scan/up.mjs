@@ -28,7 +28,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describeTableAnswers, guardSummary, guardVerdict, tableAnswers } from './after-scan.mjs';
+import { describeTableAnswers, guardSummary, guardVerdict, routeIsMissing, tableAnswers } from './after-scan.mjs';
 import { otherScannerStill } from './one-at-a-time.mjs';
 import { GUARD_HOST, GUARD_PORT, GUARD_URL, LOCAL_TARGETS, STACKHAWK_HOSTS } from './egress-guard.mjs';
 import { inputsFolder, readEnvFile, writeScanInputs } from './scan-inputs.mjs';
@@ -359,7 +359,7 @@ async function readiness() {
         answer = await ask(`${LOCAL_SERVER}${name}`, { method: 'POST', headers: signedIn, body });
       }
       statuses[answer.status] = (statuses[answer.status] ?? 0) + 1;
-      if (answer.status === 404 || answer.status === 0) notFound.push(`${name} -> ${answer.status}`);
+      if (routeIsMissing(answer)) notFound.push(`${name} -> ${answer.status}`);
       const bare = name.replace(/^\/(rest|functions)\/v1/, '');
       if (bare !== name && bare !== '/') {
         const shadow = await ask(`${LOCAL_SERVER}${bare}`, { headers: signedIn });
@@ -368,7 +368,7 @@ async function readiness() {
     }
     const count = Object.keys(description.paths).length;
     const spread = Object.entries(statuses).map(([status, n]) => `${n} x ${status}`).join(', ');
-    note(`All ${count} paths of the description resolve on the server`, notFound.length === 0, notFound.length === 0 ? `as A1, each by a method it takes: ${spread}; none 404` : notFound.join('; '));
+    note(`All ${count} paths of the description resolve on the server`, notFound.length === 0, notFound.length === 0 ? `as A1, each by a method it takes: ${spread}; none missing (a 404 with the function's own PT404 is a refusal)` : notFound.join('; '));
     note('No path resolves without its prefix', shadows.length === 0, shadows.length === 0 ? 'each is a 404 without /rest/v1 or /functions/v1' : shadows.join('; '));
   } else {
     note('The description file is there to check', false, 'scan.env or openapi-scan.json is missing: run "up" again');
