@@ -72,7 +72,7 @@ const NOTES = {
   billing_overrides: ['A company\'s supervisors read its override.', '', 'None: read only.'],
   company_by_code: ['Anyone: the name and state of the company with this join code.', '', 'None. Nothing limits how often codes are tried.'],
   submit_contact_request: ['Anyone: the website\'s contact form.', 'yes', 'Keeps a row for each message. Its limits (3 from one email address in 24 hours, 5 from one sender in an hour, 100 from everyone in an hour) then answer 429 to everyone until a reset.'],
-  create_company: ['A signed-in account starts a company and becomes its supervisor.', 'yes', 'Every call makes a company: junk fills the table. Nobody is locked out.'],
+  create_company: ['A signed-in account starts a company and becomes its supervisor.', 'yes', 'Every call makes a company, up to 3 in 24 hours and 20 in all for one account; past either it answers that account 429 until a reset. A1 and B1 have started one each.'],
   join_company: ['A signed-in account joins a company with its code and a name.', 'yes', 'With company A\'s code a junk name leaves a pending request; the name on A3\'s row claims that row. Both change the fixtures until a reset.'],
   approve_join_request: ['A supervisor lets a request in.', 'yes', 'As A1 with P1\'s request it makes P1 a member and uses up the pending request.'],
   deny_join_request: ['A supervisor turns a request down, with a bar or without.', 'yes', 'As A1 it closes P1\'s request; with bar it keeps P1 out until lift_join_bar or a reset.'],

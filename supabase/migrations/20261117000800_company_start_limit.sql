@@ -27,14 +27,20 @@
 --                    hours. Try again in a day.
 --
 -- The limit in all is checked first: waiting a day does not lift it. A call
--- refused for what was typed, or for an account that cannot sign in, is
--- refused before the count and counts toward nothing, as before.
+-- refused for its name, the person's name or title, or an account that cannot
+-- sign in is refused before the count and counts toward nothing, as before. A
+-- state code or time zone the database does not know is caught by the insert,
+-- after the count, so an account already at a limit is told about the limit
+-- instead. Either way nothing is written.
 --
 -- Calls from one account take turns from the count to the commit (an advisory
 -- lock on the account's id), so two at once cannot both slip under a limit:
 -- at READ COMMITTED, as PostgREST runs every call, the second waits for the
 -- first and then counts its company (races.db.mjs). Calls from different
--- accounts do not wait for each other.
+-- accounts do not wait for each other. At REPEATABLE READ or SERIALIZABLE,
+-- which no API call runs at, a second call would count from the snapshot it
+-- took before it waited; the lock does not cover that, as it does not for the
+-- contact form's limit.
 --
 -- Everything else about create_company is as in
 -- 20261116002300_membership_needs_a_sign_in.sql: its arguments and answer,

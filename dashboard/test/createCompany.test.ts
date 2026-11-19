@@ -63,3 +63,22 @@ describe('starting a company', () => {
     await expect(createCompany(NEW)).resolves.toEqual({ companyId: 'company-a', joinCode: 'ABCD2345' });
   });
 });
+
+describe('the words for a limit say the numbers the server enforces', () => {
+  it('names the latest migration\'s limits', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const migrations = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../supabase/migrations');
+    const latest = readdirSync(migrations).filter((name) => name.endsWith('.sql')).sort()
+      .filter((name) => /function public\.create_company\b/i.test(readFileSync(path.join(migrations, name), 'utf8'))).at(-1);
+    expect(latest).toBeTruthy();
+    const sql = readFileSync(path.join(migrations, latest as string), 'utf8');
+    const inAll = /started_in_all >= (\d+)/.exec(sql)?.[1];
+    const today = /started_today >= (\d+)/.exec(sql)?.[1];
+    expect(inAll && today).toBeTruthy();
+    const { companyLimitWords } = await import('../src/lib/errors');
+    expect(companyLimitWords('too_many_today', '')).toContain(` ${today} companies`);
+    expect(companyLimitWords('too_many_in_all', '')).toContain(` ${inAll} companies`);
+  });
+});

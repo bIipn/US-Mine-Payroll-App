@@ -1,7 +1,7 @@
 // The database's own guarantees, read from the catalog: every function
 // searches pg_catalog first and the temporary schema last, EXECUTE goes only
-// to the roles that need it, every refusal is a code PostgREST answers with a
-// 4xx, row level security is on for every table, each
+// to the roles that need it, every raise in a function, whatever its shape, is
+// a code PostgREST answers with a 4xx, row level security is on for every table, each
 // role holds exactly the privileges it should, no column keeps planner
 // statistics, and the migrations leave what Supabase provides alone.
 
@@ -195,8 +195,10 @@ const ANSWERED_WITH_4XX = {
   PT409: '409',
   PT429: '429',
 };
-// Not a refusal: two push_records calls overlapped at REPEATABLE READ or SERIALIZABLE, and the second
-// is told to try again (supabase/README.md, "When a function refuses").
+// Not a refusal: something other than push_records (the owner, in the SQL editor) wrote the record
+// between push_records' read and its insert, and the call is told to try again; PostgREST makes it
+// again by itself and it then finds the record (supabase/README.md, "When a function refuses";
+// record_races.db.mjs).
 const TRY_AGAIN = { push_records: '40001' };
 
 // "Not found, or not the caller's" is PT404 and "not in a state to do that" PT409 (P0002 and 55000

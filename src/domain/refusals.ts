@@ -1,8 +1,10 @@
 /**
- * What the company server's refusals mean, by their code: one rule for every
- * client that reads them, the phone (`serverAnswers.ts`) and the office
- * dashboard (`dashboard/src/lib/errors.ts`, through its `@app` alias). The
- * codes are listed in supabase/README.md ("When a function refuses").
+ * What the company server's refusals mean, by their code: one rule for the
+ * phone (`serverAnswers.ts`) and the office dashboard
+ * (`dashboard/src/lib/errors.ts`, through its `@app` alias). The website
+ * (`site/contact.js`) has no build step and cannot import this, so it keeps its
+ * own copy of PT429: a change to that code is made in both places. The codes
+ * are listed in supabase/README.md ("When a function refuses").
  *
  * Read the code, never the HTTP status: PostgREST also answers 404 for a
  * function that does not exist (PGRST202) and 409 for a duplicate (23505).

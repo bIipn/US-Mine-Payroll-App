@@ -10,7 +10,7 @@ It is a Vite + React + TypeScript web app. It talks to the MineMuster Supabase p
 
 **No company yet.** A new account either starts a company or joins one:
 
-- *Start a company*: the company's name, the state whose hours rules it follows (the 50 states and DC), its time zone (this computer's by default), and the person's own name and job title. They become its first supervisor, and the page shows the join code to give the crew (`create_company`).
+- *Start a company*: the company's name, the state whose hours rules it follows (the 50 states and DC), its time zone (this computer's by default), and the person's own name and job title. They become its first supervisor, and the page shows the join code to give the crew (`create_company`). One account starts at most 3 companies in any 24 hours and 20 in all; past either the server answers `PT429`, and the page says which limit it is and what to do (`companyLimitWords` in `src/lib/errors.ts`).
 - *Join with a code*: the code a supervisor gave out and the name as it is on the roster (`join_company`). The page says what the answer means, as `supabase/README.md` lays out: in (open the company), waiting for a supervisor (with the reason, and a button to check again), a name that fits more than one person, turned down, or no company with that code. The person's own requests are listed below.
 
 **Crew.** Someone on the crew who signs in sees their company and a short note that the dashboard is for supervisors, and where their own records are.

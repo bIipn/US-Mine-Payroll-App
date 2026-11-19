@@ -25,7 +25,10 @@
 --     MineMuster" is a test of that one row. Inactive rows, accounts Supabase
 --     Auth has soft-deleted or banned, and nobody signed in give no companies,
 --     as before. company_has_access is asked once for each company the caller
---     supervises, as before, and for nothing else.
+--     supervises (for an account Supabase Auth has soft-deleted or banned, the
+--     roster rows are read before the account is, so it is asked for those
+--     too, once each: the answer is still no companies, and the cost grows
+--     with the number of rows, not its square).
 --
 --  2. member_company_ids, supervisor_company_ids, is_member and is_supervisor
 --     compared each roster row with auth.uid(), which PostgreSQL may work out

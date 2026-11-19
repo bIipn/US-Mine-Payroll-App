@@ -52,7 +52,7 @@ function draw() {
     got.save = useSaver();
     return null;
   }
-  renderToString(createElement(BillingProvider, { companyId: 'company-a', recheckRole }, createElement(Page)));
+  renderToString(createElement(BillingProvider, { companyId: 'company-a', recheckRole, children: createElement(Page) }));
   return got as Required<typeof got>;
 }
 

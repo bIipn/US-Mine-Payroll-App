@@ -24,7 +24,8 @@ const REWRITTEN_IN = '20261117000700';
 const NAMES = ['is_member', 'is_supervisor', 'member_company_ids', 'supervisor_company_ids', 'records_open_company_ids', 'my_companies'];
 // PostgREST's statement_timeout for the authenticated role on Supabase.
 const STATEMENT_TIMEOUT_MS = 8000;
-// "Well inside": an eighth of it. Before the rewrite, PGlite took about 1.1 s here, and PostgreSQL 17 about 5 s.
+// "Well inside": an eighth of it. Before the rewrite PGlite took about 1.1 s here, and PostgreSQL 17 3.7 to 4.4 s
+// through PostgREST, for an account in 1,001 companies; after it, 34 to 42 ms and 32 to 52 ms.
 const BUDGET_MS = STATEMENT_TIMEOUT_MS / 8;
 
 /** The latest definition of each function in the migrations before `stamp`, as written there. */
