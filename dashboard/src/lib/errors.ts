@@ -1,7 +1,13 @@
+import { isNotFound, isTooMany, isWrongState } from '@app/domain/refusals';
+
 /**
  * What went wrong, said plainly, with what to do next. The server's error
- * codes are in supabase/README.md ("When a function refuses").
+ * codes are in supabase/README.md ("When a function refuses"); which code
+ * means what is the app's own rule (src/domain/refusals.ts), shared with the
+ * phone.
  */
+
+export { isNotFound, isTooMany, isWrongState };
 
 export class Problem extends Error {
   constructor(message: string, readonly code?: string) {
@@ -18,17 +24,6 @@ interface ErrorLike {
 }
 
 const NO_SERVER = 'Could not reach the MineMuster server. Check this computer’s connection, then try again.';
-
-/**
- * A function's "not found, or not yours": PT404 (HTTP 404) from migration
- * 20261117000600 on, and P0002 (which PostgREST answers with HTTP 500) on a
- * server where that migration has not run yet. Read by the code, never by the
- * status: PostgREST answers 404 for a function that does not exist, too.
- */
-export const isNotFound = (code: unknown) => code === 'PT404' || code === 'P0002';
-
-/** A function's "not in a state to do that": PT409 (HTTP 409) from migration 20261117000600 on, 55000 (HTTP 500) before it. */
-export const isWrongState = (code: unknown) => code === 'PT409' || code === '55000';
 
 /**
  * Whether a refusal can mean the account is no longer a supervisor of the
@@ -100,6 +95,23 @@ export function dataProblem(error: unknown, doing = 'That'): Problem {
         `${doing} did not work${message ? ` (the server said: ${message.replace(/[.\s]+$/, '')})` : ''}. Try again in a minute. If it keeps happening, tell whoever runs MineMuster for your company.`,
         code || undefined,
       );
+  }
+}
+
+/**
+ * Why the server would not start another company for this account: create_company's PT429 (migration
+ * 20261117000800), by its hint. One account starts at most 3 companies in any 24 hours and 20 in all.
+ */
+export function companyLimitWords(hint: unknown, message: unknown): string {
+  switch (hint) {
+    case 'too_many_today':
+      return 'No company was started: this account has already started 3 companies in the last 24 hours, the most it can in a day. Try again tomorrow at this time.';
+    case 'too_many_in_all':
+      return 'No company was started: this account has already started 20 companies, the most one account can. To start another, write to us at minemuster.com/contact.';
+    default:
+      return typeof message === 'string' && message.trim()
+        ? `No company was started: ${message.trim()}`
+        : 'No company was started: this account has started too many companies for now. Try again tomorrow.';
   }
 }
 

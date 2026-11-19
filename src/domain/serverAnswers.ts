@@ -1,3 +1,4 @@
+import { isNotFound } from './refusals';
 import { cleanText } from './roster';
 import type { ConnectedCompany } from './server';
 import { sendError, type Change, type SendError } from './sync';
@@ -244,6 +245,8 @@ function unreachable(e: ServerProblem): boolean {
 export function serverWords(e: ServerProblem | null | undefined): string {
   if (!e) return UNREACHABLE;
   if (unreachable(e)) return UNREACHABLE;
+  // "Not found, or not yours" (refusals.ts).
+  if (isNotFound(e.code)) return 'That company was not found, or you are no longer on its roster. See your supervisor.';
   switch (e.code) {
     case '42501':
     case 'PGRST301':
@@ -251,10 +254,6 @@ export function serverWords(e: ServerProblem | null | undefined): string {
       return 'You are signed out of the company server. Sign in again.';
     case '22023':
       return 'The server could not take what was typed. Type your name in ordinary letters, the way it is on the roster.';
-    // "Not found, or not yours": PT404 (HTTP 404) from migration 20261117000600 on, P0002 (HTTP 500) before it.
-    case 'PT404':
-    case 'P0002':
-      return 'That company was not found, or you are no longer on its roster. See your supervisor.';
     case 'PGRST202':
       return 'The company server is not ready for this yet. Try again later.';
     default:
@@ -270,15 +269,12 @@ export function serverWords(e: ServerProblem | null | undefined): string {
  */
 export function pushTrouble(e: ServerProblem | null | undefined): SendError {
   if (!e || unreachable(e)) return sendError('unreachable', UNREACHABLE);
+  // Turned down for want of rights, or "No such company" (refusals.ts).
+  if (e.code === '42501' || isNotFound(e.code)) return sendError('not_member', 'This account is not on the company’s roster any more.');
   switch (e.code) {
     case 'PGRST301':
     case 'PGRST303':
       return sendError('signed_out', 'You are signed out of the company server.');
-    case '42501':
-    // "No such company": PT404 (HTTP 404) from migration 20261117000600 on, P0002 (HTTP 500) on a server before it.
-    case 'PT404':
-    case 'P0002':
-      return sendError('not_member', 'This account is not on the company’s roster any more.');
     case 'PGRST202':
       return sendError('server', 'The company server is not ready to take records yet.');
     // The server is up but cannot reach its database: no different, for the phone, from no signal.

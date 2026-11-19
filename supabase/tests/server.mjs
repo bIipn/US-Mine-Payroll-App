@@ -111,6 +111,20 @@ class ServerDatabase {
     return new Request(this, client, pid);
   }
 
+  /**
+   * A transaction as the database's owner, as the project's owner writes in the SQL editor: no API role,
+   * no account, and no row level security in the way. Not a request through the API.
+   */
+  async asOwner(isolation = 'read committed') {
+    assert.match(isolation, /^(read committed|repeatable read|serializable)$/);
+    const client = new pg.Client({ connectionString: urlFor(this.name) });
+    await client.connect();
+    this.open.add(client);
+    await client.query(`begin isolation level ${isolation}`);
+    const [{ pid }] = (await client.query('select pg_backend_pid() as pid')).rows;
+    return new Request(this, client, pid);
+  }
+
   /** One whole request, committed: for setting a test up. */
   async asAccount(account, sql, params) {
     const request = await this.request(account);

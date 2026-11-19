@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
-import { migrationFiles, MIGRATIONS, startDatabase } from './harness.mjs';
+import { errorOf, migrationFiles, MIGRATIONS, startDatabase } from './harness.mjs';
 
 let db;
 before(async () => {
@@ -180,10 +180,21 @@ describe('functions', () => {
 // ---- Refusals -----------------------------------------------------------------------------------
 //
 // PostgREST answers the SQLSTATE a function raises with an HTTP status: a PTnnn code with nnn, 42501
-// with 401 or 403, 22023 and 23514 with 400, and P0002, 55000 and the rest of the classes P0 and 55
-// with 500, which tells the caller, and a scanner, that the server failed when it only said no. So
-// every refusal a function makes on purpose is a code it answers with a 4xx.
-const ANSWERED_WITH_4XX = { 42501: '401 or 403', 22023: '400', 23514: '400', PT404: '404', PT409: '409', PT429: '429' };
+// with 401 or 403, 22023, 23514 and P0001 (a raise with no code of its own) with 400, 23505 with 409,
+// and P0002, P0004, 55000 and the rest of the classes P0 and 55 with 500, which tells the caller, and a
+// scanner, that the server failed when it only said no. So every raise in a function, whatever its
+// shape, is a code PostgREST answers with a 4xx: one the function chooses, and one it catches and
+// raises again.
+const ANSWERED_WITH_4XX = {
+  42501: '401 or 403',
+  22023: '400',
+  23514: '400',
+  P0001: '400',
+  23505: '409',
+  PT404: '404',
+  PT409: '409',
+  PT429: '429',
+};
 // Not a refusal: two push_records calls overlapped at REPEATABLE READ or SERIALIZABLE, and the second
 // is told to try again (supabase/README.md, "When a function refuses").
 const TRY_AGAIN = { push_records: '40001' };
@@ -227,31 +238,236 @@ async function publicSources() {
 const LITERAL = /^'(?:[^']|'')*'$/;
 const unquote = (literal) => (literal && LITERAL.test(literal) ? literal.slice(1, -1).replaceAll("''", "'") : literal);
 
-/** Each `raise exception using ...;` in a function's source: its errcode, message and hint, as written. */
-function raisesOf(src) {
-  return [...src.matchAll(/raise\s+exception\s+using\s+((?:'(?:[^']|'')*'|[^';])*);/gi)].map(([, clauses]) => {
-    const clause = (name) => new RegExp(`\\b${name}\\s*=\\s*((?:'(?:[^']|'')*'|[^',])+)`, 'i').exec(clauses)?.[1].trim() ?? null;
-    return { code: unquote(clause('errcode')), message: clause('message'), hint: clause('hint'), text: clauses.replace(/\s+/g, ' ').trim() };
-  });
+/**
+ * A function's source with its comments taken out, and each string literal ('...', E'...', $tag$...$tag$)
+ * and quoted identifier set aside, so that a word inside one is never read as code. `code` has a
+ * placeholder (§n§) where each was; `literals[n]` is its text as written.
+ */
+function setAside(src) {
+  const literals = [];
+  let code = '';
+  const keep = (text) => {
+    code += `§${literals.push(text) - 1}§`;
+  };
+  const afterWord = () => /[A-Za-z0-9_$]$/.test(code);
+  let i = 0;
+  while (i < src.length) {
+    if (src.startsWith('--', i)) {
+      const end = src.indexOf('\n', i);
+      i = end === -1 ? src.length : end;
+      code += ' ';
+    } else if (src.startsWith('/*', i)) {
+      let depth = 0;
+      do {
+        if (src.startsWith('/*', i)) (depth += 1), (i += 2);
+        else if (src.startsWith('*/', i)) (depth -= 1), (i += 2);
+        else i += 1;
+      } while (depth > 0 && i < src.length);
+      code += ' ';
+    } else if (src[i] === '$' && !afterWord() && /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.test(src.slice(i))) {
+      const [tag] = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(src.slice(i));
+      const close = src.indexOf(tag, i + tag.length);
+      const end = close === -1 ? src.length : close + tag.length;
+      keep(src.slice(i, end));
+      i = end;
+    } else if (src[i] === "'" || src[i] === '"' || (/[eE]/.test(src[i]) && src[i + 1] === "'" && !afterWord())) {
+      const escapes = src[i] !== "'" && src[i] !== '"';
+      const quote = escapes ? "'" : src[i];
+      let j = i + (escapes ? 2 : 1);
+      for (; j < src.length; j += 1) {
+        if (escapes && src[j] === '\\') j += 1;
+        else if (src[j] === quote && src[j + 1] === quote) j += 1;
+        else if (src[j] === quote) break;
+      }
+      keep(src.slice(i, j + 1));
+      i = j + 1;
+    } else {
+      code += src[i];
+      i += 1;
+    }
+  }
+  return { code, literals };
 }
 
+const TOKEN = /\s*(?:(§(\d+)§)|([A-Za-z_][A-Za-z0-9_$]*)|(:=|[=,()])|(\S))/y;
+
+/** The tokens of a piece of set-aside code: literals (with their text as written), words and the rest. */
+function tokensOf(code, literals) {
+  const tokens = [];
+  TOKEN.lastIndex = 0;
+  for (let m = TOKEN.exec(code); m && m[0].trim(); m = TOKEN.exec(code)) {
+    if (m[1]) tokens.push({ kind: 'literal', text: literals[Number(m[2])] });
+    else if (m[3]) tokens.push({ kind: 'word', text: m[3], word: m[3].toLowerCase() });
+    else tokens.push({ kind: 'mark', text: m[4] ?? m[5] });
+  }
+  return tokens;
+}
+
+const LEVELS = new Set(['debug', 'log', 'info', 'notice', 'warning', 'exception']);
+
+/**
+ * What one RAISE says, in each of its shapes (the PostgreSQL manual, "Errors and Messages"):
+ *   raise [level] 'format' [, expression ...] [using option = expression, ...]
+ *   raise [level] condition_name [using ...]
+ *   raise [level] sqlstate 'code' [using ...]
+ *   raise [level] using option = expression, ...
+ *   raise                                   (in a handler: raise again what it caught)
+ * With no level, the level is exception. Keywords and option names in any case, = or :=, any spacing.
+ */
+function readRaise(tokens) {
+  if (tokens.length === 0) return { again: true };
+  let k = 0;
+  const isWord = (word) => tokens[k]?.kind === 'word' && tokens[k].word === word;
+  const raise = { level: 'exception', options: {} };
+  if (tokens[k]?.kind === 'word' && LEVELS.has(tokens[k].word)) raise.level = tokens[(k += 1) - 1].word;
+  if (k < tokens.length && !isWord('using')) {
+    if (isWord('sqlstate')) {
+      raise.sqlstate = tokens[k + 1];
+      k += 2;
+    } else if (tokens[k].kind === 'literal') {
+      raise.format = tokens[k].text;
+      k += 1;
+      let depth = 0;
+      for (; k < tokens.length && !(depth === 0 && isWord('using')); k += 1) {
+        if (tokens[k].text === '(') depth += 1;
+        else if (tokens[k].text === ')') depth -= 1;
+        else if (tokens[k].text === ',' && depth === 0) raise.formatArguments = true;
+      }
+    } else if (tokens[k].kind === 'word') {
+      raise.condition = tokens[k].text;
+      k += 1;
+    }
+  }
+  if (isWord('using')) {
+    k += 1;
+    while (k < tokens.length) {
+      const name = tokens[k].word ?? tokens[k].text;
+      k += 2; // the option's name, and = or :=
+      const value = [];
+      for (let depth = 0; k < tokens.length && !(depth === 0 && tokens[k].text === ','); k += 1) {
+        if (tokens[k].text === '(') depth += 1;
+        else if (tokens[k].text === ')') depth -= 1;
+        value.push(tokens[k]);
+      }
+      k += 1;
+      raise.options[name] = value;
+    }
+  }
+  return raise;
+}
+
+const constant = (value) => (value?.length === 1 && value[0].kind === 'literal' ? value[0].text : null);
+const asText = (value) => value?.map((token) => token.text).join(' ') ?? null;
+const CONDITION = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HANDLER = /\bwhen\s+((?:sqlstate\s+§\d+§|[A-Za-z_][A-Za-z0-9_]*)(?:\s+or\s+(?:sqlstate\s+§\d+§|[A-Za-z_][A-Za-z0-9_]*))*)\s+then\b/gi;
+
+/** The code PostgreSQL itself gives a raise written this way: it is raised, once, in a DO block of its own. */
+const sqlstates = new Map();
+async function sqlstateOf(statement) {
+  if (!sqlstates.has(statement)) {
+    sqlstates.set(statement, (await errorOf(db.admin(`do $probe$ begin ${statement}; end $probe$`))).code);
+  }
+  return sqlstates.get(statement);
+}
+
+/**
+ * Every raise in a function's source, whatever its shape, with the code it raises as PostgreSQL works it
+ * out: `code` (null when the code is an expression worked out as it runs), or `codes` for a raise in a
+ * handler, one for each condition it catches (undefined for `others`: whatever was caught). Notices and
+ * warnings are left out: they do not stop the function. An ASSERT is a raise of P0004 when it fails.
+ * `message` and `hint` are as written.
+ */
+async function raisesOf(src) {
+  const { code, literals } = setAside(src);
+  const found = [];
+  for (const statement of code.matchAll(/\b(raise|assert)\b([^;]*);/gi)) {
+    const text = (statement[0].replace(/§(\d+)§/g, (_, n) => literals[Number(n)])).replace(/\s+/g, ' ').trim();
+    if (statement[1].toLowerCase() === 'assert') {
+      if (/(^|[;(]|\b(then|else|loop|begin))\s*$/i.test(code.slice(0, statement.index))) found.push({ code: await sqlstateOf('assert false'), message: null, hint: null, text });
+      continue;
+    }
+    const raise = readRaise(tokensOf(statement[2], literals));
+    if (raise.again) {
+      // The handler it is in: the last "when ... then" after the last "exception when" before it.
+      const before = code.slice(0, statement.index);
+      const block = [...before.matchAll(/\bexception\s+when\b/gi)].at(-1);
+      const handler = block ? [...before.slice(block.index).matchAll(HANDLER)].at(-1) : null;
+      const codes = [];
+      for (const condition of handler ? handler[1].split(/\s+or\s+/i) : ['others']) {
+        const sqlstate = /^sqlstate\s+§(\d+)§$/i.exec(condition);
+        if (sqlstate) codes.push(await sqlstateOf(`raise sqlstate ${literals[Number(sqlstate[1])]}`));
+        else if (condition.toLowerCase() === 'others') codes.push(undefined);
+        else codes.push(await sqlstateOf(`raise ${condition}`));
+      }
+      found.push({ codes, code: codes.length === 1 ? codes[0] : null, message: null, hint: null, text: `${text} (in a handler for ${handler?.[1] ?? 'others'})` });
+      continue;
+    }
+    if (raise.level !== 'exception') continue;
+    let sqlstate;
+    if (raise.condition) sqlstate = CONDITION.test(raise.condition) ? await sqlstateOf(`raise ${raise.condition}`) : null;
+    else if (raise.sqlstate) sqlstate = raise.sqlstate.kind === 'literal' ? await sqlstateOf(`raise sqlstate ${raise.sqlstate.text}`) : null;
+    else if (raise.options.errcode) sqlstate = constant(raise.options.errcode) ? await sqlstateOf(`raise exception using errcode = ${constant(raise.options.errcode)}`) : null;
+    else sqlstate = await sqlstateOf("raise exception 'No code of its own.'");
+    const message = raise.options.message ? constant(raise.options.message) ?? asText(raise.options.message) : raise.format && !raise.formatArguments ? raise.format : raise.format ? text : null;
+    found.push({ code: sqlstate, message, hint: raise.options.hint ? constant(raise.options.hint) ?? asText(raise.options.hint) : null, text });
+  }
+  return found;
+}
+
+// Every shape a raise can take in PL/pgSQL, and the code PostgreSQL itself gives it: the reader below must
+// see each one, so that no refusal gets past the rule for being written another way.
+const SHAPES = [
+  ["raise exception using errcode = 'PT404', message = 'No such company.';", ['PT404']],
+  ["RAISE EXCEPTION USING MESSAGE='Already decided.', ERRCODE='PT409', HINT='Reload.';", ['PT409']],
+  ["raise exception using\n  errcode\t:=  '22023',\n  message = 'Type a name.';", ['22023']],
+  ["raise exception using errcode = 'no_data_found', message = 'Gone.';", ['P0002']],
+  ["raise exception using errcode = 'pt404', message = 'Lower case is a condition name, not a code.';", ['42704']],
+  ["raise sqlstate 'P0002' using message = 'Gone.';", ['P0002']],
+  ["raise exception sqlstate '55000';", ['55000']],
+  ['raise no_data_found;', ['P0002']],
+  ["Raise Exception Object_Not_In_Prerequisite_State using message = 'Not now.';", ['55000']],
+  ["raise 'Nothing for %.', who;", ['P0001']],
+  ["raise exception 'Nothing here.' using errcode = 'PT404';", ['PT404']],
+  ["raise exception using message = 'No code at all.';", ['P0001']],
+  ["raise exception using errcode = chosen, message = 'A code worked out when it runs.';", [null]],
+  ["raise notice 'Only a notice.'; raise warning using message = 'Only a warning.'; raise debug 'x'; raise log 'x'; raise info 'x';", []],
+  ["-- raise no_data_found;\n/* raise sqlstate 'P0002'; */ perform 'raise sqlstate ''P0002'';', $q$raise no_data_found;$q$, E'raise \\' no_data_found;';", []],
+  ['begin insert into t values (1); exception when unique_violation then raise; end;', ['23505']],
+  ['begin perform 1; exception when check_violation or sqlstate \'23505\' then raise; end;', ['23514', '23505']],
+  ['begin perform 1; exception when others then raise; end;', [undefined]],
+  ["assert n > 0, 'n is never zero';", ['P0004']],
+];
+
 describe('refusals', () => {
-  it('are each a code PostgREST answers with a 4xx, never one it answers with a 5xx', async () => {
+  it('are read whatever their shape: each raise, with the code PostgreSQL gives it', async () => {
+    for (const [src, codes] of SHAPES) {
+      const read = await raisesOf(src);
+      assert.deepEqual(read.map((raise) => raise.codes ?? [raise.code]).flat(), codes, src);
+    }
+  });
+
+  it('are each a code PostgREST answers with a 4xx, never one it answers with a 5xx', async (t) => {
     let raises = 0;
+    const seen = {};
     for (const fn of await publicSources()) {
-      for (const raise of raisesOf(fn.src)) {
+      for (const raise of await raisesOf(fn.src)) {
         raises += 1;
-        if (raise.code === TRY_AGAIN[fn.name]) continue;
-        assert.ok(Object.hasOwn(ANSWERED_WITH_4XX, raise.code), `${fn.name} raises ${raise.code}, which PostgREST does not answer with a 4xx: ${raise.text}`);
+        for (const code of raise.codes ?? [raise.code]) {
+          seen[code] = (seen[code] ?? 0) + 1;
+          if (code === TRY_AGAIN[fn.name]) continue;
+          const what = code === undefined ? 'whatever it caught' : code === null ? 'a code worked out as it runs' : code;
+          assert.ok(Object.hasOwn(ANSWERED_WITH_4XX, code), `${fn.name} raises ${what}, which PostgREST does not answer with a 4xx: ${raise.text}`);
+        }
       }
     }
-    assert.ok(raises >= 70, `only ${raises} raises were read: the reader has missed some`);
+    t.diagnostic(`${raises} raises read: ${JSON.stringify(seen)}`);
+    assert.ok(raises >= 76, `only ${raises} raises were read: the reader has missed some`);
   });
 
   it('keep their words: not found is PT404 and not in a state to do that is PT409', async () => {
     const found = {};
     for (const fn of await publicSources()) {
-      const these = raisesOf(fn.src).filter((raise) => raise.code === NOT_FOUND || raise.code === WRONG_STATE);
+      const these = (await raisesOf(fn.src)).filter((raise) => raise.code === NOT_FOUND || raise.code === WRONG_STATE);
       if (these.length) found[fn.name] = these.map((raise) => [raise.code, unquote(raise.message), ...(raise.hint ? [unquote(raise.hint)] : [])]);
     }
     assert.deepEqual(found, NOT_FOUND_OR_WRONG_STATE);
@@ -260,13 +476,13 @@ describe('refusals', () => {
   it('with a PT code, have a message that is a constant on one line: PostgREST writes it into the HTTP status line', async () => {
     let checked = 0;
     for (const fn of await publicSources()) {
-      for (const raise of raisesOf(fn.src).filter((one) => /^PT/.test(one.code ?? ''))) {
+      for (const raise of (await raisesOf(fn.src)).filter((one) => /^PT/.test(one.code ?? ''))) {
         checked += 1;
         // Printable ASCII only: a line break in it would end the status line and start a header of the caller's choosing.
         assert.match(raise.message ?? '', /^'(?:[\x20-\x26\x28-\x7e]|'')+'$/, `${fn.name}: ${raise.text}`);
       }
     }
-    assert.ok(checked >= 17, `only ${checked} PT codes were read`);
+    assert.ok(checked >= 19, `only ${checked} PT codes were read`);
   });
 });
 

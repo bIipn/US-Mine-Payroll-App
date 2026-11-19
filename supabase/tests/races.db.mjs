@@ -20,6 +20,9 @@
 //    join_company's reads was half seen: a removed person claimed a coworker's
 //    row by name, or an active member was left a fresh pending request.
 //  * a row renamed while its old name is typed is not claimed under its new name.
+//  * one account starting two companies at once at the edge of its limit
+//    (3 in any 24 hours): the second waits for the first, then counts it, so
+//    the two cannot both slip under the limit.
 //
 // All names are made up.
 
@@ -257,5 +260,63 @@ describe('a row renamed while its old name is typed', { skip: skipWithoutServer 
     assert.deepEqual(outcome.rows[0].result, { status: 'pending', company_name: 'Test Pit A', reason: 'not_on_roster' });
     const [after] = await db.adminRows('select first_name, last_name, user_id from public.roster where id = $1', [row.id]);
     assert.deepEqual(after, { first_name: 'Pat', last_name: 'Cole', user_id: null }, 'the row now named Pat Cole went to the account that typed Bo Ellison');
+  });
+});
+
+describe('one account starting two companies at once, at the edge of its limit', { skip: skipWithoutServer }, () => {
+  const START = "select * from public.create_company(name => $1, state => 'CA', timezone => null, first_name => 'Sam', last_name => 'Ortiz')";
+  const started = async (account) => (await db.adminRows('select count(*)::int as n from public.companies where created_by = $1', [account]))[0].n;
+
+  /** An account that has started two companies today: one more is its last for 24 hours. */
+  async function oneLeft() {
+    const account = await db.newAccount();
+    for (const name of ['Test Pit A', 'Test Pit B']) await db.asAccount(account, START, [name]);
+    return account;
+  }
+
+  it('cannot slip under it twice: the second waits for the first, then counts it and is refused (PT429)', async () => {
+    const account = await oneLeft();
+    const first = await db.request(account);
+    assert.equal((await first.query(START, ['Test Pit C'])).rows.length, 1);
+    const second = await db.request(account);
+    const { settled } = await second.start(START, ['Test Pit D']);
+    const [{ waiting }] = await db.adminRows("select count(*)::int as waiting from pg_stat_activity where pid = $1 and wait_event_type = 'Lock'", [second.pid]);
+    assert.equal(waiting, 1, 'the second waits for the first');
+    await first.commit();
+    const outcome = await settled;
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, 'PT429');
+    assert.match(outcome.message, /3 companies in the last 24 hours/);
+    await second.rollback();
+    await first.end();
+    await second.end();
+    assert.equal(await started(account), 3);
+  });
+
+  it('lets the second through when the first is rolled back', async () => {
+    const account = await oneLeft();
+    const first = await db.request(account);
+    await first.query(START, ['Test Pit C']);
+    const second = await db.request(account);
+    const { settled } = await second.start(START, ['Test Pit D']);
+    await first.rollback();
+    const outcome = await finish(second, await settled);
+    assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+    await first.end();
+    await second.end();
+    assert.equal(await started(account), 3);
+  });
+
+  it('does not hold up another account', async () => {
+    const account = await oneLeft();
+    const first = await db.request(account);
+    await first.query(START, ['Test Pit C']);
+    const other = await db.newAccount();
+    const elsewhere = await db.request(other);
+    assert.equal((await elsewhere.query(START, ['Test Pit E'])).rows.length, 1);
+    await elsewhere.commit();
+    await first.commit();
+    await first.end();
+    await elsewhere.end();
   });
 });

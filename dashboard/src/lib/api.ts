@@ -2,7 +2,7 @@ import type { Change } from '@app/domain/sync';
 import type { Role } from '@app/domain/types';
 
 import { billingAnswer, type BillingView } from './billing';
-import { authProblem, dataProblem, isNotFound, Problem } from './errors';
+import { authProblem, companyLimitWords, dataProblem, isNotFound, isTooMany, Problem } from './errors';
 import type { Deletion, VersionRow } from './history';
 import type {
   CompanyChoice,
@@ -90,7 +90,12 @@ export async function createCompany(input: NewCompany): Promise<{ companyId: str
     last_name: input.lastName,
     title: input.title || null,
   });
-  if (error) throw dataProblem(error, 'Starting the company');
+  if (error) {
+    // One of the limits on how many companies an account starts: the hint says which.
+    const { code, hint, message } = error as { code?: string; hint?: unknown; message?: unknown };
+    if (isTooMany(code)) throw new Problem(companyLimitWords(hint, message), code);
+    throw dataProblem(error, 'Starting the company');
+  }
   const row = (Array.isArray(data) ? data[0] : data) as { company_id: string; join_code: string } | undefined;
   if (!row) throw new Problem('The server did not say the company was made. Reload the page to see whether it was.');
   return { companyId: row.company_id, joinCode: row.join_code };

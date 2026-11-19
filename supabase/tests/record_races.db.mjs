@@ -12,6 +12,12 @@
 //    second call is told to try again (40001) rather than counting from an
 //    older snapshot;
 //  * two companies' calls not waiting for each other.
+//  * the one 40001 push_records raises itself ("Another phone was sending the
+//    same record. Try again."): a record written by something other than
+//    push_records, as the owner can in the SQL editor, between push_records'
+//    read and its write. PostgREST retries a 40001 with no limit, so this
+//    shows the condition does not last: the call made again, as PostgREST
+//    makes it, finds the record and answers as for any record already there.
 //
 // All names are made up.
 
@@ -125,6 +131,80 @@ describe('two companies at once', { skip: skipWithoutServer }, () => {
     assert.equal(result.rows[0].result.accepted.length, 1);
     await second.commit();
     await first.commit();
+    await first.end();
+    await second.end();
+  });
+});
+
+describe('a record written by the owner while push_records is making it', { skip: skipWithoutServer }, () => {
+  const TRY_AGAIN = 'Another phone was sending the same record. Try again.';
+  const OWNERS = "insert into public.records (company_id, kind, id, rev, data, seq) values ($1, 'shift', $2, 'r-owner', $3::jsonb, 1000000)";
+
+  /** push_records waits on the owner's new row, which it could not see when it read; the owner then commits or rolls back. */
+  async function sentWhileTheOwnerWrites(co, id, ending) {
+    const owner = await db.asOwner();
+    await owner.query(OWNERS, [co.id, id, JSON.stringify(shift(id, 'emp_owner'))]);
+    const sending = await db.request(co.crew);
+    const { settled } = await sending.start(PUSH, [co.id, JSON.stringify([change(id, shift(id))])]);
+    const [{ waiting }] = await db.adminRows("select count(*)::int as waiting from pg_stat_activity where pid = $1 and wait_event_type = 'Lock'", [sending.pid]);
+    assert.equal(waiting, 1, 'push_records waits on the row the owner is writing');
+    await (ending === 'commit' ? owner.commit() : owner.rollback());
+    const outcome = await settled;
+    await (outcome.ok ? sending.commit() : sending.rollback());
+    await owner.end();
+    await sending.end();
+    return outcome;
+  }
+
+  /** The same call again, in a transaction of its own, as PostgREST makes it after a 40001. */
+  async function sentAgain(co, id) {
+    const again = await db.request(co.crew);
+    const outcome = await again.query(PUSH, [co.id, JSON.stringify([change(id, shift(id))])]);
+    await again.commit();
+    await again.end();
+    return outcome.rows[0].result;
+  }
+
+  it('is the one time it says "try again" (40001), and the call made again is answered at once', async () => {
+    const co = await company('Test Pit D');
+    const id = newId();
+    const outcome = await sentWhileTheOwnerWrites(co, id, 'commit');
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, '40001');
+    assert.equal(outcome.message, TRY_AGAIN);
+
+    // Made again, it reads the owner's record and sets the phone's copy aside, as for any record it did not make.
+    const theirs = change(id, shift(id));
+    assert.deepEqual(await sentAgain(co, id), { accepted: [], ignored: [{ key: theirs.key, rev: theirs.rev, reason: 'taken' }] });
+    // And again: nothing lasting is left to raise on.
+    assert.deepEqual(await sentAgain(co, id), { accepted: [], ignored: [{ key: theirs.key, rev: theirs.rev, reason: 'taken' }] });
+    const [{ n }] = await db.adminRows("select count(*)::int as n from public.records where company_id = $1 and kind = 'shift' and id = $2", [co.id, id]);
+    assert.equal(n, 1);
+  });
+
+  it('is not raised when the owner rolls back: the phone\'s record is written', async () => {
+    const co = await company('Test Pit E');
+    const id = newId();
+    const outcome = await sentWhileTheOwnerWrites(co, id, 'rollback');
+    assert.equal(outcome.ok, true, outcome.message);
+    const theirs = change(id, shift(id));
+    assert.deepEqual(outcome.rows[0].result, { accepted: [{ key: theirs.key, rev: theirs.rev }], ignored: [] });
+  });
+
+  it('is never raised by two phones making the same record: the second waits for the first and finds it', async () => {
+    // As "making the same new record" above: the company's counter makes them take turns before either reads.
+    const co = await company('Test Pit F');
+    const id = newId();
+    const first = await db.request(co.crew);
+    await first.query(PUSH, [co.id, JSON.stringify([change(id, shift(id))])]);
+    const second = await db.request(co.crew);
+    const { settled } = await second.start(PUSH, [co.id, JSON.stringify([change(id, shift(id))])]);
+    await first.commit();
+    const outcome = await settled;
+    assert.equal(outcome.ok, true, outcome.message);
+    await second.commit();
+    const mine = change(id, shift(id));
+    assert.deepEqual(outcome.rows[0].result, { accepted: [{ key: mine.key, rev: mine.rev }], ignored: [] });
     await first.end();
     await second.end();
   });
