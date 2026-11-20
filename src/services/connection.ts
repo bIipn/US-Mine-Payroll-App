@@ -98,7 +98,7 @@ export function watchConnection(): () => void {
     if (key !== current) {
       current = key;
       if (!linked) setSyncTransport(null);
-      else if (ready) setSyncTransport(link.pushTransport(linked.id));
+      else if (ready) setSyncTransport(link.companyTransport(linked.id));
       else setSyncTransport(null, why);
     }
     if (linked && account && !sameAccount(linked, account)) verify(linked, account, false);

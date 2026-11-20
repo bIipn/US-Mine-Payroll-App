@@ -179,7 +179,7 @@ describe('sending what is waiting', () => {
 });
 
 describe('what a person is told about their records', () => {
-  const base: SyncStatus = { online: true, server: true, waiting: 0, sending: false, lastSentAt: null, failed: false, trouble: null, problem: null, stuck: 0 };
+  const base: SyncStatus = { online: true, server: true, waiting: 0, sending: false, lastSentAt: null, failed: false, trouble: null, problem: null, stuck: 0, notTaken: 0 };
   const at = () => '2:14 PM';
 
   it('says records stay on the phone when the build has no server, signal or not', () => {

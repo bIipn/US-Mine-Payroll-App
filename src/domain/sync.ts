@@ -414,26 +414,37 @@ export interface SendResult {
   stopped: boolean;
 }
 
-/** One call, given up on after `timeoutMs` or when `outer` is aborted. Either way the request itself is aborted too. */
-function pushOnce(transport: SyncTransport, part: readonly Change[], timeoutMs: number, outer?: AbortSignal) {
+/** A call that had no answer in time: it counts as not getting through, and was aborted. */
+export type TimedOut = SendError & { timedOut: true };
+export const timedOut = (error: unknown): error is TimedOut => !!error && typeof error === 'object' && (error as { timedOut?: unknown }).timedOut === true;
+
+/**
+ * One call to the server, given up on after `timeoutMs` or when `outer` is
+ * aborted. Either way the request itself is aborted too, and the call counts
+ * as not getting through.
+ */
+export function callWithin<T>(call: (signal?: AbortSignal) => Promise<T>, timeoutMs: number, outer?: AbortSignal): Promise<T> {
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
-  return new Promise<PushAnswer>((resolve, reject) => {
-    const giveUp = (why: string) => {
+  return new Promise<T>((resolve, reject) => {
+    const giveUp = (error: SendError) => {
       controller?.abort();
-      reject(sendError('unreachable', why));
+      reject(error);
     };
-    if (outer?.aborted) return giveUp('Stopped');
-    onAbort = () => giveUp('Stopped');
+    if (outer?.aborted) return giveUp(sendError('unreachable', 'Stopped'));
+    onAbort = () => giveUp(sendError('unreachable', 'Stopped'));
     outer?.addEventListener('abort', onAbort);
-    timer = setTimeout(() => giveUp('No answer from the server'), timeoutMs);
-    transport.push(part, controller?.signal).then(resolve, reject);
+    timer = setTimeout(() => giveUp(Object.assign(sendError('unreachable', 'No answer from the server'), { timedOut: true as const })), timeoutMs);
+    call(controller?.signal).then(resolve, reject);
   }).finally(() => {
     clearTimeout(timer);
     if (onAbort) outer?.removeEventListener('abort', onAbort);
   });
 }
+
+const pushOnce = (transport: SyncTransport, part: readonly Change[], timeoutMs: number, outer?: AbortSignal) =>
+  callWithin((signal) => transport.push(part, signal), timeoutMs, outer);
 
 /**
  * Send what is waiting, a batch at a time, noting each batch the server took
@@ -512,6 +523,8 @@ export interface SyncStatus {
   problem: string | null;
   /** Records the server will not take as they are. They stay on the phone. */
   stuck: number;
+  /** Changes the company would not take from this phone's sign-in (held, or passed over for its role). Counted apart from what waits. */
+  notTaken: number;
 }
 
 const records = (n: number) => `${n} ${n === 1 ? 'record' : 'records'}`;

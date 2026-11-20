@@ -9,7 +9,10 @@ import {
   pushTrouble,
   readCompanies,
   readJoinAnswer,
+  readCompanyRow,
   readPushAnswer,
+  readRows,
+  readStanding,
   readWaitingRequests,
   serverWords,
   type JoinAnswer,
@@ -281,43 +284,95 @@ export async function joinCompany(code: string, firstName: string, lastName: str
   }
 }
 
-// ---- Sending records ----------------------------------------------------------------------
+// ---- Sending and receiving records ----------------------------------------------------------
+
+type Answer = { data: unknown; error: unknown; status?: number };
+type Call = PromiseLike<Answer> & { abortSignal?(signal: AbortSignal): PromiseLike<Answer> };
 
 /**
- * Sends a batch of records to the company with push_records and answers with
- * what the server now has: what it took and what it will not take from this
- * account, both, so the phone stops sending either. Anything that goes wrong
- * throws, saying why (`SendTrouble`), and the round is tried again later.
- *
- * Nothing is sent without a session: with none, supabase-js would send the
- * call under the publishable key alone, and the server would turn it down.
+ * A session that can be used now, or a SendError saying why there is none. With
+ * no signal to refresh an expired one the call waits for signal; a session the
+ * server no longer takes means signing in again. Nothing is sent or read
+ * without one: supabase-js would make the call under the publishable key alone.
  */
-export function pushTransport(companyId: string): SyncTransport {
+async function usableSession() {
+  let found: Awaited<ReturnType<SupabaseClient['auth']['getSession']>>;
+  try {
+    found = await api().auth.getSession();
+  } catch (error) {
+    throw pushTrouble(problemOf(error));
+  }
+  if (!found.data.session) {
+    if (found.error && problemOf(found.error).name === 'AuthRetryableFetchError') throw pushTrouble(problemOf(found.error));
+    throw sendError('signed_out', 'You are signed out of the company server.');
+  }
+  return found.data.session;
+}
+
+/** The answer's data, or the SendError saying why there is none. The status is on the answer, not on its error: a server that is down says so with it. */
+async function answered(call: Call, signal?: AbortSignal): Promise<unknown> {
+  let answer: Answer;
+  try {
+    answer = await (signal && call.abortSignal ? call.abortSignal(signal) : call);
+  } catch (error) {
+    throw pushTrouble(problemOf(error));
+  }
+  if (answer.error) throw pushTrouble({ ...problemOf(answer.error), ...(answer.status ? { status: answer.status } : null) });
+  return answer.data;
+}
+
+/**
+ * The company's server, for the round in `sync.ts`: it sends a batch of records
+ * with push_records and answers what became of each; it reads the company's
+ * settings, roster, fleet and area sheets after a cursor with
+ * read_shared_records; it reads this phone's sign-in's own row of the roster
+ * (none: not on the roster); and it reads the company's own row, for a company
+ * that never sent its settings. Anything that goes wrong throws, saying why
+ * (`SendTrouble`), and the round is tried again later.
+ */
+export function companyTransport(companyId: string): SyncTransport {
   return {
     company: companyId,
     async push(changes, signal) {
-      // A session that can be used now. With no signal to refresh an expired one the call waits for
-      // signal; a session the server no longer takes means signing in again.
-      let found: Awaited<ReturnType<SupabaseClient['auth']['getSession']>>;
-      try {
-        found = await api().auth.getSession();
-      } catch (error) {
-        throw pushTrouble(problemOf(error));
-      }
-      if (!found.data.session) {
-        if (found.error && problemOf(found.error).name === 'AuthRetryableFetchError') throw pushTrouble(problemOf(found.error));
-        throw sendError('signed_out', 'You are signed out of the company server.');
-      }
-      let answer: { data: unknown; error: unknown; status?: number };
-      try {
-        const call = api().rpc('push_records', { company_id: companyId, changes });
-        answer = await (signal ? call.abortSignal(signal) : call);
-      } catch (error) {
-        throw pushTrouble(problemOf(error));
-      }
-      // The status is on the answer, not on its error: a server that is down says so with it.
-      if (answer.error) throw pushTrouble({ ...problemOf(answer.error), ...(answer.status ? { status: answer.status } : null) });
-      return readPushAnswer(answer.data, changes);
+      await usableSession();
+      return readPushAnswer(await answered(api().rpc('push_records', { company_id: companyId, changes }), signal), changes);
+    },
+    async pull(after, max, signal) {
+      await usableSession();
+      return readRows(await answered(api().rpc('read_shared_records', { company_id: companyId, after, max }), signal));
+    },
+    async standing(signal) {
+      const session = await usableSession();
+      const read = api().from('roster').select('first_name,last_name,role').eq('company_id', companyId).eq('user_id', session.user.id).maybeSingle();
+      return readStanding(await answered(read as unknown as Call, signal));
+    },
+    async companyRow(signal) {
+      await usableSession();
+      const read = api().from('companies').select('name,state,pay_period').eq('id', companyId).maybeSingle();
+      return readCompanyRow(await answered(read as unknown as Call, signal));
     },
   };
+}
+
+/** The transport's name before the phones received. */
+export const pushTransport = companyTransport;
+
+/**
+ * Whether this is the password of the company sign-in on this phone. Making a
+ * supervisor's account on a phone joined with a supervisor's sign-in needs it,
+ * to show the person is the sign-in's own. The password is sent to the server
+ * and dropped; the session stays the same account's.
+ */
+export async function checkPassword(email: string, password: string): Promise<Done> {
+  const address = email.trim().toLowerCase();
+  const noSignal = 'Making a supervisor’s account needs signal once, to check your company sign-in. Try again when you have signal.';
+  try {
+    const { data, error } = await api().auth.signInWithPassword({ email: address, password });
+    if (!error && data.session) return { ok: true };
+    const problem = problemOf(error);
+    if (problem.name === 'AuthRetryableFetchError' || problem.status === 0) return { ok: false, error: noSignal };
+    return { ok: false, error: `That is not the password for ${address}. Try again.` };
+  } catch {
+    return { ok: false, error: noSignal };
+  }
 }

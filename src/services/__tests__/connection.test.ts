@@ -5,9 +5,28 @@ const mockSignOut = jest.fn(async (_options?: unknown) => ({ error: null }));
 const mockRpc = jest.fn();
 const mockGetSession = jest.fn();
 let mockAuthEvent: (event: string, session: unknown) => void = () => undefined;
+/** Each sign-in's own row of the company's roster, by account; none is not on the roster. */
+const mockRosterRows: Record<string, { first_name: string; last_name: string; role: string }> = {
+  'u-avery': { first_name: 'Avery', last_name: 'Quill', role: 'supervisor' },
+  'u-blake': { first_name: 'Blake', last_name: 'Rook', role: 'employee' },
+};
+/** A read of one table, the way supabase-js chains it: the roster answers the account's own row. */
+const mockFrom = (table: string) => {
+  let user: string | undefined;
+  const chain: Record<string, unknown> = {
+    select: () => chain,
+    eq: (column: string, value: string) => ((column === 'user_id' ? (user = value) : null), chain),
+    maybeSingle: () => chain,
+    abortSignal: () => chain,
+    then: (ok: (v: unknown) => unknown, fail: (e: unknown) => unknown) =>
+      Promise.resolve({ data: table === 'roster' && user ? (mockRosterRows[user] ?? null) : null, error: null }).then(ok, fail),
+  };
+  return chain;
+};
 jest.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     rpc: mockRpc,
+    from: (table: string) => mockFrom(table),
     auth: {
       signOut: mockSignOut,
       getSession: mockGetSession,
@@ -97,6 +116,7 @@ function fakeServer({ hold = false, companies = [PIT_A] as { id: string; name: s
     const call = { then: answer.then.bind(answer), abortSignal: (signal: AbortSignal) => ((push && (push.signal = signal)), call) };
     let push: Push | null = null;
     if (fn === 'my_companies') resolve({ data: companies, error: null });
+    else if (fn === 'read_shared_records') resolve({ data: [], error: null });
     else if (fn === 'push_records') {
       push = {
         companyId: args.company_id,
@@ -111,8 +131,12 @@ function fakeServer({ hold = false, companies = [PIT_A] as { id: string; name: s
   return pushes;
 }
 
-const people = (n: number) =>
-  Array.from({ length: n }, (_, i) => ({ id: `emp-${i}`, firstName: `Test${i}`, lastName: 'Person', role: 'employee' as const, active: true }));
+/**
+ * Records this phone made: shifts of a made-up person. A connected phone sends what it makes, and
+ * never a person (people change on the dashboard).
+ */
+const shiftsOf = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({ id: `sh-${i}`, employeeId: 'emp-test', clockIn: { at: 1_763_300_000_000 + i * 1000 }, clockOut: { at: 1_763_300_600_000 + i * 1000 }, lunches: [], breaks: [] }));
 
 const warned = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -220,6 +244,7 @@ describe('a build that connects', () => {
     const status = () => app.sync.useSyncStatus.getState();
     const { useStore } = app.store;
     useStore.getState().ensureSeeded();
+    useStore.setState({ shifts: shiftsOf(2) });
 
     // Connected before the app was closed: it sends again as soon as it starts.
     useStore.getState().connectCompany(PIT_A, AVERY);
@@ -337,6 +362,7 @@ describe('a build that connects', () => {
     const app2 = build(CONNECTS);
     const pushes2 = fakeServer({ companies: [{ ...PIT_A, role: 'employee' }] });
     app2.store.useStore.getState().ensureSeeded();
+    app2.store.useStore.setState({ shifts: shiftsOf(1) });
     app2.store.useStore.getState().connectCompany(PIT_A, AVERY);
     const stopSync2 = app2.sync.startSync();
     const stop2 = app2.connection.watchConnection();
@@ -354,7 +380,7 @@ describe('disconnecting while records are on their way', () => {
     const pushes = fakeServer({ hold: true });
     const { useStore } = app.store;
     useStore.getState().ensureSeeded();
-    useStore.setState({ employees: [...useStore.getState().employees, ...people(n)] });
+    useStore.setState({ shifts: shiftsOf(n) });
     const stopSync = app.sync.startSync();
     useStore.getState().connectCompany(PIT_A, AVERY);
     const stopLink = app.connection.watchConnection();

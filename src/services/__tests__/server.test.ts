@@ -15,7 +15,19 @@ const mockAuth = {
   resend: jest.fn(),
   resetPasswordForEmail: jest.fn(),
 };
-const mockCreateClient = jest.fn((..._args: unknown[]) => ({ rpc: mockRpc, auth: mockAuth }));
+/** A read of one table: each call of the chain is noted, and the read answers with `mockTable`'s answer. */
+const mockReads: { table: string; calls: [string, unknown[]][]; signal?: AbortSignal }[] = [];
+let mockTable: (table: string) => { data: unknown; error: unknown; status?: number } = () => ({ data: null, error: null });
+const mockFrom = jest.fn((table: string) => {
+  const read: (typeof mockReads)[number] = { table, calls: [] };
+  mockReads.push(read);
+  const chain: Record<string, unknown> = {};
+  for (const step of ['select', 'eq', 'maybeSingle']) chain[step] = (...args: unknown[]) => (read.calls.push([step, args]), chain);
+  chain.abortSignal = (signal: AbortSignal) => ((read.signal = signal), chain);
+  chain.then = (ok: (v: unknown) => unknown, fail: (e: unknown) => unknown) => Promise.resolve(mockTable(table)).then(ok, fail);
+  return chain;
+});
+const mockCreateClient = jest.fn((..._args: unknown[]) => ({ rpc: mockRpc, auth: mockAuth, from: mockFrom }));
 jest.mock('@supabase/supabase-js', () => ({ createClient: (...args: unknown[]) => mockCreateClient(...args) }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -249,5 +261,68 @@ describe('the requests that wait', () => {
     mockRpc.mockResolvedValueOnce({ data: [{ id: 'r1', company_id: 'c-a', first_name: 'Blake', last_name: 'Rook', status: 'pending', created_at: '2026-11-12T14:00:00Z' }], error: null });
     expect(await server.myJoinRequests()).toMatchObject({ ok: true, requests: [{ id: 'r1', companyId: 'c-a' }] });
     expect(mockRpc).toHaveBeenCalledWith('my_join_requests');
+  });
+});
+
+describe('reading the company’s records', () => {
+  beforeEach(() => {
+    mockReads.length = 0;
+    mockTable = () => ({ data: null, error: null });
+  });
+
+  it('reads the four kinds after the cursor, through read_shared_records', async () => {
+    const row = { kind: 'equipment', id: 'eq_t14', rev: 'r1', seq: 8, deleted: false, data: { id: 'eq_t14' } };
+    mockRpc.mockResolvedValueOnce({ data: [row], error: null });
+    const link = server.companyTransport('c-a');
+    expect(await link.pull!(7, 200)).toEqual([row]);
+    expect(mockRpc).toHaveBeenCalledWith('read_shared_records', { company_id: 'c-a', after: 7, max: 200 });
+  });
+
+  it('says MineMuster stopped for the company, and reads nothing without a session', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: { code: 'PT402', message: 'MineMuster is not active for this company.' }, status: 402 });
+    await expect(server.companyTransport('c-a').pull!(0, 200)).rejects.toMatchObject({ trouble: 'closed' });
+    mockAuth.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    await expect(server.companyTransport('c-a').pull!(0, 200)).rejects.toMatchObject({ trouble: 'signed_out' });
+    await expect(server.companyTransport('c-a').standing!()).rejects.toMatchObject({ trouble: 'signed_out' });
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the sign-in’s own row of the roster, and none as not on the roster', async () => {
+    mockTable = () => ({ data: { first_name: 'Avery', last_name: 'Quill', role: 'supervisor' }, error: null });
+    const stop = new AbortController();
+    expect(await server.companyTransport('c-a').standing!(stop.signal)).toEqual({ role: 'supervisor', name: { firstName: 'Avery', lastName: 'Quill' } });
+    expect(mockReads[0]).toMatchObject({ table: 'roster', signal: stop.signal });
+    expect(mockReads[0].calls).toEqual([
+      ['select', ['first_name,last_name,role']],
+      ['eq', ['company_id', 'c-a']],
+      ['eq', ['user_id', AVERY.id]],
+      ['maybeSingle', []],
+    ]);
+    mockTable = () => ({ data: null, error: null });
+    expect(await server.companyTransport('c-a').standing!()).toBeNull();
+    mockTable = () => ({ data: null, error: { message: 'TypeError: Failed to fetch' } });
+    await expect(server.companyTransport('c-a').standing!()).rejects.toMatchObject({ trouble: 'unreachable' });
+  });
+
+  it('reads the company’s own row', async () => {
+    mockTable = () => ({ data: { name: 'Test Pit A', state: 'NV', pay_period: null }, error: null });
+    expect(await server.companyTransport('c-a').companyRow!()).toEqual({ name: 'Test Pit A', state: 'NV', pay: null });
+    expect(mockReads[0].table).toBe('companies');
+    expect(mockReads[0].calls).toEqual([['select', ['name,state,pay_period']], ['eq', ['id', 'c-a']], ['maybeSingle', []]]);
+  });
+});
+
+describe('checking the company sign-in’s password', () => {
+  it('says whether it is right, and asks for signal when the server cannot be reached', async () => {
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: sessionOf(AVERY), user: AVERY }, error: null });
+    expect(await server.checkPassword('avery@example.com', 'right-password')).toEqual({ ok: true });
+    expect(mockAuth.signInWithPassword).toHaveBeenCalledWith({ email: 'avery@example.com', password: 'right-password' });
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: { name: 'AuthApiError', code: 'invalid_credentials', status: 400, message: 'Invalid login credentials' } });
+    expect(await server.checkPassword('avery@example.com', 'wrong')).toEqual({ ok: false, error: 'That is not the password for avery@example.com. Try again.' });
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: offline });
+    expect(await server.checkPassword('avery@example.com', 'x')).toEqual({
+      ok: false,
+      error: 'Making a supervisor’s account needs signal once, to check your company sign-in. Try again when you have signal.',
+    });
   });
 });

@@ -279,6 +279,8 @@ interface Actions {
   takeCompanyRow: (ctx: ReceiveContext, row: CompanyRow) => boolean;
   /** At start-up: read the company's records again from the beginning when some could not be read. */
   readUnreadableAgain: () => void;
+  /** The rows the next page asks for: halved after a page that had no answer in time, doubled after a quick full one. */
+  setReceivePageSize: (ctx: ReceiveContext, size: number) => void;
   /** Before a call goes: note the versions of the four kinds it carries, so their own write is known when it comes back. */
   markSending: (changes: readonly Change[], companyId: string) => void;
   /** Changes the server would not take from this phone's sign-in: kept, not sent again at that version, and not counted as sent. */
@@ -1259,6 +1261,12 @@ export const useStore = create<Store>()(
           const pay = usablePay(row.pay);
           set({ settings: { ...settings, company: { ...settings.company, name: clean(row.name), state: row.state, pay } } });
           return true;
+        },
+
+        setReceivePageSize: (ctx, size) => {
+          const r = receivingFor(ctx);
+          const pageSize = Math.max(1, Math.min(500, Math.round(size)));
+          if (r && r.pageSize !== pageSize) set({ receiving: { ...r, pageSize } });
         },
 
         readUnreadableAgain: () => {
