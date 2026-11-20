@@ -212,3 +212,52 @@ export function withBuildRoster(employees: Employee[], named: RosterEntry[], own
     : named;
   return withOwner(withRoster(employees, people), owner);
 }
+
+// ---- What the store and the dashboard's Roster page share ---------------------------------------------
+
+/**
+ * A person added to the roster, or a person taken off it brought back under
+ * the same id (their payroll ID and records stay theirs), or what is wrong.
+ * The store and the dashboard's Roster page add people through here.
+ */
+export function addedPerson(
+  employees: readonly Employee[],
+  firstName: string,
+  lastName: string,
+  role: Role,
+  title: string | undefined,
+  id: string,
+): { ok: true; employee: Employee; returning: boolean } | { ok: false; error: string } {
+  const first = titleCase(firstName);
+  const last = titleCase(lastName);
+  if (!first || !last) return { ok: false, error: 'Enter a first and last name.' };
+  const existing = employees.find((e) => sameName(e, first, last));
+  if (existing?.active) return { ok: false, error: `${first} ${last} is already on the roster.` };
+  const typed = title && cleanText(title) ? cleanText(title) : undefined;
+  if (existing) return { ok: true, returning: true, employee: { ...existing, active: true, role, ...(typed ? { title: typed } : null) } };
+  return { ok: true, returning: false, employee: { id, firstName: first, lastName: last, role, title: typed, active: true } };
+}
+
+/** What is wrong with a payroll ID for this person, or undefined. An empty one takes the ID off. */
+export function payrollIdProblem(employees: readonly Employee[], employeeId: string, payrollId: string): string | undefined {
+  const id = payrollId.trim();
+  if (!id) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,19}$/.test(id)) {
+    return 'A payroll ID is up to 20 letters and numbers. A dash, dot, slash or space between them is fine.';
+  }
+  const taken = employees.find((e) => e.id !== employeeId && e.payrollId?.toLowerCase() === id.toLowerCase());
+  return taken ? `${taken.firstName} ${taken.lastName} already has payroll ID ${id}.` : undefined;
+}
+
+/**
+ * The person in the app a row of the sign-in roster is for: the active person
+ * whose name is the row's exactly, else the one findOnRoster finds among the
+ * active people, else nobody. Never a person taken off the roster.
+ */
+export function personForRow<T extends Employee>(employees: readonly T[], row: PersonName): T | undefined {
+  const active = employees.filter((e) => e.active);
+  const exact = active.find((e) => sameName(e, row.firstName, row.lastName));
+  if (exact) return exact;
+  const hit = findOnRoster(active, row.firstName, row.lastName);
+  return hit && 'person' in hit ? hit.person : undefined;
+}

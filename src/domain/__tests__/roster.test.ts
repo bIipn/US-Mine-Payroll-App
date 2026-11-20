@@ -1,4 +1,4 @@
-import { findOnRoster, keptApart, parsePersonName, parseRoster, SPARE_LAST_NAMES, startsWithSamples, withOwner, withRoster } from '../roster';
+import { addedPerson, findOnRoster, keptApart, parsePersonName, parseRoster, payrollIdProblem, personForRow, SPARE_LAST_NAMES, startsWithSamples, withOwner, withRoster } from '../roster';
 import type { Employee } from '../types';
 
 describe('parsePersonName', () => {
@@ -229,5 +229,67 @@ describe('startsWithSamples', () => {
   it('goes by who is named when the setting says anything else', () => {
     expect(startsWithSamples('yes', 3)).toBe(false);
     expect(startsWithSamples('yes', 0)).toBe(true);
+  });
+});
+
+// ---- What the store and the dashboard's Roster page share -----------------------------------------------
+
+describe('addedPerson', () => {
+  const lee: Employee = { id: 'emp_lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true, title: 'Loader operator', payrollId: '004417' };
+  const kit: Employee = { id: 'emp_kit', firstName: 'Kit', lastName: 'Marlow', role: 'employee', active: false, payrollId: '1100' };
+
+  it('adds a new person under the id it is given, the name in capitals and the title closed up', () => {
+    expect(addedPerson([lee], 'dana', ' fry ', 'supervisor', '  Shift   foreman ', 'emp_new')).toEqual({
+      ok: true,
+      returning: false,
+      employee: { id: 'emp_new', firstName: 'Dana', lastName: 'Fry', role: 'supervisor', title: 'Shift foreman', active: true },
+    });
+    expect(addedPerson([], 'Dana', 'Fry', 'employee', undefined, 'emp_new')).toMatchObject({ ok: true, employee: { title: undefined } });
+  });
+
+  it('says a person already on the roster is there, and needs both names', () => {
+    expect(addedPerson([lee], 'lee', 'PARK', 'employee', undefined, 'x')).toEqual({ ok: false, error: 'Lee PARK is already on the roster.' });
+    expect(addedPerson([lee], ' ', 'Park', 'employee', undefined, 'x')).toEqual({ ok: false, error: 'Enter a first and last name.' });
+  });
+
+  it('brings back a person taken off, keeping their id, payroll ID and title unless a new title is given', () => {
+    expect(addedPerson([lee, kit], 'Kit', 'Marlow', 'supervisor', undefined, 'x')).toEqual({ ok: true, returning: true, employee: { ...kit, active: true, role: 'supervisor' } });
+    expect(addedPerson([lee, kit], 'Kit', 'Marlow', 'employee', 'Driller', 'x')).toMatchObject({ ok: true, employee: { id: 'emp_kit', title: 'Driller', payrollId: '1100' } });
+  });
+});
+
+describe('payrollIdProblem', () => {
+  const people: Employee[] = [
+    { id: 'emp_lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true, payrollId: 'A-100' },
+    { id: 'emp_dana', firstName: 'Dana', lastName: 'Fry', role: 'supervisor', active: true },
+  ];
+  it('takes up to 20 letters and numbers, with a dash, dot, slash or space between them, or none', () => {
+    expect(payrollIdProblem(people, 'emp_dana', '004417')).toBeUndefined();
+    expect(payrollIdProblem(people, 'emp_dana', 'B-12/7 x.1')).toBeUndefined();
+    expect(payrollIdProblem(people, 'emp_dana', '  ')).toBeUndefined();
+    expect(payrollIdProblem(people, 'emp_dana', '#12')).toBe('A payroll ID is up to 20 letters and numbers. A dash, dot, slash or space between them is fine.');
+    expect(payrollIdProblem(people, 'emp_dana', 'x'.repeat(21))).toMatch(/^A payroll ID is up to 20/);
+  });
+  it('turns back one another person has, whatever the capitals, and not the person’s own', () => {
+    expect(payrollIdProblem(people, 'emp_dana', 'a-100')).toBe('Lee Park already has payroll ID a-100.');
+    expect(payrollIdProblem(people, 'emp_lee', 'A-100')).toBeUndefined();
+  });
+});
+
+describe('personForRow', () => {
+  const people: Employee[] = [
+    { id: 'emp_1', firstName: 'Riley J', lastName: 'Quinn', role: 'employee', active: true },
+    { id: 'emp_2', firstName: 'Bo', lastName: 'Lark', role: 'employee', active: false },
+    { id: 'emp_3', firstName: 'Ana', lastName: 'Diaz', role: 'supervisor', active: true },
+    { id: 'emp_4', firstName: 'Ana B', lastName: 'Diaz', role: 'employee', active: true },
+  ];
+  it('finds the active person whose name is the row’s exactly first', () => {
+    expect(personForRow(people, { firstName: 'Ana', lastName: 'Diaz' })?.id).toBe('emp_3');
+    expect(personForRow(people, { firstName: 'riley j', lastName: 'QUINN' })?.id).toBe('emp_1');
+  });
+  it('then the one the roster’s own matching finds, and never a person taken off', () => {
+    expect(personForRow(people, { firstName: 'Riley', lastName: 'Quinn' })?.id).toBe('emp_1');
+    expect(personForRow(people, { firstName: 'Bo', lastName: 'Lark' })).toBeUndefined();
+    expect(personForRow(people, { firstName: 'Cal', lastName: 'Nunez' })).toBeUndefined();
   });
 });

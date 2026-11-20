@@ -295,6 +295,8 @@ export function rowAnswer(row: ExamRow): Answer {
 
 export interface ExamDraft {
   sheetId: string;
+  /** The sheet as the form opened with it: signed on as it was seen, though the office changes or stops it meanwhile. */
+  sheet?: AreaSheet;
   shift: ShiftName;
   startedAt: number;
   /** Marks for the printed lines, by line id. */

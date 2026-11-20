@@ -25,6 +25,8 @@ export interface Account {
   /** Demo-mode only. Real builds never store a password on the device. */
   passwordHash?: string;
   salt?: string;
+  /** How passwordHash was made. Left out: the older salted SHA-256, made again the new way at the next good sign-in. */
+  kdf?: { name: 'pbkdf2-sha256'; iterations: number };
   createdAt: number;
 }
 
@@ -198,6 +200,12 @@ export type InspectionResult = 'pass' | 'defect' | 'bad_order';
 export interface Inspection {
   id: string;
   equipmentId: string;
+  /**
+   * The type of machine the checklist was signed on, so the standards printed
+   * beside its lines stay the ones it was signed under when the office changes
+   * the unit's type. Older checklists have none and go by the unit's type.
+   */
+  category?: EquipmentCategory;
   employeeId: string;
   templateId: string;
   templateVersion: number;

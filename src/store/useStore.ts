@@ -103,6 +103,8 @@ export interface SignUpInput {
 
 export interface InspectionDraft {
   equipmentId: string;
+  /** The unit as the form opened with it: signed on as it was seen, though the office changes or takes it out meanwhile. */
+  unit?: Equipment;
   startedAt: number;
   /** Equipment hours, or the odometer, at the start. */
   meter: number;
