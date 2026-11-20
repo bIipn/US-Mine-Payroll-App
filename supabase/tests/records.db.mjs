@@ -32,7 +32,9 @@ import {
 
 const DELETED = 'deleted';
 const KINDS = ['settings', 'employee', 'equipment', 'areaSheet', 'shift', 'denied', 'leave', 'inspection', 'opLog', 'exam', 'mrf'];
-const SHARED_KINDS = ['settings', 'employee', 'equipment', 'areaSheet', 'inspection', 'opLog', 'exam', 'mrf'];
+// What every member reads through the table. People are read by a supervisor only; the crew gets the
+// roster, without payroll IDs, through read_shared_records (migration 20261120000100).
+const SHARED_KINDS = ['settings', 'equipment', 'areaSheet', 'inspection', 'opLog', 'exam', 'mrf'];
 
 let db;
 let a; // Test Pit A: supervisor Sam Ortiz
@@ -85,10 +87,11 @@ function change(kind, id, record, base) {
 /** A made-up record of a kind. */
 function recordOf(kind, id, extra = {}) {
   const shapes = {
-    settings: { company: { name: 'Test Pit A', state: 'CA' }, site: { name: 'North bench' }, workweekStartsOn: 0, allowSectionAllOk: false },
-    employee: { id, first: 'Lee', last: 'Park', role: 'employee', active: true },
-    equipment: { id, unit: 'T-14', category: 'haul_truck', status: 'ready', meter: 1200 },
-    areaSheet: { id, name: 'Wash plant', lines: ['Walkways', 'Guards'] },
+    // The four kinds every phone reads are in the shape the phones read them (migration 20261120000100).
+    settings: { company: { name: 'Test Pit A', state: 'CA' }, site: null, workweekStartsOn: 0, allowSectionAllOk: false },
+    employee: { id, firstName: 'Lee', lastName: 'Park', role: 'employee', active: true },
+    equipment: { id, unit: 'T-14', category: 'haul_truck', make: 'Made-up', model: 'HX 40', status: 'ready', meter: 1200, meterUnit: 'hrs' },
+    areaSheet: { id, title: 'Wash plant', rows: [{ id: 'r1', label: 'Walkways' }, { id: 'r2', label: 'Guards' }], active: true },
     shift: { id, employeeId: 'emp-1', clockIn: 1763300000000, clockOut: null, edits: [] },
     denied: { id, employeeId: 'emp-1', at: 1763300000000, reason: 'outside the boundary' },
     leave: { id, employeeId: 'emp-1', day: '2026-11-11', kind: 'holiday', hours: 800 },
@@ -532,6 +535,7 @@ describe('a call that is not shaped right', () => {
 
 describe('reading records', () => {
   let shared;
+  let person; // a person on the roster, read by supervisors only
   let leave;
   let theirShift;
   let theirDenied;
@@ -545,7 +549,8 @@ describe('reading records', () => {
     other = await newMember(db, a, 'Kit', 'Marlow');
     await sent(supervisorA, 'settings');
     shared = [];
-    for (const kind of ['employee', 'equipment', 'areaSheet']) shared.push(`${kind}:${(await sent(supervisorA, kind)).id}`);
+    for (const kind of ['equipment', 'areaSheet']) shared.push(`${kind}:${(await sent(supervisorA, kind)).id}`);
+    person = `employee:${(await sent(supervisorA, 'employee')).id}`;
     for (const kind of ['inspection', 'opLog', 'exam', 'mrf']) shared.push(`${kind}:${(await sent(other, kind)).id}`);
     leave = await sent(supervisorA, 'leave');
     theirShift = await sent(other, 'shift');
@@ -557,7 +562,7 @@ describe('reading records', () => {
   it("an employee reads the crew's shared records, and only their own shifts and denied punches", async () => {
     const read = await keysReadBy(account);
     for (const key of [...shared, 'settings:company', `shift:${myShift.id}`, `denied:${myDenied.id}`]) assert.ok(read.includes(key), `does not read ${key}`);
-    for (const key of [`shift:${theirShift.id}`, `denied:${theirDenied.id}`, `leave:${leave.id}`]) assert.ok(!read.includes(key), `reads ${key}`);
+    for (const key of [`shift:${theirShift.id}`, `denied:${theirDenied.id}`, `leave:${leave.id}`, person]) assert.ok(!read.includes(key), `reads ${key}`);
     // Every shift, denied punch and paid leave they read is their own.
     const personal = await db.as(account).rows("select created_by from public.records where kind in ('shift', 'denied', 'leave')");
     assert.deepEqual([...new Set(personal.map((r) => r.created_by))], [account]);
@@ -570,7 +575,7 @@ describe('reading records', () => {
   it('and the history of just those records', async () => {
     const read = await keysReadBy(account, 'record_history');
     for (const key of [...shared, `shift:${myShift.id}`]) assert.ok(read.includes(key), `does not read the history of ${key}`);
-    for (const key of [`shift:${theirShift.id}`, `denied:${theirDenied.id}`, `leave:${leave.id}`]) assert.ok(!read.includes(key), `reads the history of ${key}`);
+    for (const key of [`shift:${theirShift.id}`, `denied:${theirDenied.id}`, `leave:${leave.id}`, person]) assert.ok(!read.includes(key), `reads the history of ${key}`);
     // Their own shift's history, a supervisor's correction included.
     const fixed = change('shift', myShift.id, { ...myShift.record, clockOut: 1763340000000 }, myShift.change.rev);
     await push(supervisorA, a.id, [fixed]);

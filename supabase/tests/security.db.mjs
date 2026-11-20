@@ -33,6 +33,8 @@ const CALLABLE_BY = {
   my_join_requests: ['authenticated'],
   my_companies: ['authenticated'],
   push_records: ['authenticated'],
+  // The phones read the company's settings, roster, fleet and area sheets (migration 20261120000100).
+  read_shared_records: ['authenticated'],
   is_last_supervisor: ['service_role'],
   step_down_everywhere: ['service_role'],
   // Billing (migration 20261117000500): the webhook applies Stripe's events and
@@ -71,6 +73,7 @@ const SECURITY_DEFINER = [
   'my_companies',
   'my_join_requests',
   'push_records',
+  'read_shared_records',
   'records_open_company_ids',
   'release_roster_claim',
   'roster_after_reactivate',
@@ -191,6 +194,7 @@ const ANSWERED_WITH_4XX = {
   23514: '400',
   P0001: '400',
   23505: '409',
+  PT402: '402',
   PT404: '404',
   PT409: '409',
   PT429: '429',
@@ -221,6 +225,7 @@ const NOT_FOUND_OR_WRONG_STATE = {
   deny_join_request: [NO_SUCH_REQUEST, NO_SUCH_REQUEST, ALREADY_DECIDED],
   lift_join_bar: [NO_SUCH_REQUEST],
   push_records: [[NOT_FOUND, 'No such company.']],
+  read_shared_records: [[NOT_FOUND, 'No such company.']],
   release_roster_claim: [[NOT_FOUND, 'No such roster row.']],
   roster_before_write: [[WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.']],
   rotate_join_code: [[NOT_FOUND, 'No such company.']],

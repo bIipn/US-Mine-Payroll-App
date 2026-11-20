@@ -418,9 +418,16 @@ describe('what an employee may change', () => {
   it("changes a unit's status and equipment hours only, and adds no unit", async () => {
     const id = newId('eq');
     const listed = await taken(boss, change('equipment', id, unitOf(id)));
-    for (const record of [unitOf(id, { unit: 'L-8' }), unitOf(id, { meter: 4100 }), unitOf(id, { meter: '4300' }), { id, status: 'ready', meter: 4300 }]) {
+    for (const record of [unitOf(id, { unit: 'L-8' }), unitOf(id, { meter: 4100 })]) {
       const c = change('equipment', id, record, listed.rev);
       assert.deepEqual(await push(riley, [c]), { accepted: [], ignored: set('supervisor_only', c) });
+    }
+    // A unit not in the shape the phones read is set aside first, from anyone (migration 20261120000100).
+    for (const record of [unitOf(id, { meter: '4300' }), { id, status: 'ready', meter: 4300 }]) {
+      const c = change('equipment', id, record, listed.rev);
+      const result = await push(riley, [c]);
+      assert.deepEqual(result.accepted, []);
+      assert.deepEqual(result.ignored.map(({ key, rev, reason }) => ({ key, rev, reason })), set('malformed', c));
     }
     await taken(riley, change('equipment', id, unitOf(id, { status: 'out_of_service', meter: 4210 }), listed.rev));
 

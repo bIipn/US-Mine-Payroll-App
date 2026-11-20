@@ -683,7 +683,7 @@ const keysRead = async (account, table, companyId) =>
 describe('what a supervisor reads goes by billing', () => {
   let company;
   let crew;
-  const unit = { id: 'eq-gate-1', unit: 'T-14', category: 'haul_truck', status: 'ready', meter: 1200 };
+  const unit = { id: 'eq-gate-1', unit: 'T-14', category: 'haul_truck', make: 'Made-up', model: 'HX 40', status: 'ready', meter: 1200, meterUnit: 'hrs' };
   const shift = { id: 'shift-gate-1', employeeId: 'emp-1', clockIn: 1763300000000, clockOut: null, edits: [] };
   const KEYS = ['equipment:eq-gate-1', 'shift:shift-gate-1'];
 
