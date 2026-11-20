@@ -47,10 +47,25 @@ js = js.replace(/"(\/assets\/[^"]+\.(ttf|png|webp))"/g, (whole, url, ext) => {
 js = js.replace(/<\/script/gi, '<\\/script');
 
 // The browser tab shows the MineMuster mark, packed in like everything else.
+// What an iPhone or Android phone reads when the page is added to the Home Screen
+// (minemuster.com/demo is shown that way, like the app itself): the name under its icon, MineMuster's
+// own icon, and that it opens full screen with no browser bars. The icon and the manifest are files
+// of the website (site/apple-touch-icon.png, site/demo/manifest.webmanifest); in the one-file preview
+// opened anywhere else, the two links simply find nothing.
+const HOME_SCREEN = [
+  '<meta name="apple-mobile-web-app-capable" content="yes" />',
+  '<meta name="mobile-web-app-capable" content="yes" />',
+  '<meta name="apple-mobile-web-app-title" content="MineMuster" />',
+  '<meta name="apple-mobile-web-app-status-bar-style" content="default" />',
+  '<meta name="theme-color" content="#1C1B19" />',
+  '<link rel="apple-touch-icon" href="/apple-touch-icon.png" />',
+  '<link rel="manifest" href="/demo/manifest.webmanifest" />',
+].join('\n');
+
 const favicon = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'favicon.png')).toString('base64');
 html = html
   .replace(/<link rel="icon"[^>]*>/, () => `<link rel="icon" type="image/png" href="data:image/png;base64,${favicon}"/>`)
-  .replace(/<title>[^<]*<\/title>/, '<title>MineMuster preview</title>')
+  .replace(/<title>[^<]*<\/title>/, () => `<title>MineMuster</title>\n${HOME_SCREEN}`)
   .replace(tag[0], () => `<script>${js}</script>`);
 
 fs.mkdirSync(path.dirname(out), { recursive: true });

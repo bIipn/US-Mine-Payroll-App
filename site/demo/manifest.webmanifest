@@ -1,0 +1,14 @@
+{
+  "name": "MineMuster",
+  "short_name": "MineMuster",
+  "description": "Time, checklists and maintenance requests for the crew. A preview with a made-up crew.",
+  "start_url": "/demo",
+  "scope": "/demo",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1C1B19",
+  "theme_color": "#1C1B19",
+  "icons": [
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}
