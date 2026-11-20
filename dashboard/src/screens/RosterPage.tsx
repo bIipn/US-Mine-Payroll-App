@@ -104,7 +104,7 @@ export function RosterPage() {
       <PageHead title="Roster" lede={keepsTime(ctx.shaped.company) ? ROSTER_LEDE : ROSTER_LEDE_SAFETY_ONLY} />
       {app.known ? null : (
         <Notice tone="warn" title="The app’s roster is not loaded">
-          Who is on the sign-in roster is shown, and the join code and requests work. Adding, changing and taking people off waits for the records, because the two rosters are written together. Load new records to try again.
+          Who is on the sign-in roster is shown, and the join code and requests work. Adding people, changing a job title, making someone a supervisor and putting someone back wait for the records, because the two rosters are written together. Taking someone off and making a supervisor crew still change the sign-in roster at once; look at the app’s roster once the records load. Load new records to try again.
         </Notice>
       )}
       <div className="pair">
@@ -439,6 +439,16 @@ function RosterTable() {
                     {row.active ? null : <> <span className="tag">Off the roster</span></>}
                     {match?.kind === 'none' ? <> <span className="tag tag-warn">Not in the app</span></> : null}
                     {match?.kind === 'two' ? <> <span className="tag tag-warn">Two in the app</span></> : null}
+                    {match?.kind === 'two' ? (
+                      <span className="under">
+                        {match.people.map((p) => (
+                          <span key={p.id} className="row" style={{ gap: '0.5rem' }}>
+                            <span className="small">{p.lastName}, {p.firstName}{p.title ? `, ${p.title}` : ''}</span>
+                            <TakeOffApp person={p} tell={tell} app={app} />
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
                   </th>
                   <td>{row.title ?? <span className="muted">None</span>}</td>
                   <td>
@@ -705,7 +715,7 @@ function AddPeople() {
               {toAdd.length ? (
                 <ul className="small" style={{ display: 'grid', gap: '0.15rem' }}>
                   {toAdd.slice(0, 12).map((p) => (
-                    <li key={nameKey(p)}>{p.lastName}, {p.firstName}{p.title ? `, ${p.title}` : ''}{p.role === 'supervisor' ? ', supervisor' : ''}{p.plan.kind === 'in_app' ? `, ${inAppWords(p, p.plan.person).replace(/\.$/, '').toLowerCase()}` : ''}</li>
+                    <li key={nameKey(p)}>{p.lastName}, {p.firstName}{p.title ? `, ${p.title}` : ''}{p.role === 'supervisor' ? ', supervisor' : ''}{p.plan.kind === 'in_app' ? `, ${inAppWords(p, p.plan.person).replace(/\.$/, '').replace(/^In /, 'in ')}` : ''}</li>
                   ))}
                   {toAdd.length > 12 ? <li className="muted">and {toAdd.length - 12} more</li> : null}
                 </ul>

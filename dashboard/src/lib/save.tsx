@@ -20,7 +20,16 @@ import { Notice } from '../ui/kit';
 
 export type SaveResult =
   | { ok: true; /** Said beside "saved" when there is something to add. */ note?: string; /** The record as the server now has it. */ row: RecordRow }
-  | { ok: false; /** A newer version stopped the save, and the page now shows it. */ changed: boolean; words: string; /** That newer version, when the server showed one. */ row?: RecordRow };
+  | {
+      ok: false;
+      /** A newer version stopped the save, and the page now shows it. */
+      changed: boolean;
+      words: string;
+      /** That newer version, when the server showed one. */
+      row?: RecordRow;
+      /** The server took it for this account's own earlier change and wrote nothing: saving again from this account does the same. */
+      repeat?: true;
+    };
 
 export interface SaveWant extends Omit<Want, 'loaded'> {
   /**
@@ -75,7 +84,7 @@ export function useSaver() {
         return { ok: false, changed: true, words: saved.words, row: saved.fresh };
       }
       // Taken for this account's own earlier change: the server holds the version the page does, and its words say why.
-      if (saved.why === 'repeat') return { ok: false, changed: false, words: saved.words };
+      if (saved.why === 'repeat') return { ok: false, changed: false, words: saved.words, repeat: true };
       if (saved.reason === 'supervisor_only') void ctx.recheckRole();
       return { ok: false, changed: false, words: saved.words };
     } catch (e) {

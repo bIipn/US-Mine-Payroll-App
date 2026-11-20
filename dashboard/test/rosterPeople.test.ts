@@ -12,14 +12,18 @@ import {
   clockQuestion,
   finishAdding,
   halfWhy,
+  inAppAlready,
   keptIds,
+  onRosterAsWords,
   letInOnNewRow,
   makeBoth,
   newPersonId,
   notInApp,
   notInAppWords,
+  notInAppYetWords,
   notLoadedCrewWords,
   notLoadedOffWords,
+  notOnRosterNowWords,
   offRosterWords,
   oneAtATime,
   onRosterWords,
@@ -41,6 +45,7 @@ import {
   takeOffApp,
   takenOffQuestion,
   twoNotChangedWords,
+  twoOffWords,
   twoPeopleWords,
   type Ids,
   type PeopleWrites,
@@ -272,7 +277,7 @@ describe('adding people', () => {
   it('turns down a name two people in the app have, and writes nothing', async () => {
     const twin = person('emp_twin', 'Sam', 'Ortiz');
     const plan = planAdd(both([ortiz, twin]), { firstName: 'Sam', lastName: 'Ortiz' });
-    expect(plan).toEqual({ kind: 'refused', text: 'Two people in the app are called Sam Ortiz. Tell them apart on the sign-in roster first, by a middle initial.' });
+    expect(plan).toEqual({ kind: 'refused', text: 'Two people in the app are called Sam Ortiz. Take the one who should not be there off the app’s roster, beside the row, then try again.' });
     expect(twoPeopleWords('Sam Ortiz')).toBe(plan.kind === 'refused' ? plan.text : '');
     const w = writes();
     expect(await addPeople(w.io, both([ortiz, twin]), [{ firstName: 'Sam', lastName: 'Ortiz', role: 'employee', plan }], ids())).toEqual({ tone: 'bo', text: twoPeopleWords('Sam Ortiz') });
@@ -524,7 +529,7 @@ describe('changing a row', () => {
     const w = writes();
     expect(await changeRow(w.io, null, row, { role: 'employee' }, 'Sam Ortiz is now crew.')).toEqual({ tone: 'warn', text: `Sam Ortiz is now crew. ${notLoadedCrewWords('Sam Ortiz')}` });
     expect(w.log).toEqual([`update row ${row.id} {"role":"employee"}`]);
-    expect(notLoadedCrewWords('Sam Ortiz')).toBe('The app’s roster is not loaded, so it still has Sam Ortiz as a supervisor. Once the records load, use Make both crew beside their name.');
+    expect(notLoadedCrewWords('Sam Ortiz')).toBe('The app’s roster is not loaded, so it was not changed. Once the records load, look at Sam Ortiz there: if the app still has them as a supervisor, Make both crew shows beside their name.');
     for (const patch of [{ role: 'supervisor' as const }, { title: 'Crusher' }, { active: true }]) {
       expect(await changeRow(w.io, null, row, patch, 'Done.')).toEqual(PEOPLE_NOT_LOADED);
     }
@@ -656,5 +661,77 @@ describe('payroll IDs', () => {
   it('says why when the server turned it down', async () => {
     const w = writes({ person: () => ({ ok: false, changed: true, words: 'changed', row: {} }) });
     expect(await savePayrollId(w.io, [ortiz], ortiz, '1042')).toEqual({ tone: 'warn', text: personRefusedWords('Sam Ortiz') });
+  });
+});
+
+describe('the loose ends of the final check', () => {
+  it('turns down the full name of someone a looser row is for already: a second row would take them from it', () => {
+    // Riley J Quinn joined on a row written "Riley Quinn": that row is theirs, as a phone matches it.
+    const row = rosterRow({ first_name: 'Riley', last_name: 'Quinn', user_id: 'user-quinn' });
+    expect(planAdd(both([quinn], [row]), { firstName: 'Riley J', lastName: 'Quinn' })).toEqual({ kind: 'refused', text: onRosterAsWords('Riley J Quinn', 'Riley Quinn') });
+    expect(onRosterAsWords('Riley J Quinn', 'Riley Quinn')).toBe('Riley J Quinn is on the sign-in roster already, as Riley Quinn. To change them, use Change beside that name.');
+    // A name that only fits someone with a row of their own is someone else: the father beside the son is a new person.
+    expect(planAdd(both([quinn], [rosterRow({ first_name: 'Riley J', last_name: 'Quinn' })]), { firstName: 'Riley', lastName: 'Quinn' })).toEqual({ kind: 'new' });
+  });
+
+  it('points a name typed again after a half-done addition to the button that finishes it', async () => {
+    const row = rosterRow({ first_name: 'Lee', last_name: 'Park' });
+    expect(planAdd(both([ortiz], [row]), { firstName: 'Lee', lastName: 'Park' })).toEqual({ kind: 'refused', text: notInAppYetWords('Lee Park') });
+    expect(notInAppYetWords('Lee Park')).toBe('Lee Park is on the sign-in roster already, but not in the app yet: use Add to the app’s roster under On the sign-in roster, not in the app.');
+    const w = writes();
+    expect(await addPeople(w.io, both([ortiz], [row]), [{ firstName: 'Lee', lastName: 'Park', role: 'employee', plan: { kind: 'new' } }], ids())).toEqual({ tone: 'bo', text: notInAppYetWords('Lee Park') });
+    expect(w.log).toEqual([]);
+  });
+
+  it('picks neither of two people taken off the roster with the name, and says so', async () => {
+    const a = person('emp_a', 'Lee', 'Park', { active: false });
+    const b = person('emp_b', 'Lee', 'Park', { active: false });
+    expect(planAdd(both([a, b]), { firstName: 'Lee', lastName: 'Park' })).toEqual({ kind: 'refused', text: twoOffWords('Lee Park') });
+    const row = rosterRow({ first_name: 'Lee', last_name: 'Park', active: false });
+    const w = writes();
+    expect(await changeRow(w.io, both([a, b], [row]), row, { active: true }, 'Lee Park is back on the roster.')).toEqual({ tone: 'bo', text: twoOffWords('Lee Park') });
+    expect(w.log).toEqual([]);
+    expect(twoOffWords('Lee Park')).toBe('Two people taken off the roster are called Lee Park, so the page cannot tell which one this is. Add them again with their full name, middle initial included.');
+  });
+
+  it('brings someone back on their own row when it was taken off, so the account that joined on it works again', async () => {
+    const off = person('emp_quinn', 'Riley J', 'Quinn', { active: false, payrollId: '2001' });
+    const theirs = rosterRow({ first_name: 'Riley J', last_name: 'Quinn', active: false, user_id: 'user-quinn' });
+    const typed = { firstName: 'Riley', lastName: 'Quinn', role: 'employee' as const };
+    const plan = planAdd(both([off], [theirs]), typed);
+    expect(plan).toEqual({ kind: 'ask', person: off });
+    const w = writes();
+    const told = await addPeople(w.io, both([off], [theirs]), [{ ...typed, plan, answer: 'back' }], ids());
+    // Their own row goes back on, then the person: no second row.
+    expect(w.log).toEqual([`update row ${theirs.id} {"active":true,"role":"employee","title":null}`, 'person emp_quinn']);
+    expect(w.saved).toEqual([{ ...off, active: true, role: 'employee' }]);
+    expect(told).toEqual({ tone: 'ok', text: `Riley J Quinn is back on the roster. ${PEOPLE_SAVED}` });
+  });
+
+  it('offers no finish button after a save the server took as this account’s own repeat', async () => {
+    const off = person('emp_old', 'Sam', 'Ortiz', { active: false });
+    const repeat = 'The server took this for the change this account made to Sam Ortiz before, which someone else has since put back, and kept the version it holds. Nothing was saved. Another supervisor can make the change from their own account.';
+    const w = writes({ person: () => ({ ok: false, changed: false, words: repeat, repeat: true }) });
+    const told = await addPeople(w.io, both([off]), [{ firstName: 'Sam', lastName: 'Ortiz', role: 'employee', plan: { kind: 'ask', person: off }, answer: 'back' }], ids());
+    expect(told.finish).toBeUndefined();
+    expect(told.text).toBe(notInAppWords(['Sam Ortiz'], false));
+    expect(told.text).not.toMatch(/to finish/);
+    expect(told.why).toMatch(/Another supervisor can make the change/);
+  });
+
+  it('says nothing is saved when finishing finds the person in the app already, and says who is no longer on the sign-in roster', async () => {
+    const row = rosterRow({ first_name: 'Sam', last_name: 'Ortiz' });
+    const w = writes();
+    expect(await finishAdding(w.io, both([ortiz], [row]), [{ firstName: 'Sam', lastName: 'Ortiz' }], ids())).toEqual({ tone: 'ok', text: inAppAlready(rowPerson(row), ortiz) });
+    expect(inAppAlready(rowPerson(row), ortiz)).toBe('Sam Ortiz is in the app already.');
+    expect(await finishAdding(w.io, both([ortiz], []), [{ firstName: 'Lee', lastName: 'Park' }], ids())).toEqual({ tone: 'warn', text: notOnRosterNowWords(['Lee Park']) });
+    expect(notOnRosterNowWords(['Lee Park'])).toBe('Lee Park is not on the sign-in roster now, so they were not added to the app’s roster. Load new records, then add them again.');
+    expect(w.log).toEqual([]);
+  });
+
+  it('says the app’s roster was not changed while it was not loaded, without guessing what it holds', () => {
+    expect(notLoadedOffWords('Sam Ortiz')).toBe(
+      'The app’s roster is not loaded, so it was not changed. Once the records load, look for Sam Ortiz below the sign-in roster: anyone still on the app’s roster is listed there, with Take off the app’s roster.',
+    );
   });
 });

@@ -48,9 +48,11 @@ describe('phonesNotOnRoster', () => {
   it('finds the people on the phones who could not join under their own name yet', () => {
     const missing = phonesNotOnRoster(
       [
-        person('a', 'Riley', 'Quinn'), // leaves off the middle initial
-        person('b', 'Buck', 'Vance'), // goes by the nickname, no suffix
-        person('c', 'Sam', 'Ortiz'), // taken off the server roster, but still a row
+        // A row with a middle initial, or a suffix, the person in the app does not have is not theirs: the phone
+        // matches a sign-in's row to a person the way a typed name is matched, and that row's name does not fit them.
+        person('a', 'Riley', 'Quinn'),
+        person('b', 'Buck', 'Vance'),
+        person('c', 'Sam', 'Ortiz'), // taken off the server roster, but still a row: listed by offRosterInApp
         person('d', 'Dana', 'Whitfield'),
         person('e', 'Tamsin', 'Fenwick', { active: false }), // off the app's roster too
         person('f', 'Angela', 'Ruiz'),
@@ -58,10 +60,10 @@ describe('phonesNotOnRoster', () => {
       roster,
       new Set(['f']),
     );
-    expect(missing.map((e) => e.id)).toEqual(['d']);
+    expect(missing.map((e) => e.id)).toEqual(['a', 'b', 'd']);
   });
 
-  it('never lists someone a row is for, whichever of the two names is the longer', () => {
+  it('never lists someone a row is for: a row may leave off a middle initial the app has', () => {
     // The row leaves off the middle initial the app has: the table counts the row as theirs, and so does this list.
     const riley = person('emp_quinn', 'Riley J', 'Quinn');
     const row = rosterRow({ first_name: 'Riley', last_name: 'Quinn' });
@@ -82,8 +84,8 @@ describe('matchRows', () => {
     expect(match.get(sonRow.id)).toEqual({ kind: 'person', person: son, exact: true, shared: false });
     // "Sam Ortiz" fits the son, but the son's own row has him exactly.
     expect(match.get(fatherRow.id)).toEqual({ kind: 'none' });
-    // The row has a middle initial the app's person leaves off: still them, matched the other way round.
-    expect(match.get(quinnRow.id)).toEqual({ kind: 'person', person: quinn, exact: false, shared: false });
+    // The row has a middle initial the app's person does not: the phone would not take that sign-in for them.
+    expect(match.get(quinnRow.id)).toEqual({ kind: 'none' });
     // A row taken off is nobody's.
     expect(match.has(off.id)).toBe(false);
   });
@@ -99,6 +101,49 @@ describe('matchRows', () => {
     expect(twice.get('row-second')).toMatchObject({ kind: 'person', person: a, shared: true });
     // Neither of two people of a name is listed as off the sign-in roster: a row of the name is there.
     expect(phonesNotOnRoster([a, b], [row])).toEqual([]);
+  });
+});
+
+describe('every person on the app\u2019s roster is somewhere on the page', () => {
+  it('lists a father with no row when his son\u2019s row fits his name as typed', () => {
+    const father = person('emp_father', 'Sam', 'Ortiz');
+    const son = person('emp_son', 'Sam', 'Ortiz Jr');
+    const sonRow = rosterRow({ first_name: 'Sam', last_name: 'Ortiz Jr' });
+    expect(matchRows([sonRow], [father, son]).get(sonRow.id)).toMatchObject({ kind: 'person', person: son });
+    // Not held by any row, and no row taken off fits him: he is on the phones and not on the sign-in roster.
+    expect(phonesNotOnRoster([father, son], [sonRow]).map((e) => e.id)).toEqual(['emp_father']);
+    expect(offRosterInApp([father, son], [sonRow])).toEqual([]);
+  });
+
+  it('does not give a row someone whose own row was taken off', () => {
+    // Riley J Quinn's row was taken off; a new "Riley Quinn" row may be somebody else, so it is nobody's yet.
+    const quinn = person('emp_quinn', 'Riley J', 'Quinn');
+    const theirs = rosterRow({ first_name: 'Riley J', last_name: 'Quinn', active: false, user_id: 'user-quinn' });
+    const fresh = rosterRow({ first_name: 'Riley', last_name: 'Quinn' });
+    expect(matchRows([theirs, fresh], [quinn]).get(fresh.id)).toEqual({ kind: 'none' });
+    expect(offRosterInApp([quinn], [theirs, fresh]).map((e) => e.id)).toEqual(['emp_quinn']);
+    expect(phonesNotOnRoster([quinn], [theirs, fresh])).toEqual([]);
+  });
+
+  it('puts each active person in one place: a row, on the phones only, or off the sign-in roster', () => {
+    const rows = [
+      rosterRow({ first_name: 'Lee', last_name: 'Park' }),
+      rosterRow({ first_name: 'Sam', last_name: 'Ortiz Jr' }),
+      rosterRow({ first_name: 'Dana', last_name: 'Whitfield', active: false }),
+      rosterRow({ first_name: 'Riley J', last_name: 'Quinn' }),
+    ];
+    const people = [
+      person('park', 'Lee', 'Park'),
+      person('father', 'Sam', 'Ortiz'),
+      person('son', 'Sam', 'Ortiz Jr'),
+      person('whitfield', 'Dana', 'Whitfield'),
+      person('quinn', 'Riley', 'Quinn'),
+      person('fenwick', 'Tamsin', 'Fenwick'),
+    ];
+    const held = new Set([...matchRows(rows, people).values()].flatMap((m) => (m.kind === 'person' ? [m.person.id] : m.kind === 'two' ? m.people.map((e) => e.id) : [])));
+    const phones = phonesNotOnRoster(people, rows).map((e) => e.id);
+    const off = offRosterInApp(people, rows).map((e) => e.id);
+    for (const e of people) expect([held.has(e.id), phones.includes(e.id), off.includes(e.id)].filter(Boolean)).toHaveLength(1);
   });
 });
 

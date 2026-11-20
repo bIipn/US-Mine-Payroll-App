@@ -65,13 +65,30 @@ const rowName = (row: Pick<RosterRow, 'first_name' | 'last_name'>) => personName
 
 export const takenOffQuestion = (p: PersonName) => `${personName(p)}, who was taken off the roster, has this name. Bring them back, or add a new person?`;
 
-export const twoPeopleWords = (name: string) => `Two people in the app are called ${name}. Tell them apart on the sign-in roster first, by a middle initial.`;
+export const twoPeopleWords = (name: string) =>
+  `Two people in the app are called ${name}. Take the one who should not be there off the app’s roster, beside the row, then try again.`;
+
+/** Two people taken off the roster have the name: bringing one back would be a guess. */
+export const twoOffWords = (name: string) =>
+  `Two people taken off the roster are called ${name}, so the page cannot tell which one this is. Add them again with their full name, middle initial included.`;
 
 /** Said of a row two people in the app are called by, when only the row was changed. */
 export const twoNotChangedWords = (name: string) => `Two people in the app are called ${name}, so the app’s roster was not changed.`;
 
 /** A typed name the sign-in roster has already: a second row of it and nobody could join under the name. */
 export const onRosterWords = (name: string) => `${name} is on the sign-in roster already. To change them, use Change beside their name.`;
+
+/** A typed name of a row nobody in the app is for yet: a half-done addition, finished from its own list. */
+export const notInAppYetWords = (name: string) =>
+  `${name} is on the sign-in roster already, but not in the app yet: use Add to the app’s roster under On the sign-in roster, not in the app.`;
+
+/**
+ * A typed name of someone a row is for already, under another way of writing
+ * their name: a second row of them would take them from the row their account
+ * may have joined on.
+ */
+export const onRosterAsWords = (typed: string, row: string) =>
+  `${typed} is on the sign-in roster already, as ${row}. To change them, use Change beside that name.`;
 
 /** A typed name of a row taken off: that row is put back on, with the person it was for. */
 export const offRosterWords = (name: string) => `${name} was taken off the sign-in roster. To bring them back, show the people taken off, then Put back on.`;
@@ -80,11 +97,17 @@ export const offRosterWords = (name: string) => `${name} was taken off the sign-
 export const inAppWords = (typed: PersonName, person: PersonName) =>
   sameName(person, typed.firstName, typed.lastName) ? 'In the app already.' : `In the app already as ${personName(person)}.`;
 
-/** Said when the sign-in row went in and the person did not. */
-export const notInAppWords = (names: readonly string[]) =>
-  names.length === 1
-    ? `${names[0]} is on the sign-in roster but not in the app yet, so phones do not have them. Add them to the app’s roster to finish.`
-    : `${listed(names)} are on the sign-in roster but not in the app yet, so phones do not have them. Add them to the app’s roster to finish.`;
+/** Of a sign-in row that was there, and whose person the app had already, when finishing: nothing was written. */
+export const inAppAlready = (typed: PersonName, person: PersonName) =>
+  sameName(person, typed.firstName, typed.lastName) ? `${personName(typed)} is in the app already.` : `${personName(typed)} is in the app already as ${personName(person)}.`;
+
+/** Said when the sign-in row went in and the person did not; without the button when pressing it again could not help. */
+export const notInAppWords = (names: readonly string[], finish = true) =>
+  `${names.length === 1 ? `${names[0]} is` : `${listed(names)} are`} on the sign-in roster but not in the app yet, so phones do not have them.${finish ? ' Add them to the app’s roster to finish.' : ''}`;
+
+/** Said when finishing finds a name's row gone from the sign-in roster: nothing was added for it. */
+export const notOnRosterNowWords = (names: readonly string[]) =>
+  `${names.length === 1 ? `${names[0]} is` : `${listed(names)} are`} not on the sign-in roster now, so they were not added to the app’s roster. Load new records, then add them again.`;
 
 /** The button that finishes a half-done addition. */
 export const ADD_TO_APP = 'Add to the app’s roster';
@@ -105,13 +128,13 @@ export const rowStillOnWords = (name: string) =>
 /** Said when another active row has the same person: the row goes, the person stays. */
 export const sharedRowWords = (name: string) => `Another row on the sign-in roster has the same name, so ${name} stays on the app’s roster.`;
 
-/** Said when someone was taken off the sign-in roster while the app's roster was not loaded. */
+/** Said when someone was taken off the sign-in roster while the app's roster was not loaded: what it holds is not known. */
 export const notLoadedOffWords = (name: string) =>
-  `The app’s roster is not loaded, so ${name} is still on it and on the phones. Once the records load, take them off it too: they are listed below the sign-in roster.`;
+  `The app’s roster is not loaded, so it was not changed. Once the records load, look for ${name} below the sign-in roster: anyone still on the app’s roster is listed there, with Take off the app’s roster.`;
 
 /** Said when a supervisor was made crew on the sign-in roster while the app's roster was not loaded. */
 export const notLoadedCrewWords = (name: string) =>
-  `The app’s roster is not loaded, so it still has ${name} as a supervisor. Once the records load, use Make both crew beside their name.`;
+  `The app’s roster is not loaded, so it was not changed. Once the records load, look at ${name} there: if the app still has them as a supervisor, Make both crew shows beside their name.`;
 
 /** Asked before someone on the clock is taken off. */
 export const clockQuestion = (name: string, since: number) =>
@@ -166,13 +189,29 @@ export function notInApp(rows: readonly RosterRow[], people: readonly Employee[]
   return rows.filter((row) => row.active && match.get(row.id)?.kind === 'none');
 }
 
-/** Someone taken off the app's roster whom a name fits: exactly, or the one it fits as a typed name does. */
-function takenOffFit(people: readonly Employee[], name: PersonName): Employee | undefined {
-  const off = people.filter((e) => !e.active);
-  const exact = off.find((e) => sameName(e, name.firstName, name.lastName));
-  if (exact) return exact;
-  const hit = findOnRoster(off, name.firstName, name.lastName);
-  return hit && 'person' in hit ? hit.person : undefined;
+/**
+ * Someone taken off the app's roster whom a name fits, as a typed name does:
+ * exactly, else the one it fits. Two of them it fits as well as each other
+ * (`several`) are never guessed between.
+ */
+function takenOffFit(people: readonly Employee[], name: PersonName): { person: Employee } | { several: true } | undefined {
+  const hit = findOnRoster(people.filter((e) => !e.active), name.firstName, name.lastName);
+  if (!hit) return undefined;
+  return 'person' in hit ? { person: hit.person } : { several: true };
+}
+
+/**
+ * The row taken off the sign-in roster that is someone's own: by their exact
+ * name, else the one whose name fits them as a phone matches a sign-in. Their
+ * account, if one joined on it, is still on it, so bringing them back puts
+ * this row back on rather than adding a second.
+ */
+function ownRowOff(rows: readonly RosterRow[], person: Employee): RosterRow | undefined {
+  const off = rows.filter((r) => !r.active);
+  const exact = off.filter((r) => sameName(person, r.first_name, r.last_name));
+  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
+  const loose = off.filter((r) => findOnRoster([person], r.first_name, r.last_name) !== null);
+  return loose.length === 1 ? loose[0] : undefined;
 }
 
 /** Where a row and its person disagree on the role, what the row says beside it, and the button that makes both the row's. */
@@ -238,18 +277,38 @@ const newRow = (name: PersonName): RosterRow => ({
  */
 export function planAdd(rosters: Rosters, name: PersonName, rowId?: string): AddPlan {
   if (rowId === undefined) {
-    const same = rosters.rows.filter((r) => sameName(rowPerson(r), name.firstName, name.lastName));
-    const on = same.find((r) => r.active);
-    if (on) return { kind: 'refused', text: onRosterWords(rowName(on)) };
-    if (same.length) return { kind: 'refused', text: offRosterWords(rowName(same[0])) };
+    const there = typedOnRoster(rosters, name);
+    if (there) return { kind: 'refused', text: there };
   }
   const match = rowId === undefined ? matchOf({ people: rosters.people, rows: [...rosters.rows, newRow(name)] }, NEW_ROW) : matchOf(rosters, rowId);
   if (match.kind === 'two') return { kind: 'refused', text: twoPeopleWords(match.name) };
-  if (match.kind === 'person') return { kind: 'in_app', person: match.person };
+  if (match.kind === 'person') {
+    // A typed name of someone a row is for already, written another way: a second row would take them from that one.
+    const current = rowId === undefined ? matchRows(rosters.rows, rosters.people) : undefined;
+    const held = current && rosters.rows.find((r) => {
+      const m = r.active ? current.get(r.id) : undefined;
+      return m?.kind === 'person' && m.person.id === match.person.id;
+    });
+    if (held) return { kind: 'refused', text: onRosterAsWords(personName(name), rowName(held)) };
+    return { kind: 'in_app', person: match.person };
+  }
   const named = rosters.named.find((p) => sameName(p, name.firstName, name.lastName));
   const off = takenOffFit(rosters.people, name);
-  if (off) return { kind: 'ask', person: off, ...(named ? { id: named.id } : null) };
+  if (off && 'several' in off) return { kind: 'refused', text: twoOffWords(personName(name)) };
+  if (off) return { kind: 'ask', person: off.person, ...(named ? { id: named.id } : null) };
   return named ? { kind: 'new', id: named.id } : { kind: 'new' };
+}
+
+/**
+ * Why a typed name cannot be a new row: the sign-in roster has it exactly
+ * already. A row nobody in the app is for points to the button that finishes
+ * it; one taken off, to putting it back on.
+ */
+function typedOnRoster(rosters: Pick<Rosters, 'people' | 'rows'>, name: PersonName): string | undefined {
+  const same = rosters.rows.filter((r) => sameName(rowPerson(r), name.firstName, name.lastName));
+  const on = same.find((r) => r.active);
+  if (on) return matchOf(rosters, on.id).kind === 'none' ? notInAppYetWords(rowName(on)) : onRosterWords(rowName(on));
+  return same.length ? offRosterWords(rowName(same[0])) : undefined;
 }
 
 /** A new person's id, made the way the app makes one. */
@@ -343,8 +402,12 @@ export interface PeopleWrites {
   deleteRow: (rowId: string) => Promise<unknown>;
 }
 
-/** What saving a person came back with (`SaveResult`): `changed` when a newer version stopped it, and the server's row then. */
-export type PersonSaved = { ok: true } | { ok: false; changed: boolean; words: string; row?: unknown };
+/**
+ * What saving a person came back with (`SaveResult`): `changed` when a newer
+ * version stopped it, and the server's row then; `repeat` when the server took
+ * it for this account's own earlier change, which saving again cannot get past.
+ */
+export type PersonSaved = { ok: true } | { ok: false; changed: boolean; words: string; row?: unknown; repeat?: true };
 
 export type RowPatch = Partial<Pick<RosterRow, 'title' | 'role' | 'active'>>;
 
@@ -370,9 +433,15 @@ function notSaved(result: Extract<PersonSaved, { ok: false }>, name: string): To
 
 const answered = (adds: readonly Adding[]): Answered[] => adds.map((a) => ({ firstName: a.firstName, lastName: a.lastName, ...(a.answer ? { answer: a.answer } : null) }));
 
-/** Said when rows went in and some people did not: who, why, and the button that adds them. */
-function halfAdded(missed: readonly Adding[], why: string | undefined): Told {
-  return { tone: 'warn', text: notInAppWords(missed.map(personName)), why, finish: { label: ADD_TO_APP, adds: answered(missed) } };
+/**
+ * Said when rows went in and some people did not: who, why, and the button
+ * that adds the ones it can (`finishable`). A person the server took as this
+ * account's own repeat is left off the button: pressing it would meet the
+ * same answer.
+ */
+function halfAdded(missed: readonly Adding[], why: string | undefined, finishable: readonly Adding[] = missed): Told {
+  const text = notInAppWords(missed.map(personName), finishable.length > 0);
+  return finishable.length ? { tone: 'warn', text, why, finish: { label: ADD_TO_APP, adds: answered(finishable) } } : { tone: 'warn', text, why };
 }
 
 /**
@@ -384,19 +453,32 @@ function halfAdded(missed: readonly Adding[], why: string | undefined): Told {
  */
 export async function addPeople(io: PeopleWrites, rosters: Rosters, adding: readonly Adding[], ids: Ids): Promise<Told> {
   const toWrite: { add: Adding; person: Employee }[] = [];
+  // Someone brought back whose own row was taken off gets that row back on, not a second one.
+  const reuse = new Map<Adding, RosterRow>();
   for (const add of adding) {
-    const there = rosters.rows.find((r) => sameName(rowPerson(r), add.firstName, add.lastName));
-    if (there) return { tone: 'bo', text: there.active ? onRosterWords(rowName(there)) : offRosterWords(rowName(there)) };
+    const there = typedOnRoster(rosters, add);
+    if (there) return { tone: 'bo', text: there };
     const made = personFor(rosters, add, ids);
     if (!made.ok) return { tone: 'bo', text: made.text };
     if (made.person) toWrite.push({ add, person: made.person });
+    const own = add.plan.kind === 'ask' && add.answer === 'back' ? ownRowOff(rosters.rows, add.plan.person) : undefined;
+    if (own) reuse.set(add, own);
   }
+  const fresh = adding.filter((a) => !reuse.has(a));
+  const rowsIn: Adding[] = [];
   try {
-    await io.addRows(adding.map((a) => ({ firstName: a.firstName, lastName: a.lastName, title: a.title, role: a.role })));
+    for (const [add, row] of reuse) {
+      await io.updateRow(row.id, { active: true, role: add.role, title: add.title ?? null });
+      rowsIn.push(add);
+    }
+    if (fresh.length) await io.addRows(fresh.map((a) => ({ firstName: a.firstName, lastName: a.lastName, title: a.title, role: a.role })));
   } catch (e) {
-    return { tone: 'bo', text: messageOf(e) };
+    // Nothing went in, or only rows put back on before the failure: their people are still to write.
+    if (!rowsIn.length) return { tone: 'bo', text: messageOf(e) };
+    return halfAdded(rowsIn, messageOf(e));
   }
   const missed: Adding[] = [];
+  const repeated = new Set<Adding>();
   let why: string | undefined;
   for (const { add, person } of toWrite) {
     const name = personName(person);
@@ -404,27 +486,43 @@ export async function addPeople(io: PeopleWrites, rosters: Rosters, adding: read
     if (result.ok) ids.saved(add);
     else {
       missed.push(add);
+      if (result.repeat) repeated.add(add);
       why ??= halfWhy(notSaved(result, name).text);
     }
   }
-  if (missed.length) return halfAdded(missed, why);
+  if (missed.length) return halfAdded(missed, why, missed.filter((m) => !repeated.has(m)));
   const one = adding.length === 1 ? adding[0] : undefined;
+  const ownRow = one ? reuse.get(one) : undefined;
+  if (ownRow) return { tone: 'ok', text: `${rowName(ownRow)} is back on the roster. ${PEOPLE_SAVED}` };
   const who = one ? `${personName(one)} is` : `${adding.length} people are`;
   const inApp = one?.plan.kind === 'in_app' ? ` ${inAppWords(one, one.plan.person)}` : '';
   return { tone: 'ok', text: `${who} on the roster.${inApp}${toWrite.length ? ` ${PEOPLE_SAVED}` : ''}` };
 }
 
-/** Add the person a sign-in row is for to the app's roster: the row is there already, so only the person is written. */
-export async function addToApp(io: PeopleWrites, rosters: Rosters, row: RosterRow, plan: AddPlan, answer: Answer | undefined, ids: Ids): Promise<Told> {
+/** What adding a row's person came to: whether a person was written, and whether the server took it as this account's repeat. */
+interface ToApp {
+  told: Told;
+  wrote: boolean;
+  repeat: boolean;
+}
+
+async function toApp(io: PeopleWrites, rosters: Rosters, row: RosterRow, plan: AddPlan, answer: Answer | undefined, ids: Ids): Promise<ToApp> {
   const add: Adding = { ...rowPerson(row), role: row.role, title: row.title ?? undefined, plan, answer };
   const made = personFor(rosters, add, ids);
-  if (!made.ok) return { tone: 'bo', text: made.text };
-  const name = rowName(row);
-  if (!made.person) return { tone: 'ok', text: `${name} is on the app’s roster. ${plan.kind === 'in_app' ? inAppWords(add, plan.person) : ''}`.trim() };
+  if (!made.ok) return { told: { tone: 'bo', text: made.text }, wrote: false, repeat: false };
+  if (!made.person) {
+    const text = plan.kind === 'in_app' ? inAppAlready(add, plan.person) : `${rowName(row)} is on the app’s roster.`;
+    return { told: { tone: 'ok', text }, wrote: false, repeat: false };
+  }
   const result = await io.savePerson(made.person, personName(made.person));
-  if (!result.ok) return notSaved(result, personName(made.person));
+  if (!result.ok) return { told: notSaved(result, personName(made.person)), wrote: false, repeat: !!result.repeat };
   ids.saved(add);
-  return { tone: 'ok', text: `${name} is on the app’s roster. ${PEOPLE_SAVED}` };
+  return { told: { tone: 'ok', text: `${rowName(row)} is on the app’s roster. ${PEOPLE_SAVED}` }, wrote: true, repeat: false };
+}
+
+/** Add the person a sign-in row is for to the app's roster: the row is there already, so only the person is written. */
+export async function addToApp(io: PeopleWrites, rosters: Rosters, row: RosterRow, plan: AddPlan, answer: Answer | undefined, ids: Ids): Promise<Told> {
+  return (await toApp(io, rosters, row, plan, answer, ids)).told;
 }
 
 /**
@@ -434,22 +532,34 @@ export async function addToApp(io: PeopleWrites, rosters: Rosters, row: RosterRo
  */
 export async function finishAdding(io: PeopleWrites, rosters: Rosters, adds: readonly Answered[], ids: Ids): Promise<Told> {
   const missed: Adding[] = [];
+  const repeated = new Set<Adding>();
   let why: string | undefined;
-  let saved = 0;
+  const saved: string[] = [];
+  const inApp: string[] = [];
+  const gone: string[] = [];
   for (const name of adds) {
     const row = rosters.rows.find((r) => r.active && sameName(rowPerson(r), name.firstName, name.lastName));
-    if (!row) continue;
+    if (!row) {
+      gone.push(personName(name));
+      continue;
+    }
     const plan = planAdd(rosters, rowPerson(row), row.id);
-    const told = await addToApp(io, rosters, row, plan, name.answer, ids);
-    if (told.tone === 'ok') saved += 1;
+    const done = await toApp(io, rosters, row, plan, name.answer, ids);
+    if (done.told.tone === 'ok') (done.wrote ? saved : inApp).push(done.wrote ? rowName(row) : done.told.text);
     else {
-      missed.push({ ...rowPerson(row), role: row.role, plan, answer: name.answer });
-      why ??= halfWhy(told.text);
+      const left: Adding = { ...rowPerson(row), role: row.role, plan, answer: name.answer };
+      missed.push(left);
+      if (done.repeat) repeated.add(left);
+      why ??= halfWhy(done.told.text);
     }
   }
-  if (missed.length) return halfAdded(missed, why);
-  const who = adds.length === 1 ? `${personName(adds[0])} is` : `${adds.length} people are`;
-  return { tone: 'ok', text: saved ? `${who} on the app’s roster. ${PEOPLE_SAVED}` : `${who} on the app’s roster.` };
+  if (missed.length) return halfAdded(missed, why, missed.filter((m) => !repeated.has(m)));
+  const parts = [
+    ...(gone.length ? [notOnRosterNowWords(gone)] : []),
+    ...(saved.length ? [`${saved.length === 1 ? `${saved[0]} is` : `${listed(saved)} are`} on the app’s roster. ${PEOPLE_SAVED}`] : []),
+    ...inApp,
+  ];
+  return { tone: gone.length ? 'warn' : 'ok', text: parts.join(' ') };
 }
 
 /**
@@ -469,9 +579,10 @@ export async function letInOnNewRow(io: PeopleWrites, rosters: Rosters | null, r
   if (plan.kind === 'ask') {
     return { tone: 'warn', text: `${letIn} ${notInAppWords([name])}`, why: `${personName(plan.person)}, who was taken off the roster, has this name, so the page asks first: ${there}` };
   }
-  const told = await addToApp(io, rosters, row, plan, undefined, ids);
-  if (told.tone === 'ok') return { tone: 'ok', text: `${name} is let in, and on the app’s roster. ${PEOPLE_SAVED}` };
-  return { ...halfAdded([{ ...rowPerson(row), role: row.role, plan }], halfWhy(told.text)), text: `${letIn} ${notInAppWords([name])}` };
+  const done = await toApp(io, rosters, row, plan, undefined, ids);
+  if (done.told.tone === 'ok') return { tone: 'ok', text: `${name} is let in, and on the app’s roster. ${PEOPLE_SAVED}` };
+  const left: Adding = { ...rowPerson(row), role: row.role, plan };
+  return { ...halfAdded([left], halfWhy(done.told.text), done.repeat ? [] : [left]), text: `${letIn} ${notInAppWords([name], !done.repeat)}` };
 }
 
 // ---- Changing a row --------------------------------------------------------------------------------------
@@ -508,8 +619,10 @@ export async function changeRow(io: PeopleWrites, rosters: Rosters | null, row: 
   if (patch.active === true) {
     const match = matchOf({ people: rosters.people, rows: rosters.rows.map((r) => (r.id === row.id ? { ...r, active: true } : r)) }, row.id);
     if (match.kind === 'two') return { tone: 'bo', text: twoPeopleWords(match.name) };
-    const off = match.kind === 'none' ? takenOffFit(rosters.people, rowPerson(row)) : undefined;
-    if (off) {
+    const fit = match.kind === 'none' ? takenOffFit(rosters.people, rowPerson(row)) : undefined;
+    if (fit && 'several' in fit) return { tone: 'bo', text: twoOffWords(name) };
+    if (fit) {
+      const off = fit.person;
       const role = patch.role ?? row.role;
       const title = patch.title !== undefined ? patch.title : row.title;
       const back = addedPerson([off], off.firstName, off.lastName, role, title ?? undefined, off.id);

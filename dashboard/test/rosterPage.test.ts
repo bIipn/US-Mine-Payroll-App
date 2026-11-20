@@ -101,6 +101,9 @@ describe('the Roster page', () => {
     const { text } = draw([person('emp_a', 'Lee', 'Park'), person('emp_b', 'Lee', 'Park')], [row]);
     expect(text).toContain('Two in the app');
     expect(text).not.toContain('Make both');
+    // Both are listed with a way to take the one who should not be there off the app's roster.
+    const shown = under(text, 'On the sign-in roster');
+    expect(shown.match(/Take off the app’s roster/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   it('lists the people taken off the sign-in roster who are still on every phone, to take them off the app’s roster too', () => {

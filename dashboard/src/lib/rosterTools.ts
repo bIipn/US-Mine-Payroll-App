@@ -27,14 +27,16 @@ export type RowMatch =
 const NONE: RowMatch = { kind: 'none' };
 
 /**
- * Which person in the app each active sign-in row is for, one person to a row.
- * A row has the person the app's rule gives it (`personForRow`: their name
- * exactly, else the one person it fits), except that a row that only fits
- * someone may not have a person another row names exactly, or fits as well:
- * "Sam Ortiz" is not "Sam Ortiz Jr" while the son has a row of his own. A
- * person still free whose name, typed, fits one free row is that row's (a row
- * "Riley J Quinn" for a person "Riley Quinn"). Rows written exactly alike are
- * all the one person's. Only people on the app's roster are matched, never one
+ * Which person in the app each active sign-in row is for, one person to a row,
+ * matched the way a phone matches a sign-in to a person: the row's name, as if
+ * typed, against the people (`personForRow`: their name exactly, else the one
+ * person it fits). So a row "Riley Quinn" is the person "Riley J Quinn", and a
+ * row "Riley J Quinn" is never the person "Riley Quinn": a phone joined on that
+ * row would not take that sign-in for them. A row that only fits someone may
+ * not have a person another row names exactly, or fits as well ("Sam Ortiz" is
+ * not "Sam Ortiz Jr" while the son has a row of his own), nor one whose own
+ * row, by their exact name, was taken off. Rows written exactly alike are all
+ * the one person's. Only people on the app's roster are matched, never one
  * taken off.
  */
 export function matchRows(rows: readonly RosterRow[], people: readonly Employee[]): Map<string, RowMatch> {
@@ -59,26 +61,14 @@ export function matchRows(rows: readonly RosterRow[], people: readonly Employee[
     }
   }
   for (const [id, m] of out) if (m.kind === 'person' && (exactly.get(m.person.id) ?? 0) > 1) out.set(id, { ...m, shared: true });
-  const free = (person: Employee) => !exactly.has(person.id) && !twins.has(person.id);
+  // Someone whose own row, by their exact name, was taken off is named by that row, not by a looser new one.
+  const namedOff = new Set(active.filter((e) => rows.some((r) => !r.active && sameName(e, r.first_name, r.last_name))).map((e) => e.id));
+  const free = (person: Employee) => !exactly.has(person.id) && !twins.has(person.id) && !namedOff.has(person.id);
   for (const { row, person } of loose) {
     const alone = free(person) && !loose.some((l) => l.row.id !== row.id && l.person.id === person.id);
     out.set(row.id, alone ? { kind: 'person', person, exact: false, shared: false } : NONE);
   }
   for (const row of live) if (!out.has(row.id)) out.set(row.id, NONE);
-
-  // The other way round: a person nobody has yet whose name fits one row nobody has.
-  const had = new Set([...out.values()].flatMap((m) => (m.kind === 'person' ? [m.person.id] : [])));
-  const on = live.map(asPerson);
-  const back: { row: RosterRow; person: Employee }[] = [];
-  for (const person of active) {
-    if (had.has(person.id) || twins.has(person.id)) continue;
-    const hit = findOnRoster(on, person.firstName, person.lastName);
-    if (hit && 'person' in hit && out.get(hit.person.row.id)?.kind === 'none') back.push({ row: hit.person.row, person });
-  }
-  for (const { row, person } of back) {
-    if (back.some((b) => b.row.id === row.id && b.person.id !== person.id)) continue;
-    out.set(row.id, { kind: 'person', person, exact: false, shared: false });
-  }
   return out;
 }
 
@@ -144,37 +134,37 @@ export function readPastedRoster(text: string, roster: RosterRow[]): PastedList 
 }
 
 /**
- * The people on the app's roster with no row on the sign-in roster, so they
- * could not join the company with their own name. A person a row is for
- * (`matchRows`) is on it. So is one a row could be: a name that only loosely
- * fits a row, or fits several, or fits one taken off (those are listed by
- * `offRosterInApp`).
+ * The people on the app's roster no active row is for (`matchRows`): each is
+ * listed in one of the two lists below, so everyone on the phones can be found
+ * on the page, and taken off the app's roster there when they should not be on
+ * it. Placeholders, people a page names only for their hours, are left out.
  */
-export function phonesNotOnRoster(employees: readonly Employee[], roster: readonly RosterRow[], placeholders: ReadonlySet<string> = new Set()): Employee[] {
+function unheld(employees: readonly Employee[], roster: readonly RosterRow[], placeholders: ReadonlySet<string>): Employee[] {
   const people = employees.filter((e) => !placeholders.has(e.id));
   const held = heldByRows(roster, people);
-  const on = roster.map(asPerson);
-  return people
-    .filter((e) => e.active && !held.has(e.id))
-    .filter((e) => findOnRoster(on, e.firstName, e.lastName) === null)
-    .sort(byName);
+  return people.filter((e) => e.active && !held.has(e.id));
+}
+
+/** Whether a row taken off the sign-in roster fits a person's name. */
+const hasRowOff = (roster: readonly RosterRow[], e: Employee) => findOnRoster(roster.filter((r) => !r.active).map(asPerson), e.firstName, e.lastName) !== null;
+
+/**
+ * The people on the app's roster with no row on the sign-in roster, so they
+ * could not join the company with their own name: no active row is theirs, and
+ * no row taken off fits them (those are `offRosterInApp`).
+ */
+export function phonesNotOnRoster(employees: readonly Employee[], roster: readonly RosterRow[], placeholders: ReadonlySet<string> = new Set()): Employee[] {
+  return unheld(employees, roster, placeholders).filter((e) => !hasRowOff(roster, e)).sort(byName);
 }
 
 /**
  * The people still on the app's roster, and on every phone, whose row was
- * taken off the sign-in roster and who have no active row: taken off before
- * the Roster page wrote both rosters, or taken off while the app's roster was
- * not loaded.
+ * taken off the sign-in roster: no active row is theirs, and a row taken off
+ * fits them. Taken off before the Roster page wrote both rosters, or while the
+ * app's roster was not loaded.
  */
 export function offRosterInApp(employees: readonly Employee[], roster: readonly RosterRow[], placeholders: ReadonlySet<string> = new Set()): Employee[] {
-  const people = employees.filter((e) => !placeholders.has(e.id));
-  const held = heldByRows(roster, people);
-  const on = roster.filter((r) => r.active).map(asPerson);
-  const off = roster.filter((r) => !r.active).map(asPerson);
-  return people
-    .filter((e) => e.active && !held.has(e.id))
-    .filter((e) => findOnRoster(on, e.firstName, e.lastName) === null && findOnRoster(off, e.firstName, e.lastName) !== null)
-    .sort(byName);
+  return unheld(employees, roster, placeholders).filter((e) => hasRowOff(roster, e)).sort(byName);
 }
 
 /** Why a request did not join by itself, for the supervisor deciding it. */
