@@ -59,7 +59,11 @@
     "testPathIgnorePatterns": [
       "/node_modules/",
       "/dist/",
-      "<rootDir>/dashboard/"
+      "<rootDir>/dashboard/",
+      "<rootDir>/.claude/"
+    ],
+    "modulePathIgnorePatterns": [
+      "<rootDir>/.claude/"
     ]
   }
 }
