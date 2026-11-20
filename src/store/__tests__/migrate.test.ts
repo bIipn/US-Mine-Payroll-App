@@ -1,6 +1,7 @@
 import { sha256 } from '../../util/hash';
 import type { Company } from '../../domain/company';
-import { migratePersisted } from '../migrate';
+import { freshReceiving } from '../../domain/receive';
+import { migratePersisted, STATE_VERSION } from '../migrate';
 
 const COMPANY: Company = { name: 'Example Aggregates Co.', state: 'NV', pay: null };
 
@@ -168,6 +169,24 @@ describe('migratePersisted', () => {
     expect(next.seededAt).toBe(1_700_000_000_000);
   });
 
+  it('starts receiving the company’s records on a connected phone, a supervisor’s keeping its powers until the first answer', () => {
+    const v9 = {
+      ...v1, leave: [], payRates: {}, exams: [], areaSheets: [], settings: { lunchReminders: false, company: COMPANY },
+      synced: { 'shift:s1': 'abc' },
+      syncedWith: 'c-a',
+      connectedCompany: { id: 'c-a', name: 'Test Pit A', role: 'supervisor', userId: 'u1' },
+    };
+    const next = migratePersisted(v9, 9, false, COMPANY);
+    expect(next.receiving).toEqual(freshReceiving('c-a', 'supervisor'));
+    expect(next.synced).toEqual({ 'shift:s1': 'abc' });
+    expect(next.shifts).toEqual([{ id: 's1' }]);
+    expect(next.employees).toEqual(v1.employees);
+    // A crew role is never carried over: the first answer from the company decides, and takes payroll IDs off.
+    const crew = migratePersisted({ ...v9, connectedCompany: { ...v9.connectedCompany, role: 'employee' } }, 9, false, COMPANY);
+    expect(crew.receiving).toEqual(freshReceiving('c-a', null));
+    expect(migratePersisted({ ...v9, connectedCompany: null }, 9, false, COMPANY).receiving).toBeNull();
+  });
+
   it('leaves data from the current version alone', () => {
     const v7 = {
       ...v1, leave: [{ id: 'lv1' }], payRates: { e1: 2500 }, exams: [{ id: 'x1' }], areaSheets: [{ id: 'crusher' }],
@@ -177,12 +196,12 @@ describe('migratePersisted', () => {
       syncedWith: 'c-a',
       connectedCompany: { id: 'c-a', name: 'Test Pit A', role: 'employee' },
     };
-    expect(migratePersisted(v7, 9, true, COMPANY, null)).toEqual(v7);
+    expect(migratePersisted({ ...v7, receiving: null }, STATE_VERSION, true, COMPANY, null)).toEqual({ ...v7, receiving: null });
   });
 
   it('copes with nothing saved', () => {
     expect(migratePersisted(undefined, 1, false, COMPANY)).toEqual({
-      leave: [], payRates: {}, exams: [], areaSheets: [], synced: {}, syncedWith: null, connectedCompany: null, joinAsked: null,
+      leave: [], payRates: {}, exams: [], areaSheets: [], synced: {}, syncedWith: null, connectedCompany: null, joinAsked: null, receiving: null,
     });
   });
 });

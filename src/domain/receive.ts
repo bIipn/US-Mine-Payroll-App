@@ -299,6 +299,16 @@ function keptNotices(notices: readonly ReceiveNotice[], now: number): ReceiveNot
   return notices.filter((n) => n.at >= now - NOTICE_DAYS * DAY_MS).slice(0, MAX_NOTICES);
 }
 
+/** The notices with new ones put first (the last of `fresh` is the newest), kept to 20 and to 30 days. */
+export function withNotices(notices: readonly ReceiveNotice[], fresh: readonly ReceiveNotice[], now: number): ReceiveNotice[] {
+  return keptNotices([...[...fresh].reverse(), ...notices], now);
+}
+
+/** What the phone says when the company kept a unit at the floor its open requests set. */
+export function floorWords(unit: string, floor: EquipmentStatus): string {
+  return `Unit ${unit} stays ${floor === 'out_of_service' ? 'red tagged' : 'marked for a defect'}: a maintenance request on it is still open with the company.`;
+}
+
 function withoutPayrollId(person: Employee): Employee {
   if (!has(person as unknown as Obj, 'payrollId')) return person;
   const { payrollId: _, ...rest } = person;
@@ -493,7 +503,7 @@ export function mergeRows(state: ReceiveState, rows: readonly ReceivedRow[], now
       held,
       gone,
       unreadable: [...unreadable],
-      notices: keptNotices([...fresh.reverse(), ...r.notices], now),
+      notices: withNotices(r.notices, fresh, now),
     },
   };
 }

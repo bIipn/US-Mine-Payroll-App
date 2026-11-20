@@ -1,10 +1,11 @@
 import type { Company } from '../domain/company';
+import { freshReceiving } from '../domain/receive';
 import { startedLunch } from '../domain/time';
 import type { Lunch, SiteConfig } from '../domain/types';
 import { sha256 } from '../util/hash';
 
 /** Version of the saved app state. Raise it when the shape of the data changes. */
-export const STATE_VERSION = 9;
+export const STATE_VERSION = 10;
 
 type Saved = Record<string, unknown>;
 type SavedEvent = { at?: number; by?: string; status?: string; note?: string };
@@ -38,6 +39,12 @@ type SavedMrf = { status?: string; completedAt?: number; completedBy?: string; r
  * (`syncedWith`), with the server account that joined it, and the last request
  * to join that waits for a supervisor (`joinAsked`). A phone starts connected
  * to none, so nothing is sent until someone signs in on it and joins their company.
+ * Version 10 lets a connected phone receive the company's roster, fleet, area
+ * sheets and settings (`receiving`, `src/domain/receive.ts`). A phone connected
+ * before it starts reading them from the beginning; a supervisor's phone keeps
+ * its powers until the company first answers who its sign-in is. A crew role
+ * is never carried over: the first answer decides, and takes payroll IDs off.
+ * Every record and what the server has of it stay as they were.
  *
  * A build keeps every record that people entered. A preview that holds the
  * sample crew (`samples`) clears its "sample data loaded" marker instead, so
@@ -101,6 +108,11 @@ export function migratePersisted(
     state.connectedCompany = null;
     state.syncedWith = null;
     state.joinAsked = null;
+  }
+  if (fromVersion < 10) {
+    const linked = state.connectedCompany as { id?: string; role?: string } | null | undefined;
+    const company = (typeof state.syncedWith === 'string' && state.syncedWith) || linked?.id;
+    state.receiving = linked && company ? freshReceiving(company, linked.role === 'supervisor' ? 'supervisor' : null) : null;
   }
   if (fromVersion < STATE_VERSION && samples && 'seededAt' in state) {
     state.seededAt = null;

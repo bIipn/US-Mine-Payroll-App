@@ -3,10 +3,12 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { savedCompany, type Company } from '../domain/company';
+import { checkCompany, savedCompany, type Company } from '../domain/company';
+import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
+import { floorWords, freshReceiving, mergeRows, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
-import { markSent, type Change, type Synced } from '../domain/sync';
+import { DELETED, markSent, REFERENCE_KINDS, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
 import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
@@ -79,6 +81,19 @@ interface Data extends SeedData {
    * check on it later without typing the code again. This phone's own: never sent.
    */
   joinAsked: JoinAsked | null;
+  /**
+   * On a phone connected to its company: what it has received of the company's
+   * roster, fleet, area sheets and settings, and what of its own changes the
+   * company did not take (`src/domain/receive.ts`). Null on a phone never connected.
+   */
+  receiving: Receiving | null;
+}
+
+/** Which company, server account and reading a page of the company's records was read for. Anything else is not applied. */
+export interface ReceiveContext {
+  company: string;
+  account: string;
+  epoch: number;
 }
 
 /** A request to join a company: the code and the name it was made with. */
@@ -247,7 +262,23 @@ interface Actions {
    * company that answered: an answer from any company but the one `synced` is
    * about is not noted, such as one that comes back after the phone moved.
    */
-  markSynced: (accepted: readonly Pick<Change, 'key' | 'rev'>[], companyId?: string | null) => void;
+  markSynced: (accepted: readonly Pick<Change, 'key' | 'rev'>[], companyId?: string | null, sent?: readonly Change[]) => void;
+  /** On a connected phone with none (or another company's), start receiving the company's records from the beginning. */
+  ensureReceiving: () => Receiving | null;
+  /** Merge a page of the company's records, and move past it. False when it was read for another company, account or reading. */
+  applyReceived: (ctx: ReceiveContext, rows: readonly ReceivedRow[]) => boolean;
+  /** Who this phone's company sign-in is to the company: its role and name, or null for not on the roster. */
+  applyStanding: (ctx: ReceiveContext, standing: Standing | null) => boolean;
+  /** A company that never sent its settings: fill a blank company from the company's own row. */
+  takeCompanyRow: (ctx: ReceiveContext, row: CompanyRow) => boolean;
+  /** At start-up: read the company's records again from the beginning when some could not be read. */
+  readUnreadableAgain: () => void;
+  /** Before a call goes: note the versions of the four kinds it carries, so their own write is known when it comes back. */
+  markSending: (changes: readonly Change[], companyId: string) => void;
+  /** Changes the server would not take from this phone's sign-in: kept, not sent again at that version, and not counted as sent. */
+  holdRefused: (held: PushAnswer['held'], companyId: string) => void;
+  /** Units the server keeps at the floor of the company's open requests on them. */
+  keepFloor: (floored: PushAnswer['floored'], companyId: string) => void;
   /**
    * Send this phone's records to a company from now on, as the server account
    * that joined it. A phone whose records already went to another company is
@@ -302,6 +333,16 @@ function statusFromMrfs(equipmentId: string, mrfs: Mrf[]): EquipmentStatus {
   return open.length > 0 ? 'defect' : 'ready';
 }
 
+/** A pay schedule from the company's own row, when the app can use it; otherwise none. */
+function usablePay(pay: unknown): PaySchedule | null {
+  if (!pay || typeof pay !== 'object') return null;
+  try {
+    return checkPaySchedule(pay as PaySchedule) === undefined ? (pay as PaySchedule) : null;
+  } catch {
+    return null;
+  }
+}
+
 const initialData = (): Data => ({
   ...emptyData(),
   session: null,
@@ -312,6 +353,7 @@ const initialData = (): Data => ({
   syncedWith: null,
   connectedCompany: null,
   joinAsked: null,
+  receiving: null,
 });
 
 /** Whether what this build saves on the device is the sample crew's history, rather than only what people entered. */
@@ -350,6 +392,12 @@ export const useStore = create<Store>()(
         `We couldn't find "${clean(first)} ${clean(last)}" on the roster. Check the spelling, or see your supervisor to be added.`;
 
       const signedOut = { ok: false as const, error: 'You are signed out.' };
+      /** The receiving state a page or an answer was read for, or null when the phone has moved on since. */
+      const receivingFor = (ctx: ReceiveContext): Receiving | null => {
+        const { receiving, syncedWith, connectedCompany } = get();
+        if (!receiving || !connectedCompany || ctx.company !== syncedWith || ctx.company !== receiving.company) return null;
+        return ctx.account === connectedCompany.userId && ctx.epoch === receiving.epoch ? receiving : null;
+      };
       const isSupervisor = () => {
         const { session, employees } = get();
         return employees.find((e) => e.id === session?.employeeId)?.role === 'supervisor';
@@ -387,7 +435,9 @@ export const useStore = create<Store>()(
           }
           // The people this build names are always on the roster, its owner among them, and
           // the build's own area sheets are always there, including on a phone whose data
-          // was saved before they were named.
+          // was saved before they were named. Not once the phone has sent to a company:
+          // from then on the company's roster and sheets are the phone's.
+          if (get().syncedWith != null) return;
           const { employees, areaSheets } = get();
           const roster = withBuildRoster(employees, people, owner);
           const named = withSheets(areaSheets, sheets);
@@ -1049,10 +1099,113 @@ export const useStore = create<Store>()(
         },
 
         // ---- The company's server ---------------------------------------------------------
-        markSynced: (accepted, companyId) => {
+        markSynced: (accepted, companyId, sent = []) => {
           if (companyId !== undefined && companyId !== get().syncedWith) return;
           const synced = markSent(get().synced, accepted);
-          if (synced !== get().synced) set({ synced });
+          const r = get().receiving;
+          if (!r || !accepted.length) {
+            if (synced !== get().synced) set({ synced });
+            return;
+          }
+          // The sent marks go with their answer, and a unit the server took is the base of its next merge.
+          const marks = { ...r.sent };
+          const units = { ...r.units };
+          const records = new Map(sent.map((c) => [`${c.key}@${c.rev}`, c.record]));
+          for (const { key, rev } of accepted) {
+            delete marks[key];
+            if (!key.startsWith('equipment:')) continue;
+            const id = key.slice('equipment:'.length);
+            const record = records.get(`${key}@${rev}`) as Equipment | null | undefined;
+            if (rev === DELETED) delete units[id];
+            else if (record) units[id] = { status: record.status, meter: record.meter };
+          }
+          set({ synced, receiving: { ...r, sent: marks, units } });
+        },
+
+        ensureReceiving: () => {
+          const { connectedCompany, receiving } = get();
+          if (!connectedCompany) return receiving;
+          if (receiving?.company === connectedCompany.id) return receiving;
+          const fresh = freshReceiving(connectedCompany.id, null);
+          set({ receiving: fresh });
+          return fresh;
+        },
+
+        applyReceived: (ctx, rows) => {
+          const r = receivingFor(ctx);
+          if (!r) return false;
+          const merged = mergeRows({ ...get(), receiving: r }, rows, Date.now());
+          set(merged);
+          return true;
+        },
+
+        applyStanding: (ctx, standing) => {
+          const r = receivingFor(ctx);
+          if (!r) return false;
+          const next = standingChange({ employees: get().employees, receiving: r }, standing);
+          set({ employees: next.employees as Employee[], receiving: next.receiving });
+          return true;
+        },
+
+        takeCompanyRow: (ctx, row) => {
+          if (!receivingFor(ctx)) return false;
+          const { synced, settings } = get();
+          // Once the company's settings came, or while the phone's company is whole, they stand.
+          if (synced['settings:company'] !== undefined || checkCompany(settings.company) === undefined) return false;
+          const pay = usablePay(row.pay);
+          set({ settings: { ...settings, company: { ...settings.company, name: clean(row.name), state: row.state, pay } } });
+          return true;
+        },
+
+        readUnreadableAgain: () => {
+          const r = get().receiving;
+          if (!r?.unreadable.length) return;
+          set({ receiving: { ...r, epoch: r.epoch + 1, cursor: 0, unreadable: [] } });
+        },
+
+        markSending: (changes, companyId) => {
+          const r = get().receiving;
+          if (!r || companyId !== get().syncedWith || companyId !== r.company) return;
+          const marks = { ...r.sent };
+          let marked = false;
+          for (const c of changes) {
+            if (!(REFERENCE_KINDS as readonly string[]).includes(c.kind)) continue;
+            marks[c.key] = c.rev;
+            marked = true;
+          }
+          if (marked) set({ receiving: { ...r, sent: marks } });
+        },
+
+        holdRefused: (refused, companyId) => {
+          const r = get().receiving;
+          if (!r || !refused.length || companyId !== get().syncedWith || companyId !== r.company) return;
+          const held = { ...r.held };
+          const marks = { ...r.sent };
+          for (const { key, rev, reason } of refused) {
+            held[key] = { rev, reason };
+            delete marks[key];
+          }
+          set({ receiving: { ...r, held, sent: marks } });
+        },
+
+        keepFloor: (floored, companyId) => {
+          const r = get().receiving;
+          if (!r || !floored.length || companyId !== get().syncedWith || companyId !== r.company) return;
+          const marks = { ...r.sent };
+          const now = Date.now();
+          const said: { id: string; at: number; words: string }[] = [];
+          let equipment = get().equipment;
+          for (const { key, rev, floor } of floored) {
+            delete marks[key];
+            const id = key.slice('equipment:'.length);
+            const unit = equipment.find((e) => e.id === id);
+            if (!unit) continue;
+            // The server's status, raised to the floor: either the server's version again, or a raise sent next round.
+            const status = worseStatus(r.units[id]?.status ?? floor, floor);
+            equipment = equipment.map((e) => (e.id === id ? { ...e, status } : e));
+            said.push({ id: `${key}@floor@${rev}`, at: now, words: floorWords(unit.unit, floor) });
+          }
+          set({ equipment, receiving: { ...r, sent: marks, notices: withNotices(r.notices, said, now) } });
         },
 
         connectCompany: (company, account) => {
@@ -1139,10 +1292,11 @@ export const useStore = create<Store>()(
       version: STATE_VERSION,
       migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY, STARTING_SITE) as unknown as Store,
       storage: createJSONStorage(() => safeStorage),
-      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked }) => ({
-        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked,
+      partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked, receiving }) => ({
+        session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked, receiving,
       }),
       onRehydrateStorage: () => (state) => {
+        state?.readUnreadableAgain();
         state?.setHydrated();
       },
     },
