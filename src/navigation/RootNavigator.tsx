@@ -128,7 +128,11 @@ export function RootNavigator() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: color.kaolin } }}>
       {view === 'out' ? (
-        <Stack.Screen name="Auth" component={AuthScreen} />
+        <>
+          <Stack.Screen name="Auth" component={AuthScreen} />
+          {/* A new phone connects to its company from the sign-in screen, so it has the company's roster first. */}
+          {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
+        </>
       ) : view === 'clock_only' ? (
         <>
           <Stack.Screen name="Main" component={ClockScreen} />

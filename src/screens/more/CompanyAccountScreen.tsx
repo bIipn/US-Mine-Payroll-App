@@ -3,6 +3,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { Building2, CloudCheck, CloudUpload, Eye, EyeOff, LogIn, LogOut, RotateCcw, Users, WifiOff } from '../../components/icons';
 import { Button, Divider, Field, IconButton, Notice, Panel, Page, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
+import { companyAccountView } from '../../domain/access';
 import { keepsTime } from '../../domain/company';
 import { otherCompany } from '../../domain/server';
 import {
@@ -21,7 +22,7 @@ import {
   type WaitingRequest,
 } from '../../domain/serverAnswers';
 import { cleanText } from '../../domain/roster';
-import { syncWords } from '../../domain/sync';
+import { receiveWords, syncWords, type SyncStatus } from '../../domain/sync';
 import type { ScreenProps } from '../../navigation/types';
 import { checkAccount, disconnect, server, useServerAccount } from '../../services/connection';
 import { haptic } from '../../services/haptics';
@@ -39,14 +40,26 @@ type Mode = 'signin' | 'signup';
  */
 export function CompanyAccountScreen({ navigation }: ScreenProps<'CompanyAccount'>) {
   const linked = useStore((s) => s.connectedCompany);
+  const me = useMe();
+  const receiving = useStore((s) => s.receiving);
   const { known, account, notOnLinked } = useServerAccount();
+  const same = !!linked && !!account && linked.userId === account.id;
+  // The company sign-in belongs to the phone's person: who sees what of it (companyAccountView).
+  const { view, words } = companyAccountView({ connected: !!linked, me: me ?? null, receiving, serverSignedIn: same });
+  // Opened from the sign-in screen to connect: once connected, back to it, to make an account.
+  const connectedHere = !!linked;
+  const [startedOut] = useState(!linked && !me);
+  useEffect(() => {
+    if (startedOut && connectedHere) navigation.goBack();
+  }, [startedOut, connectedHere, navigation]);
 
   if (!server) return null;
-  const same = !!linked && !!account && linked.userId === account.id;
   return (
     <Page testID="company-account-screen" title="Company account" sub={linked && account ? linked.name : undefined} onBack={navigation.goBack}>
       <View style={{ gap: space.xl }}>
-        {!known ? (
+        {view === 'read_only' ? (
+          <ReadOnly words={words ?? (me ? 'This phone has not heard from the company yet. It does once it has signal.' : 'Sign in to the app to see this phone’s company account.')} canSend={!!me} />
+        ) : !known ? (
           <Waiting text="Looking for the account on this phone…" />
         ) : !account ? (
           <SignInForm />
@@ -561,6 +574,7 @@ function Connected({ email }: { email: string }) {
   const records = syncWords(sync, fmtTime);
   const RecordsIcon = !sync.online ? WifiOff : records.done ? CloudCheck : CloudUpload;
   const supervisor = linked.role === 'supervisor';
+  const fromCompany = receiveLine(sync, linked.name, linked.email ?? null);
 
   return (
     <>
@@ -600,21 +614,26 @@ function Connected({ email }: { email: string }) {
           testID="server-sync"
           left={<RecordsIcon color={color.ink} size={24} />}
           title={records.title}
-          sub={records.sub}
-          subColor={records.warn ? color.red : undefined}
-          subLines={4}
+          sub={fromCompany ? `${records.sub}\n${fromCompany.line}` : records.sub}
+          subColor={records.warn || fromCompany?.warn ? color.red : undefined}
+          subLines={6}
         />
       </Panel>
-      {sync.server && sync.waiting > 0 && sync.online && !sync.sending && !records.warn ? (
-        <Button testID="server-send-now" label="Send now" icon={CloudUpload} kind="outline" onPress={() => void syncNow()} />
-      ) : null}
+      <SendAndReceive />
+
+      <Panel title="What this phone receives">
+        <View style={{ gap: space.sm }} testID="server-what-received">
+          <Txt v="body">The roster, the fleet, the area sheets and the company’s settings, as the office keeps them on the dashboard. They come whenever this phone is open with signal, and every five minutes while it is.</Txt>
+          <Txt v="small" c={color.silica}>People are added, taken off and given a role or a payroll ID on the dashboard’s Roster page.</Txt>
+        </View>
+      </Panel>
 
       <Panel title="What is sent">
         <View style={{ gap: space.sm }} testID="server-what-sent">
           <Txt v="body">
             {time
-              ? 'Punches, equipment checklists, pre shift exams, maintenance requests, paid leave, the roster, the fleet, the area sheets and the company’s settings.'
-              : 'Equipment checklists, pre shift exams, maintenance requests, the roster, the fleet, the area sheets and the company’s settings.'}
+              ? 'Punches, equipment checklists, pre shift exams, maintenance requests and paid leave; and from a supervisor’s sign-in, changes to the fleet, the area sheets and the company’s settings.'
+              : 'Equipment checklists, pre shift exams and maintenance requests; and from a supervisor’s sign-in, changes to the fleet, the area sheets and the company’s settings.'}
           </Txt>
           <Txt v="body">
             {time
@@ -624,8 +643,8 @@ function Connected({ email }: { email: string }) {
           {supervisor ? null : (
             <Txt v="small" c={color.silica}>
               {time
-                ? 'The roster, the area sheets, paid leave and the company’s settings are a supervisor’s to change, so the server takes them from a supervisor’s phone only.'
-                : 'The roster, the area sheets and the company’s settings are a supervisor’s to change, so the server takes them from a supervisor’s phone only.'}
+                ? 'The area sheets, paid leave and the company’s settings are a supervisor’s to change, so the server takes them from a supervisor’s sign-in only. What it does not take stays on this phone and is listed on More.'
+                : 'The area sheets and the company’s settings are a supervisor’s to change, so the server takes them from a supervisor’s sign-in only. What it does not take stays on this phone and is listed on More.'}
             </Txt>
           )}
         </View>
@@ -633,6 +652,68 @@ function Connected({ email }: { email: string }) {
 
       <DisconnectButton />
       <AccountRow email={email} />
+    </>
+  );
+}
+
+/** The records row's line about what comes from the company. */
+function receiveLine(sync: SyncStatus, company: string, email: string | null) {
+  const receiving = useStore.getState().receiving;
+  return receiveWords(
+    {
+      connected: true,
+      online: sync.online,
+      role: receiving?.role ?? null,
+      caughtUpAt: receiving?.caughtUpAt ?? null,
+      closed: sync.trouble === 'closed',
+      unreadable: receiving?.unreadable.length ?? 0,
+      notTaken: sync.notTaken,
+      company,
+      email,
+    },
+    fmtTime,
+  );
+}
+
+/** Send what waits and read what the company changed, now. */
+function SendAndReceive() {
+  const sync = useSyncStatus();
+  if (!sync.server || !sync.online || sync.sending) return null;
+  return <Button testID="server-send-now" label="Send and receive now" icon={CloudUpload} kind="outline" onPress={() => void syncNow()} />;
+}
+
+/**
+ * The company account of a phone whose company sign-in belongs to someone else, or with nobody
+ * signed in to the app: the company and where its records stand, and nothing that changes the sign-in.
+ */
+function ReadOnly({ words, canSend }: { words: string; canSend: boolean }) {
+  const linked = useStore((s) => s.connectedCompany);
+  const sync = useSyncStatus();
+  if (!linked) return null;
+  const records = syncWords(sync, fmtTime);
+  const fromCompany = receiveLine(sync, linked.name, null);
+  return (
+    <>
+      <Panel>
+        <View style={styles.company}>
+          <Building2 color={color.ink} size={32} />
+          <View style={{ flex: 1, gap: space.xs }}>
+            <Txt v="h3" testID="server-company-name">{linked.name}</Txt>
+            <Txt v="small" c={color.silica}>{words}</Txt>
+          </View>
+        </View>
+      </Panel>
+      <Panel title="Records on this phone" flush>
+        <Row
+          testID="server-sync"
+          left={<CloudUpload color={color.ink} size={24} />}
+          title={records.title}
+          sub={fromCompany ? `${records.sub}\n${fromCompany.line}` : records.sub}
+          subColor={records.warn || fromCompany?.warn ? color.red : undefined}
+          subLines={6}
+        />
+      </Panel>
+      {canSend ? <SendAndReceive /> : null}
     </>
   );
 }
