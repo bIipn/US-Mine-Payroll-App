@@ -22,7 +22,11 @@ const LEGEND: Answer[] = ['ok', 'bo', 'na'];
 export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'>) {
   const insets = useSafeAreaInsets();
   const me = useMe();
-  const unit = useStore((s) => s.equipment.find((e) => e.id === route.params.equipmentId));
+  // The unit as the form opened with it: the checklist is signed on it though the office changes or takes it out meanwhile.
+  const live = useStore((s) => s.equipment.find((e) => e.id === route.params.equipmentId));
+  const opened = useRef(live);
+  if (!opened.current && live) opened.current = live;
+  const unit = opened.current;
   const allowAllOk = useStore((s) => s.settings.allowSectionAllOk);
   const { submitInspection, showToast } = useStore.getState();
 
@@ -106,6 +110,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
     }));
     const result = submitInspection({
       equipmentId: unit.id,
+      unit,
       startedAt,
       meter: meterValue,
       answers,
@@ -118,6 +123,9 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
     }
     sent.current = true;
     setSigning(false);
+    if (!useStore.getState().equipment.some((e) => e.id === unit.id)) {
+      showToast(`Unit ${unit.unit} was taken out of the fleet while you were checking it. Your checklist is signed and kept.`, 'info');
+    }
     if (result.inspection.result === 'pass') haptic.success();
     else haptic.warning();
     const inspectionId = result.inspection.id;

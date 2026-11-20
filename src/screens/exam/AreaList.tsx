@@ -7,7 +7,7 @@ import { StandardRefs } from '../../components/Standards';
 import { Button, Divider, EmptyState, Notice, Panel, Row, Sheet, Tag, Txt } from '../../components/ui';
 import { foundLine, openFindings, shiftLabel } from '../../domain/areaExam';
 import type { AreaExam } from '../../domain/types';
-import { employeeName, useMe, useStore } from '../../store/useStore';
+import { employeeName, useMe, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtRelativeDay, fmtTime, shortName, startOfDay } from '../../util/format';
 
@@ -15,6 +15,7 @@ import { fmtRelativeDay, fmtTime, shortName, startOfDay } from '../../util/forma
 export function AreaList({ now }: { now: number }) {
   const navigation = useNavigation();
   const me = useMe();
+  const supervisor = useSupervisorHere();
   const sheets = useStore((s) => s.areaSheets);
   const exams = useStore((s) => s.exams);
   const employees = useStore((s) => s.employees);
@@ -97,7 +98,7 @@ export function AreaList({ now }: { now: number }) {
         kind="quiet"
         onPress={() => navigation.navigate('MrfForm', {})}
       />
-      {me?.role === 'supervisor' ? (
+      {supervisor ? (
         <Button testID="area-sheets" label="Add or change area sheets" icon={ListChecks} kind="quiet" onPress={() => navigation.navigate('AreaSheets')} />
       ) : null}
 

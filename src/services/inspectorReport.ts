@@ -1,5 +1,5 @@
 import { examCounts, examFindings, examResult, shiftLabel } from '../domain/areaExam';
-import { checklistFor, findItem, isHazard, onTheCard } from '../domain/templates';
+import { checklistSignedOn, findItem, isHazard, onTheCard } from '../domain/templates';
 import type { Employee, Inspection, Mrf } from '../domain/types';
 import { addDays, DAY, fmtDayShort, fmtTime, fmtWeekday, ymd } from '../util/format';
 import { buildPdf, type PdfSection } from './pdf';
@@ -69,7 +69,7 @@ export function inspectorReport(data: ReportData, from: number, to: number, now:
       const done = corrected(mrf);
       if (!within(i.submittedAt) && done) return [];
       const unit = unitOf.get(i.equipmentId);
-      const template = checklistFor(unit?.category ?? 'loader');
+      const template = checklistSignedOn(i, unit);
       const earlier = !onTheCard(i);
       return i.answers
         .filter((a) => a.answer === 'bo')

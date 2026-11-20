@@ -9,7 +9,7 @@ import { backFromLunchAt, FLAG_LABEL, flagHelp, MEAL_NOTE_LABEL, shiftFlags, shi
 import type { Punch, ShiftEdit } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { employeeName, useMe, useRules, useStore } from '../../store/useStore';
+import { employeeName, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDate, fmtDateTime, fmtDistance, fmtDur, fmtHM, fmtHrs, fmtTime, MIN, startOfDay } from '../../util/format';
 import { useNow } from '../../util/hooks';
@@ -48,7 +48,7 @@ export function ShiftDetailScreen({ navigation, route }: ScreenProps<'ShiftDetai
   const flags = shiftFlags(shift, now, rules);
   const missing = flags.includes('missing_out');
   const day = startOfDay(shift.clockIn.at);
-  const canEdit = me?.role === 'supervisor';
+  const canEdit = useSupervisorHere();
   const lunch = shift.lunches[0];
 
   const openEdit = () => {

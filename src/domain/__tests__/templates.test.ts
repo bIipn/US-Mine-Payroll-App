@@ -1,5 +1,5 @@
 import { STANDARDS } from '../standards';
-import { ANSWER_LEGEND, CATEGORY_ORDER, checklistFor, countAnswers, findItem, inspectionResult, isHazard, signedAnswers } from '../templates';
+import { ANSWER_LEGEND, CATEGORY_ORDER, checklistFor, checklistSignedOn, countAnswers, findItem, inspectionResult, isHazard, signedAnswers } from '../templates';
 import type { EquipmentCategory, InspectionAnswer } from '../types';
 
 // The lines of the paper Operator Equipment Checklist, top to bottom.
@@ -155,5 +155,14 @@ describe('inspectionResult', () => {
   it('takes the unit out of service when the operator calls a defect unsafe', () => {
     const answers = all({ tires: { answer: 'bo', note: 'Sidewall cut', hazard: true } });
     expect(inspectionResult(checklist, answers)).toBe('bad_order');
+  });
+});
+
+describe('checklistSignedOn', () => {
+  it('cites the standards of the type a checklist was signed under, whatever the unit is now', () => {
+    expect(checklistSignedOn({ category: 'dozer' }, { category: 'forklift' })).toBe(checklistFor('dozer'));
+    // Signed before the type was kept on it: the unit's type now, as before.
+    expect(checklistSignedOn({}, { category: 'forklift' })).toBe(checklistFor('forklift'));
+    expect(checklistSignedOn({}, null)).toBe(checklistFor('loader'));
   });
 });

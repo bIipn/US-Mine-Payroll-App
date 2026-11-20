@@ -2,7 +2,7 @@
 // company account (src/domain/access.ts). On a phone never connected the person's record decides, as
 // it always has. On a phone connected to its company, the phone's company sign-in decides too: its
 // role, and whose it is.
-import { accountHere, companyAccountView, supervisorHere } from '../access';
+import { accountHere, companyAccountView, signedInView, supervisorHere } from '../access';
 import type { Employee } from '../types';
 
 const dana: Employee = { id: 'emp_dana', firstName: 'Dana', lastName: 'Fry', role: 'supervisor', active: true };
@@ -104,5 +104,50 @@ describe('companyAccountView', () => {
     });
     expect(companyAccountView({ connected: true, me: lee, receiving: joined, serverSignedIn: false })).toEqual({ view: 'full' });
     expect(companyAccountView({ connected: true, me: lee, receiving: { role: 'none', name: danaName }, serverSignedIn: true })).toEqual({ view: 'full' });
+  });
+});
+
+describe('the screens', () => {
+  // This project has no Node types, so the file system is asked for by name with the calls used here.
+  type Entry = { name: string; isDirectory(): boolean };
+  type Files = { readdirSync(dir: string, o: { withFileTypes: true }): Entry[]; readFileSync(file: string, encoding: 'utf8'): string };
+  const fs = jest.requireActual<Files>('fs');
+  const here = expect.getState().testPath ?? '';
+  const src = here.slice(0, here.search(/[\\/]domain[\\/]/));
+  const files = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === '__tests__' ? [] : files(`${dir}/${e.name}`)) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
+
+  it('read a supervisor’s power through useSupervisorHere, never from the signed-in person’s role', () => {
+    const found: string[] = [];
+    for (const file of [...files(`${src}/screens`), ...files(`${src}/navigation`)]) {
+      fs.readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          // Showing who someone is (a "Supervisor" tag) is not a power.
+          if (/\bme\??\.role\s*[!=]==/.test(line) && !line.includes('<Tag')) found.push(`${file.slice(src.length + 1)}:${i + 1}`);
+        });
+    }
+    expect(found).toEqual([]);
+  });
+});
+
+describe('signedInView', () => {
+  const off = { ...lee, active: false };
+  it('signs out a person taken off the roster, unless they are on the clock: then the Clock screen alone', () => {
+    expect(signedInView({ person: off, onTheClock: false, connected: false, receiving: null })).toBe('out');
+    expect(signedInView({ person: off, onTheClock: true, connected: false, receiving: null })).toBe('clock_only');
+    expect(signedInView({ person: undefined, onTheClock: false, connected: false, receiving: null })).toBe('out');
+  });
+
+  it('holds the person a sign-in taken off the company’s roster is for the same way, and nobody else', () => {
+    const gone = { role: 'none' as const, name: leeName };
+    expect(signedInView({ person: lee, onTheClock: true, connected: true, receiving: gone })).toBe('clock_only');
+    expect(signedInView({ person: lee, onTheClock: false, connected: true, receiving: gone })).toBe('out');
+    expect(signedInView({ person: dana, onTheClock: false, connected: true, receiving: gone })).toBe('full');
+  });
+
+  it('leaves everyone else as they were', () => {
+    expect(signedInView({ person: lee, onTheClock: false, connected: true, receiving: { role: 'employee', name: leeName } })).toBe('full');
+    expect(signedInView({ person: lee, onTheClock: false, connected: false, receiving: null })).toBe('full');
   });
 });

@@ -63,6 +63,16 @@ export function ClockScreen() {
   const company = settings.company;
   const equipment = useStore((s) => s.equipment);
   const opLogs = useStore((s) => s.opLogs);
+  const gone = useStore((s) => s.receiving?.gone);
+  /** Why this person may only clock out here: taken off the roster, or this phone's sign-in no longer on the company's. */
+  const held = useStore((s) => {
+    const person = s.employees.find((e) => e.id === s.session?.employeeId);
+    if (person && !person.active) return 'You are no longer on the active roster. Clock out when you are done, then see your supervisor.';
+    if (s.connectedCompany && s.receiving?.role === 'none') {
+      return `This phone is not joined to ${s.connectedCompany.name} any more, so a clock-in here would never reach payroll. Clock out when you are done, then see your supervisor.`;
+    }
+    return null;
+  });
   const actions = useStore.getState();
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -288,6 +298,8 @@ export function ClockScreen() {
             />
           ) : null}
 
+          {held ? <Notice tone="warn" title={held} /> : null}
+
           {shift ? <PreShiftChecks employeeId={me.id} now={now} /> : null}
 
           <AssignedToMe employeeId={me.id} />
@@ -295,15 +307,16 @@ export function ClockScreen() {
           {myUnits.length > 0 ? (
             <Panel title="You have checked out" flush>
               {myUnits.map((log) => {
-                const unit = equipment.find((e) => e.id === log.equipmentId);
+                const unit = equipment.find((e) => e.id === log.equipmentId) ?? gone?.[log.equipmentId];
                 if (!unit) return null;
+                const takenOut = !equipment.some((e) => e.id === log.equipmentId);
                 return (
                   <Row
                     key={log.id}
                     testID={`in-use-${unit.unit}`}
                     left={<UnitPlate unit={unit.unit} />}
                     title={`${unit.make} ${unit.model}`}
-                    sub={`Since ${fmtTime(log.startAt)}. Tap to end use.`}
+                    sub={`Since ${fmtTime(log.startAt)}.${takenOut ? ' Taken out of the fleet.' : ''} Tap to end use.`}
                     chevron
                     onPress={() => navigation.navigate('EndUse', { logId: log.id })}
                   />

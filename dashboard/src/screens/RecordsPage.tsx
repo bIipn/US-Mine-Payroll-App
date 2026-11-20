@@ -4,7 +4,7 @@ import { examCounts, examFindings, examResult, shiftLabel } from '@app/domain/ar
 import { cardsBetween, dailyCards, dayClock } from '@app/domain/checklistCard';
 import { keepsTime } from '@app/domain/company';
 import { standard } from '@app/domain/standards';
-import { CATEGORY_LABEL, checklistFor, findItem, isHazard, onTheCard } from '@app/domain/templates';
+import { CATEGORY_LABEL, checklistSignedOn, findItem, isHazard, onTheCard } from '@app/domain/templates';
 import { addDays, fmtDate, fmtDateLong, fmtDateTime, fmtMeter, fmtTime, startOfDay, ymd } from '@app/util/format';
 
 import { useCompany } from '../lib/company';
@@ -153,7 +153,7 @@ export function ChecklistPage({ id }: { id: string }) {
   const card = dailyCards(data, inspection.employeeId, inspection.submittedAt).find((c) => c.columns.some((col) => col.inspection.id === id))!;
   const clock = keepsTime(company) ? dayClock(data.shifts, inspection.employeeId, inspection.submittedAt, ctx.now) : undefined;
   const unit = people.unitOf.get(inspection.equipmentId);
-  const template = checklistFor(unit?.category ?? 'loader');
+  const template = checklistSignedOn(inspection, unit);
   const earlier = !onTheCard(inspection);
   const mrf = inspection.mrfId ? people.mrfOf.get(inspection.mrfId) : undefined;
   const log = data.opLogs.find((l) => l.inspectionId === inspection.id);

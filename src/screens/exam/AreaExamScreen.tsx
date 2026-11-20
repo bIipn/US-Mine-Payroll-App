@@ -7,6 +7,7 @@ import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, IconButton, MultiChoice, Notice, ProgressBar, Segmented, Sheet, Tag, TopBar, Txt, TriChoice } from '../../components/ui';
 import { AREA_CONDITIONS, EXAM_COLUMNS, openFindings, shiftLabel, SHIFTS, startingShift, type ExamDraft, type Finding } from '../../domain/areaExam';
+import { stableJson } from '../../domain/sync';
 import type { Answer, ExamColumn, ShiftName } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -37,7 +38,11 @@ const conditionUnfinished = (mark?: LineDraft) => !mark || (mark.answer === 'bo'
 export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
   const insets = useSafeAreaInsets();
   const me = useMe();
-  const sheet = useStore((s) => s.areaSheets.find((x) => x.id === route.params.sheetId));
+  // The sheet as the form opened with it: an office change or stop while the exam is open does not move its lines.
+  const live = useStore((s) => s.areaSheets.find((x) => x.id === route.params.sheetId));
+  const opened = useRef(live);
+  if (!opened.current && live) opened.current = live;
+  const sheet = opened.current;
   const exams = useStore((s) => s.exams);
   const mrfs = useStore((s) => s.mrfs);
   const allowAllOk = useStore((s) => s.settings.allowSectionAllOk);
@@ -126,6 +131,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
     if (sent.current) return;
     const draft: ExamDraft = {
       sheetId: sheet.id,
+      sheet,
       shift,
       startedAt,
       rows,
@@ -139,6 +145,10 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
     }
     sent.current = true;
     setSigning(false);
+    const now = useStore.getState().areaSheets.find((x) => x.id === sheet.id);
+    if (!now || stableJson(now) !== stableJson(sheet)) {
+      showToast(`The ${sheet.title} sheet was changed in the office while you had it open. Your exam is signed on the sheet as you saw it. The next exam uses the new sheet.`, 'info');
+    }
     if (counts.bo > 0) haptic.warning();
     else haptic.success();
     const examId = result.exam.id;

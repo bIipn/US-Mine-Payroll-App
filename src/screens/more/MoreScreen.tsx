@@ -14,7 +14,7 @@ import { CAN_CONNECT, disconnect, useServerAccount } from '../../services/connec
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { useSyncStatus } from '../../services/sync';
-import { openShiftOf, useMe, useRules, useStore } from '../../store/useStore';
+import { openShiftOf, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
 
@@ -42,6 +42,7 @@ const RESET = SAMPLE_CREW
 export function MoreScreen() {
   const navigation = useNavigation();
   const me = useMe();
+  const supervisor = useSupervisorHere();
   const account = useStore((s) => s.accounts.find((a) => a.id === s.session?.accountId));
   const settings = useStore((s) => s.settings);
   const rules = useRules();
@@ -69,7 +70,7 @@ export function MoreScreen() {
         ? { sub: `This account is not on ${linked.name}’s roster. Nothing is sent.`, warn: true }
         : { sub: `Connected to ${linked.name}`, warn: false };
   // Clearing a device that keeps real records is a supervisor's to do: what has not reached the server is lost.
-  const canClear = DEMO_MODE || (CAN_CONNECT && me.role === 'supervisor');
+  const canClear = DEMO_MODE || (CAN_CONNECT && supervisor);
 
   const toggleReminders = async (on: boolean) => {
     setLunchReminders(on);
@@ -165,7 +166,7 @@ export function MoreScreen() {
           </Panel>
         ) : null}
 
-        {me.role === 'supervisor' ? (
+        {supervisor ? (
           <Panel title="Company" flush>
             <Row
               testID="more-company"
@@ -184,7 +185,7 @@ export function MoreScreen() {
           </Panel>
         ) : null}
 
-        {me.role === 'supervisor' ? (
+        {supervisor ? (
           <Panel title="Checklist settings" flush>
             <Toggle
               testID="toggle-all-ok"

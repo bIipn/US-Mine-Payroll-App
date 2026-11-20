@@ -37,7 +37,8 @@ import { SafetyLogScreen } from '../screens/supervisor/SafetyLogScreen';
 import { TimeLogsScreen } from '../screens/supervisor/TimeLogsScreen';
 import { CAN_CONNECT } from '../services/connection';
 import { haptic } from '../services/haptics';
-import { useMe, useStore } from '../store/useStore';
+import { signedInView } from '../domain/access';
+import { openShiftOf, useMe, useStore, useSupervisorHere } from '../store/useStore';
 import { color, font } from '../theme/theme';
 import type { RootStackParamList, ScreenProps, TabParamList } from './types';
 
@@ -100,25 +101,40 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
 
 function MainTabs() {
   const me = useMe();
+  const supervisor = useSupervisorHere();
   // A company that uses the app for the safety forms only has no clock and no hours, so its first tab is the checklists.
-  const time = useStore((s) => keepsTime(s.settings.company));
+  // Someone on the clock keeps the clock and their hours until they clock out, though the office turned the clock off.
+  const time = useStore((s) => keepsTime(s.settings.company) || (!!s.session && !!openShiftOf(s.shifts, s.session.employeeId, Date.now())));
   return (
     <Tabs.Navigator screenOptions={{ headerShown: false }} tabBar={(props) => <TabBar {...props} />}>
       {time ? <Tabs.Screen name="Clock" component={ClockScreen} /> : null}
       <Tabs.Screen name="Equipment" component={EquipmentScreen} />
       {time ? <Tabs.Screen name="Hours" component={HoursScreen} /> : null}
-      {me?.role === 'supervisor' ? <Tabs.Screen name="Crew" component={CrewScreen} /> : null}
+      {supervisor ? <Tabs.Screen name="Crew" component={CrewScreen} /> : null}
       <Tabs.Screen name="More" component={MoreScreen} />
     </Tabs.Navigator>
   );
 }
 
 export function RootNavigator() {
-  const signedIn = useStore((s) => !!s.session && s.employees.some((e) => e.id === s.session?.employeeId && e.active));
+  // Nobody on the clock is signed out: someone taken off the roster, or the person this phone's sign-in is for once
+  // that sign-in is off the company's roster, keeps the Clock screen alone, and End use, until they clock out.
+  const view = useStore((s) => {
+    if (!s.session) return 'out';
+    const person = s.employees.find((e) => e.id === s.session?.employeeId);
+    const onTheClock = !!person && !!openShiftOf(s.shifts, person.id, Date.now());
+    return signedInView({ person, onTheClock, connected: !!s.connectedCompany, receiving: s.receiving });
+  });
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: color.kaolin } }}>
-      {!signedIn ? (
+      {view === 'out' ? (
         <Stack.Screen name="Auth" component={AuthScreen} />
+      ) : view === 'clock_only' ? (
+        <>
+          <Stack.Screen name="Main" component={ClockScreen} />
+          <Stack.Screen name="EndUse" component={EndUseScreen} />
+          <Stack.Screen name="Site" component={SiteScreen} />
+        </>
       ) : (
         <>
           <Stack.Screen name="Main" component={MainTabs} />

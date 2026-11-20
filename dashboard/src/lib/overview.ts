@@ -1,5 +1,5 @@
 import { openFindings, type Finding } from '@app/domain/areaExam';
-import { checklistFor, findItem, isHazard, onTheCard } from '@app/domain/templates';
+import { checklistSignedOn, findItem, isHazard, onTheCard } from '@app/domain/templates';
 import type { AreaExam, Equipment, Inspection, InspectionAnswer, Mrf, MrfPriority } from '@app/domain/types';
 import { addDays, DAY, startOfDay } from '@app/util/format';
 
@@ -35,7 +35,7 @@ export function openBadOrders(data: Pick<Shaped['data'], 'inspections' | 'equipm
       const mrf = inspection.mrfId ? mrfOf.get(inspection.mrfId) : undefined;
       if (mrf?.status === 'completed' && mrf.completedAt != null) return [];
       const unit = unitOf.get(inspection.equipmentId);
-      const template = checklistFor(unit?.category ?? 'loader');
+      const template = checklistSignedOn(inspection, unit);
       const earlier = !onTheCard(inspection);
       return inspection.answers
         .filter((a) => a.answer === 'bo')

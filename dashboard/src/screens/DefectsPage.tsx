@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
 import { examFindings } from '@app/domain/areaExam';
-import { checklistFor, findItem, onTheCard } from '@app/domain/templates';
+import { checklistSignedOn, findItem, onTheCard } from '@app/domain/templates';
 import { DAY, fmtDateTime } from '@app/util/format';
 
 import { useCompany } from '../lib/company';
@@ -34,7 +34,7 @@ export function DefectsPage() {
       const mrf = i.mrfId ? people.mrfOf.get(i.mrfId) : undefined;
       if (!(mrf?.status === 'completed' && mrf.completedAt != null && mrf.completedAt >= since)) return [];
       const unit = people.unitOf.get(i.equipmentId);
-      const template = checklistFor(unit?.category ?? 'loader');
+      const template = checklistSignedOn(i, unit);
       return i.answers.filter((a) => a.answer === 'bo').map((a) => ({ i, a, mrf, unit, label: onTheCard(i) ? (findItem(template, a.itemId)?.label ?? a.itemId) : 'Earlier checklist' }));
     })
     .sort((x, y) => (y.mrf.completedAt ?? 0) - (x.mrf.completedAt ?? 0));
@@ -87,7 +87,7 @@ export function DefectsPage() {
             </thead>
             <tbody>
               {board.badOrders.map((b) => {
-                const item = onTheCard(b.inspection) ? findItem(checklistFor(b.unit?.category ?? 'loader'), b.answer.itemId) : undefined;
+                const item = onTheCard(b.inspection) ? findItem(checklistSignedOn(b.inspection, b.unit), b.answer.itemId) : undefined;
                 return (
                   <tr key={b.key} className={b.hazard ? 'danger-row' : undefined}>
                     <td className="nowrap"><A className="rowlink" href={`/checklists/${encodeURIComponent(b.inspection.id)}`}>{fmtDateTime(b.inspection.submittedAt)}</A></td>

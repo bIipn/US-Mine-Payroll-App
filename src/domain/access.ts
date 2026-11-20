@@ -104,3 +104,24 @@ export function companyAccountView(state: {
   if (!state.serverSignedIn || r.role === 'none') return { view: 'full' };
   return { view: 'read_only', words: `This phone is joined with ${full(r.name)}’s company sign-in. Only they change it here.` };
 }
+
+/**
+ * What a person signed in to the app sees. `out`: the sign-in screen. `full`:
+ * the app. `clock_only`: the Clock screen alone, and End use from it, so a
+ * person taken off the roster while on the clock (or the person a phone's
+ * sign-in is for, once that sign-in is off the company's roster) can clock out
+ * and check a unit back in. Nobody on the clock is signed out.
+ */
+export function signedInView(state: {
+  person: Employee | undefined;
+  /** The person has a shift open now. */
+  onTheClock: boolean;
+  connected: boolean;
+  receiving: SignInStanding | null;
+}): 'out' | 'clock_only' | 'full' {
+  const { person, onTheClock, connected, receiving } = state;
+  if (!person) return 'out';
+  const held = !person.active || (connected && receiving?.role === 'none' && fits(person, receiving.name));
+  if (!held) return 'full';
+  return onTheClock ? 'clock_only' : 'out';
+}

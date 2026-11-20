@@ -3,7 +3,7 @@ import { cardsBetween } from '../domain/checklistCard';
 import { computePayroll, sumPayroll } from '../domain/payroll';
 import { DEFAULT_PAY_CODES, payrollCsv, toCsv, type PayrollCsvLayout } from '../domain/payrollCsv';
 import { standard } from '../domain/standards';
-import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, findItem, isHazard, onTheCard } from '../domain/templates';
+import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, checklistSignedOn, findItem, isHazard, onTheCard } from '../domain/templates';
 import { rulesFor } from '../domain/stateRules';
 import { backFromLunchAt, FLAG_LABEL, flagHelp, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
 import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Settings, Shift } from '../domain/types';
@@ -326,9 +326,9 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
     rows: inspections.flatMap((i) => {
       // A Bad Order stays on the record after its unit leaves the fleet. The lines are the same
       // on every machine; only the standard beside a line depends on the type, so with the unit
-      // gone none is cited.
+      // gone none is cited. The type is the one it was signed under.
       const unit = unitOf.get(i.equipmentId);
-      const template = checklistFor(unit?.category ?? 'loader');
+      const template = checklistSignedOn(i, unit);
       const earlier = !onTheCard(i);
       const mrf = i.mrfId ? mrfOf.get(i.mrfId) : undefined;
       return i.answers

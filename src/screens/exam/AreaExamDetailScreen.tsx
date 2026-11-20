@@ -11,7 +11,7 @@ import { examCounts, examFindings, openFindings, shiftLabel, type Finding } from
 import { AREA_CONDITION_STEPS, AREA_DANGER_STEPS } from '../../domain/standards';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { employeeName, useMe, useStore } from '../../store/useStore';
+import { employeeName, useMe, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtDateTime, fmtTime } from '../../util/format';
 
@@ -22,6 +22,7 @@ import { fmtDate, fmtDateTime, fmtTime } from '../../util/format';
 export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExamDetail'>) {
   const insets = useSafeAreaInsets();
   const me = useMe();
+  const supervisor = useSupervisorHere();
   const exams = useStore((s) => s.exams);
   const exam = exams.find((x) => x.id === route.params.examId);
   const employees = useStore((s) => s.employees);
@@ -40,7 +41,7 @@ export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExa
   const counts = examCounts(exam);
   const examiner = employeeName(employees, exam.employeeId);
   const shift = shiftLabel(exam.shift).toLowerCase();
-  const canFix = me.role === 'supervisor' || exam.employeeId === me.id;
+  const canFix = supervisor || exam.employeeId === me.id;
   const mrfOf = (id?: string) => mrfs.find((m) => m.id === id);
   // The same line found again on another exam of this area is a record of its own: each keeps
   // its own date fixed, so nothing here closes it. The person is told it is there.

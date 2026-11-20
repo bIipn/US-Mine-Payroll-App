@@ -9,7 +9,7 @@ import { checkFix, circleAcres, MAX_ACCURACY_M, type FixCheck, type RawFix } fro
 import { MAX_RADIUS_M, MIN_RADIUS_M, townGap } from '../../domain/site';
 import type { ScreenProps } from '../../navigation/types';
 import { locate } from '../../services/location';
-import { useMe, useStore } from '../../store/useStore';
+import { useMe, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDistance } from '../../util/format';
 
@@ -20,7 +20,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
   const settings = useStore((s) => s.settings);
   const { setRadius, setSitePin, showToast } = useStore.getState();
   const site = settings.site;
-  const supervisor = me?.role === 'supervisor';
+  const supervisor = useSupervisorHere();
 
   const [busy, setBusy] = useState(false);
   const [fix, setFix] = useState<RawFix | null>(null);

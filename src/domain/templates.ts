@@ -118,6 +118,16 @@ function oshaFor(category: EquipmentCategory, id: string): string | undefined {
 const cache = new Map<EquipmentCategory, ChecklistTemplate>();
 
 /** The checklist for a machine: the same 21 lines, with the standards that cover its type. */
+/**
+ * The checklist a signed checklist was made under, for the standards printed
+ * beside its lines: the type of machine it was signed on, so an office change
+ * of the unit's type does not change a signed record; else, for a checklist
+ * signed before the type was kept on it, the unit's type now.
+ */
+export function checklistSignedOn(inspection: { category?: EquipmentCategory }, unit?: { category: EquipmentCategory } | null): ChecklistTemplate {
+  return checklistFor(inspection.category ?? unit?.category ?? 'loader');
+}
+
 export function checklistFor(category: EquipmentCategory): ChecklistTemplate {
   const cached = cache.get(category);
   if (cached) return cached;

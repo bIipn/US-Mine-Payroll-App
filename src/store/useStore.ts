@@ -1424,6 +1424,16 @@ export function useMe(): Employee | undefined {
   return useStore((s) => s.employees.find((e) => e.id === s.session?.employeeId));
 }
 
+/**
+ * Whether the person signed in has a supervisor's powers on this phone: the
+ * store's own rule (supervisorHere). On a phone connected to its company, the
+ * phone's company sign-in decides too, so a screen never reads a power from
+ * the person's role alone.
+ */
+export function useSupervisorHere(): boolean {
+  return useStore((s) => supervisorHere({ session: s.session, employees: s.employees, connected: !!s.connectedCompany, receiving: s.receiving }));
+}
+
 export function employeeName(employees: Employee[], id: string | undefined): string {
   const e = employees.find((x) => x.id === id);
   return e ? `${e.firstName} ${e.lastName}` : 'Unknown';

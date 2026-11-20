@@ -4,7 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
 import { Button, Divider, Notice, Page, Panel, Tag, Txt, UnitPlate } from '../../components/ui';
-import { ANSWER_MARK, checklistFor, countAnswers, findItem, FUEL_LINE, isHazard } from '../../domain/templates';
+import { ANSWER_MARK, checklistFor, checklistSignedOn, countAnswers, findItem, FUEL_LINE, isHazard } from '../../domain/templates';
 import type { InspectionResult } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { employeeName, useStore } from '../../store/useStore';
@@ -27,7 +27,7 @@ export function InspectionDetailScreen({ navigation, route }: ScreenProps<'Inspe
 
   if (!inspection) return null;
   // The lines read the same on every machine; the unit's type only picks the standards.
-  const checklist = checklistFor(unit?.category ?? 'loader');
+  const checklist = checklistSignedOn(inspection, unit);
   // A record signed on an earlier checklist keeps the lines it was signed on.
   const earlier = inspection.templateId !== checklist.id;
   const counts = countAnswers(inspection.answers);

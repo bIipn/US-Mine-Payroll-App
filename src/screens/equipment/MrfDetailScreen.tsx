@@ -9,7 +9,7 @@ import { examFindings, openFindings } from '../../domain/areaExam';
 import type { Employee, MrfEvent, MrfPriority, MrfStatus } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { employeeName, useMe, useStore } from '../../store/useStore';
+import { employeeName, useMe, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space, type Tone } from '../../theme/theme';
 import { fmtDate, fmtDateTime, fmtHrs, fmtMeter, fullName, initials, toHundredths } from '../../util/format';
 
@@ -53,7 +53,7 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
   if (!mrf || !me) return null;
   const status = MRF_STATUS[mrf.status];
   const priority = MRF_PRIORITY[mrf.priority];
-  const supervisor = me.role === 'supervisor';
+  const supervisor = useSupervisorHere();
   const canWork = supervisor || mrf.assignedTo === me.id;
   const done = mrf.status === 'completed';
   const name = (id?: string) => (id ? employeeName(employees, id) : '');

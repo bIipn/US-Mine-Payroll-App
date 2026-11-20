@@ -15,7 +15,8 @@ import { useNow } from '../../util/hooks';
 export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   const now = useNow(30_000);
   const log = useStore((s) => s.opLogs.find((l) => l.id === route.params.logId));
-  const unit = useStore((s) => s.equipment.find((e) => e.id === log?.equipmentId));
+  // A unit the company took out of the fleet while it was checked out here is kept until its use is ended.
+  const unit = useStore((s) => s.equipment.find((e) => e.id === log?.equipmentId) ?? (log ? s.receiving?.gone[log.equipmentId] : undefined));
   const { endUse, showToast } = useStore.getState();
 
   const [meter, setMeter] = useState('');
