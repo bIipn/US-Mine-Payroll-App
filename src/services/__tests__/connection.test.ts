@@ -73,6 +73,15 @@ const PIT_B = { id: 'c-b', name: 'Test Pit B', role: 'supervisor' as const };
 const sessionOf = (user: { id: string; email: string }) => ({ access_token: 'a', refresh_token: 'r', user });
 const signedInAs = (user: { id: string; email: string } | null) =>
   mockGetSession.mockResolvedValue({ data: { session: user ? sessionOf(user) : null }, error: null });
+/**
+ * The company has answered who this phone's company sign-in is: Avery, a supervisor. Accounts on a
+ * connected phone, and a supervisor's powers there, go by that answer.
+ */
+function answered(useStore: Loaded['store']['useStore']) {
+  const state = useStore.getState();
+  const receiving = state.ensureReceiving()!;
+  state.applyStanding({ company: PIT_A.id, account: AVERY.id, epoch: receiving.epoch }, { role: 'supervisor', name: { firstName: 'Avery', lastName: 'Quill' } });
+}
 const settle = async () => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 };
@@ -235,7 +244,9 @@ describe('a build that connects', () => {
     await settle();
     expect(status().server).toBe(true);
     expect(useStore.getState().clearDevice()).toMatchObject({ ok: false });
-    useStore.getState().signUp({ firstName: 'Avery', lastName: 'Quill', email: 'avery@example.com', password: 'haulroad88' });
+    answered(useStore);
+    // Avery's own account on the phone joined with Avery's sign-in, its password checked by the server.
+    useStore.getState().signUp({ firstName: 'Avery', lastName: 'Quill', email: 'avery@example.com', password: 'haulroad88', companyPasswordChecked: true });
     expect(useStore.getState().clearDevice()).toEqual({ ok: true });
     expect(useStore.getState().connectedCompany).toBeNull();
     expect(status().server).toBe(false);
@@ -259,6 +270,7 @@ describe('a build that connects', () => {
     const stop = app.connection.watchConnection();
     await settle();
     expect(app.sync.useSyncStatus.getState().waiting).toBe(0);
+    answered(useStore);
     useStore.getState().signUp({ firstName: 'Blake', lastName: 'Rook', email: 'blake@example.com', password: 'haulroad88' });
     useStore.getState().clockIn({ lat: 1, lng: 1, accuracyM: 6, distanceM: 10, inside: true, source: 'gps' });
     // Straight away, not after the few seconds the send waits for.
@@ -283,6 +295,7 @@ describe('a build that connects', () => {
     mockAuthEvent('SIGNED_OUT', null);
     await settle();
     expect(app.connection.useServerAccount.getState().account).toBeNull();
+    answered(useStore);
     useStore.getState().signUp({ firstName: 'Blake', lastName: 'Rook', email: 'blake@example.com', password: 'haulroad88' });
     useStore.getState().clockIn({ lat: 1, lng: 1, accuracyM: 6, distanceM: 10, inside: true, source: 'gps' });
     await new Promise((r) => setTimeout(r, 3_200));

@@ -3,13 +3,14 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
+import { accountHere, supervisorHere } from '../domain/access';
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
-import { cleanText, findOnRoster, parsePersonName, sameName, titleCase, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
+import { addedPerson, cleanText, findOnRoster, parsePersonName, payrollIdProblem, sameName, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
 import { rulesFor } from '../domain/stateRules';
@@ -114,6 +115,11 @@ export interface SignUpInput {
   lastName: string;
   email: string;
   password: string;
+  /**
+   * On a phone joined with a supervisor's company sign-in: the server has just
+   * confirmed that sign-in's password, which a supervisor's own account needs.
+   */
+  companyPasswordChecked?: boolean;
 }
 
 export interface InspectionDraft {
@@ -199,7 +205,7 @@ interface Actions {
   ensureSeeded: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[], samples?: boolean) => void;
   resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[], samples?: boolean) => void;
 
-  signUp: (input: SignUpInput) => Result;
+  signUp: (input: SignUpInput) => Result<{ note?: string }>;
   signIn: (email: string, password: string) => Result;
   signInWithProvider: (provider: AuthProvider, firstName: string, lastName: string) => Result;
   signInDemo: (role: Role) => Result;
@@ -232,28 +238,28 @@ interface Actions {
   addAreaSheet: (title: string, rowsText: string, single?: boolean) => Result<{ sheet: AreaSheet }>;
   /** Leave `single` out to keep the columns the sheet has. */
   updateAreaSheet: (sheetId: string, title: string, rowsText: string, single?: boolean) => Result;
-  setAreaSheetActive: (sheetId: string, active: boolean) => void;
+  setAreaSheetActive: (sheetId: string, active: boolean) => Result;
 
   addEmployee: (firstName: string, lastName: string, role?: Role, title?: string) => Result;
-  addEmployeesBulk: (text: string) => { added: number; skipped: number };
-  setEmployeeActive: (employeeId: string, active: boolean) => void;
-  setEmployeeRole: (employeeId: string, role: Role) => void;
+  addEmployeesBulk: (text: string) => { added: number; skipped: number; error?: string };
+  setEmployeeActive: (employeeId: string, active: boolean) => Result;
+  setEmployeeRole: (employeeId: string, role: Role) => Result;
   /** A person's number in the company's payroll system, for the payroll hours file. Empty takes it off. */
   setPayrollId: (employeeId: string, payrollId: string) => Result;
   addEquipment: (input: UnitInput) => Result;
-  removeEquipment: (equipmentId: string) => void;
+  removeEquipment: (equipmentId: string) => Result;
 
-  setRadius: (radiusM: number) => void;
+  setRadius: (radiusM: number) => Result;
   /** Move the boundary's pin to a point on the mine, such as where the supervisor stands. Makes the site if there is none. */
   setSitePin: (center: LatLng) => Result;
   setDemoLocation: (mode: DemoLocation) => void;
   setLunchReminders: (on: boolean) => void;
-  setAllowSectionAllOk: (on: boolean) => void;
+  setAllowSectionAllOk: (on: boolean) => Result;
   /** Supervisors only. */
   setCompany: (company: Company) => Result;
 
   addLeave: (input: LeaveInput) => Result;
-  removeLeave: (leaveId: string) => void;
+  removeLeave: (leaveId: string) => Result;
   /** The signed-in person's own hourly rate for their pay estimate. `null` clears it. */
   setMyRate: (cents: number | null) => Result;
 
@@ -398,9 +404,40 @@ export const useStore = create<Store>()(
         if (!receiving || !connectedCompany || ctx.company !== syncedWith || ctx.company !== receiving.company) return null;
         return ctx.account === connectedCompany.userId && ctx.epoch === receiving.epoch ? receiving : null;
       };
+      /**
+       * Whether the person signed in has a supervisor's powers on this phone. On a phone
+       * connected to its company, the phone's company sign-in decides too (supervisorHere).
+       */
       const isSupervisor = () => {
-        const { session, employees } = get();
-        return employees.find((e) => e.id === session?.employeeId)?.role === 'supervisor';
+        const { session, employees, connectedCompany, receiving } = get();
+        return supervisorHere({ session, employees, connected: !!connectedCompany, receiving });
+      };
+      /** On a connected phone, people are changed on the dashboard, which changes the sign-in roster with them. */
+      const peopleProblem = (): { ok: false; error: string } | null =>
+        get().connectedCompany
+          ? {
+              ok: false,
+              error:
+                'On a phone joined to a company, people are added, taken off and given a role or a payroll ID on the dashboard’s Roster page, which changes the sign-in roster too. This phone gets the change the next time it has signal.',
+            }
+          : null;
+      /**
+       * On a connected phone, the fleet, the sheets and the settings change from a supervisor's
+       * company sign-in, and only once the company's own have come: the server takes them from a
+       * supervisor only, and the company's would otherwise be put over them a moment later.
+       */
+      const sharedProblem = (): { ok: false; error: string } | null => {
+        const { connectedCompany, receiving } = get();
+        if (!connectedCompany) return null;
+        if (receiving?.role === 'none') return { ok: false, error: 'This phone’s company sign-in is not on the company’s roster any more. See your supervisor.' };
+        if (receiving?.role !== 'supervisor') {
+          return {
+            ok: false,
+            error: 'This phone is joined with a crew sign-in, so the company’s server would not take this. Change it on the office dashboard, or join this phone with a supervisor’s sign-in on Company account.',
+          };
+        }
+        if (receiving.caughtUpAt == null) return { ok: false, error: 'This phone has not got the company’s roster, fleet and sheets yet. Try again once it has had signal.' };
+        return null;
       };
       /** A request is worked by a supervisor or by the person it is assigned to. */
       const canWork = (mrf: Mrf) => isSupervisor() || (!!mrf.assignedTo && mrf.assignedTo === get().session?.employeeId);
@@ -462,7 +499,7 @@ export const useStore = create<Store>()(
         },
 
         // ---- Accounts ----------------------------------------------------------------
-        signUp: ({ firstName, lastName, email, password }) => {
+        signUp: ({ firstName, lastName, email, password, companyPasswordChecked }) => {
           if (!clean(firstName) || !clean(lastName)) return { ok: false, error: 'Enter your first and last name.' };
           const address = email.trim().toLowerCase();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return { ok: false, error: 'Enter a valid email address.' };
@@ -470,6 +507,12 @@ export const useStore = create<Store>()(
           const match = rosterMatch(firstName, lastName);
           if (!match.ok) return match;
           const { employee } = match;
+          // On a connected phone, whose account it may hold goes by its company sign-in (accountHere).
+          const { connectedCompany, receiving } = get();
+          const here = connectedCompany
+            ? accountHere(employee, receiving ?? { role: null, name: null }, !!companyPasswordChecked, connectedCompany.email ?? null)
+            : ({ ok: true } as const);
+          if (!here.ok) return { ok: false, error: here.error };
           const { accounts } = get();
           if (accounts.some((a) => a.email === address)) {
             return { ok: false, error: 'That email already has an account. Sign in instead.' };
@@ -489,7 +532,7 @@ export const useStore = create<Store>()(
           };
           set({ accounts: [...accounts.filter((a) => a.employeeId !== employee.id), account] });
           startSession(account);
-          return { ok: true };
+          return 'note' in here && here.note ? { ok: true, note: here.note } : { ok: true };
         },
 
         signIn: (email, password) => {
@@ -556,8 +599,17 @@ export const useStore = create<Store>()(
 
         // ---- Time clock ----------------------------------------------------------------
         clockIn: (geo) => {
-          const { session, shifts } = get();
+          const { session, shifts, employees, connectedCompany, receiving } = get();
           if (!session) return { ok: false, error: 'You are signed out.' };
+          if (!employees.find((e) => e.id === session.employeeId)?.active) {
+            return { ok: false, error: 'You are no longer on the active roster. See your supervisor.' };
+          }
+          if (connectedCompany && receiving?.role === 'none') {
+            return {
+              ok: false,
+              error: `This phone is not joined to ${connectedCompany.name} any more, so a clock-in here would never reach payroll. See your supervisor.`,
+            };
+          }
           const now = Date.now();
           if (openShiftOf(shifts, session.employeeId, now)) return { ok: false, error: 'You are already clocked in.' };
           const shift: Shift = {
@@ -958,6 +1010,8 @@ export const useStore = create<Store>()(
 
         addAreaSheet: (title, rowsText, single) => {
           const { areaSheets } = get();
+          const shared = sharedProblem();
+          if (shared) return shared;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
           // The rules are the domain's (newSheet), so the office dashboard adds a sheet the same way.
           const made = newSheet(areaSheets, title, rowsText, single);
@@ -968,6 +1022,8 @@ export const useStore = create<Store>()(
 
         updateAreaSheet: (sheetId, title, rowsText, single) => {
           const { areaSheets } = get();
+          const shared = sharedProblem();
+          if (shared) return shared;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
           // With nothing said about the columns, the sheet keeps the ones it has. Exams already
           // signed keep the lines, and the columns, they were made on (changedSheet).
@@ -978,30 +1034,33 @@ export const useStore = create<Store>()(
         },
 
         setAreaSheetActive: (sheetId, active) => {
-          if (!isSupervisor()) return;
+          const shared = sharedProblem();
+          if (shared) return shared;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the area sheets.' };
           set({ areaSheets: get().areaSheets.map((s) => (s.id === sheetId ? sheetInUse(s, active) : s)) });
+          return { ok: true };
         },
 
         // ---- Roster and fleet ------------------------------------------------------------
         addEmployee: (firstName, lastName, role = 'employee', title) => {
           if (!get().session) return signedOut;
+          const people = peopleProblem();
+          if (people) return people;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the roster.' };
-          const first = titleCase(firstName);
-          const last = titleCase(lastName);
-          if (!first || !last) return { ok: false, error: 'Enter a first and last name.' };
+          // The rule is the domain's (addedPerson), so the dashboard's Roster page adds a person the same way.
           const { employees } = get();
-          const existing = employees.find((e) => sameName(e, first, last));
-          if (existing?.active) return { ok: false, error: `${first} ${last} is already on the roster.` };
-          if (existing) {
-            set({ employees: employees.map((e) => (e.id === existing.id ? { ...e, active: true, role } : e)) });
-            return { ok: true };
-          }
-          const employee: Employee = { id: uid('emp_'), firstName: first, lastName: last, role, title: title ? clean(title) : undefined, active: true };
-          set({ employees: [...employees, employee] });
+          const added = addedPerson(employees, firstName, lastName, role, title, uid('emp_'));
+          if (!added.ok) return added;
+          set({ employees: added.returning ? employees.map((e) => (e.id === added.employee.id ? added.employee : e)) : [...employees, added.employee] });
           return { ok: true };
         },
 
         addEmployeesBulk: (text) => {
+          const people = peopleProblem();
+          if (people) {
+            const lines = text.split(/[\n;]+/).filter((raw) => clean(raw.replace(/^\d+[.)]\s*/, ''))).length;
+            return { added: 0, skipped: lines, error: people.error };
+          }
           let added = 0;
           let skipped = 0;
           for (const raw of text.split(/[\n;]+/)) {
@@ -1017,25 +1076,30 @@ export const useStore = create<Store>()(
         },
 
         setEmployeeActive: (employeeId, active) => {
-          if (!isSupervisor()) return;
+          const people = peopleProblem();
+          if (people) return people;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the roster.' };
           set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, active } : e)) });
+          return { ok: true };
         },
 
         setEmployeeRole: (employeeId, role) => {
-          if (!isSupervisor()) return;
+          const people = peopleProblem();
+          if (people) return people;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the roster.' };
           set({ employees: get().employees.map((e) => (e.id === employeeId ? { ...e, role } : e)) });
+          return { ok: true };
         },
 
         setPayrollId: (employeeId, payrollId) => {
           if (!get().session) return signedOut;
+          const people = peopleProblem();
+          if (people) return people;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can set payroll IDs.' };
           const id = payrollId.trim();
-          if (id && !/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,19}$/.test(id)) {
-            return { ok: false, error: 'A payroll ID is up to 20 letters and numbers. A dash, dot, slash or space between them is fine.' };
-          }
           const { employees } = get();
-          const taken = id && employees.find((e) => e.id !== employeeId && e.payrollId?.toLowerCase() === id.toLowerCase());
-          if (taken) return { ok: false, error: `${taken.firstName} ${taken.lastName} already has payroll ID ${id}.` };
+          const problem = payrollIdProblem(employees, employeeId, id);
+          if (problem) return { ok: false, error: problem };
           set({
             employees: employees.map((e) => {
               if (e.id !== employeeId) return e;
@@ -1048,6 +1112,8 @@ export const useStore = create<Store>()(
 
         addEquipment: (input) => {
           if (!get().session) return signedOut;
+          const shared = sharedProblem();
+          if (shared) return shared;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the fleet.' };
           // What makes a unit number taken, and how a new unit starts, are the domain's (newUnit).
           const { equipment } = get();
@@ -1058,19 +1124,28 @@ export const useStore = create<Store>()(
         },
 
         removeEquipment: (equipmentId) => {
-          if (!isSupervisor()) return;
+          const shared = sharedProblem();
+          if (shared) return shared;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the fleet.' };
           set({ equipment: withoutUnit(get().equipment, equipmentId) });
+          return { ok: true };
         },
 
         // ---- Settings ---------------------------------------------------------------------
         setRadius: (radiusM) => {
+          const shared = sharedProblem();
+          if (shared) return shared;
           const { settings } = get();
-          if (!settings.site || !isSupervisor()) return;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can move the mine boundary.' };
+          if (!settings.site) return { ok: false, error: 'Put the boundary’s pin on the mine first.' };
           const clamped = Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, Math.round(radiusM / 50) * 50));
           set({ settings: { ...settings, site: { ...settings.site, radiusM: clamped } } });
+          return { ok: true };
         },
         setSitePin: (center) => {
           if (!get().session) return signedOut;
+          const shared = sharedProblem();
+          if (shared) return shared;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can move the mine boundary.' };
           if (!(Math.abs(center.lat) <= 90 && Math.abs(center.lng) <= 180)) return { ok: false, error: 'That is not a position on the map.' };
           const { settings } = get();
@@ -1085,11 +1160,16 @@ export const useStore = create<Store>()(
         setLunchReminders: (lunchReminders) => set({ settings: { ...get().settings, lunchReminders } }),
         setAllowSectionAllOk: (allowSectionAllOk) => {
           // A company setting: it goes to the server with the others.
-          if (!isSupervisor()) return;
+          const shared = sharedProblem();
+          if (shared) return shared;
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the company’s settings.' };
           set({ settings: { ...get().settings, allowSectionAllOk } });
+          return { ok: true };
         },
         setCompany: (company) => {
           if (!get().session) return signedOut;
+          const shared = sharedProblem();
+          if (shared) return shared;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the company details.' };
           // How a company is tidied and checked before it is saved is the domain's (savedCompany).
           const saved = savedCompany(company);
@@ -1238,9 +1318,7 @@ export const useStore = create<Store>()(
         addLeave: ({ employeeId, day, type, hours, note }) => {
           const { session, employees, leave } = get();
           if (!session) return { ok: false, error: 'You are signed out.' };
-          if (employees.find((e) => e.id === session.employeeId)?.role !== 'supervisor') {
-            return { ok: false, error: 'Only a supervisor can record paid leave.' };
-          }
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can record paid leave.' };
           if (!employees.some((e) => e.id === employeeId)) return { ok: false, error: 'That person is not on the roster.' };
           if (!Number.isFinite(hours) || hours <= 0 || hours > 2400) {
             return { ok: false, error: 'Enter the hours for that day, between 0.25 and 24.' };
@@ -1261,10 +1339,10 @@ export const useStore = create<Store>()(
         },
 
         removeLeave: (leaveId) => {
-          const { session, employees, leave } = get();
           // The same rule as adding it: paid leave is a supervisor's entry to make or undo.
-          if (employees.find((e) => e.id === session?.employeeId)?.role !== 'supervisor') return;
-          set({ leave: leave.filter((entry) => entry.id !== leaveId) });
+          if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can take off paid leave.' };
+          set({ leave: get().leave.filter((entry) => entry.id !== leaveId) });
+          return { ok: true };
         },
 
         setMyRate: (cents) => {
