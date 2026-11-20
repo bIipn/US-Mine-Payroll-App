@@ -129,7 +129,8 @@ const waitingNow = (): Change[] => {
   return [...sorted.now, ...sorted.afterReceive];
 };
 /** What the company would not take from this sign-in: held at the version refused, or passed over for its role. */
-const notTakenNow = (): number => sortedNow().notTaken.length;
+export const notTakenChanges = (): Change[] => sortedNow().notTaken;
+const notTakenNow = (): number => notTakenChanges().length;
 
 /** How long a round reads the company's records before it lets the next round carry on. */
 export const RECEIVE_BUDGET_MS = 60_000;

@@ -2,6 +2,7 @@ import { checkCompany } from './company';
 import type { PersonName } from './roster';
 import { revOf, sharedSettings, stableJson, type HeldReason, type ReceivedRow, type ReferenceKind, type SharedSettings, type Standing, type Synced } from './sync';
 import type { AreaSheet, Employee, Equipment, EquipmentCategory, EquipmentStatus, Mrf, OperatingLog, Role, Settings } from './types';
+import { fmtDate } from '../util/format';
 
 export { REFERENCE_KINDS } from './sync';
 export type { HeldReason, ReceivedRow, ReferenceKind, Standing } from './sync';
@@ -59,8 +60,8 @@ export interface Receiving {
   units: Readonly<Record<string, UnitBase>>;
   /** Keys of rows passed over because this version of the app cannot read them. */
   unreadable: readonly string[];
-  /** Changes the server would not take from this phone's sign-in: key -> the rev it refused and why. */
-  held: Readonly<Record<string, { rev: string; reason: HeldReason }>>;
+  /** Changes the server would not take from this phone's sign-in: key -> the rev it refused and why; `seen` once Done was tapped. */
+  held: Readonly<Record<string, { rev: string; reason: HeldReason; seen?: true }>>;
   /** Units taken out of the fleet while this phone has one checked out: kept to end the use, never sent. */
   gone: Readonly<Record<string, Equipment>>;
   /** What of a person's change the company did not take, newest first, at most 20, none older than 30 days. */
@@ -534,4 +535,77 @@ export function standingChange(
   const again = { ...r, role: standing.role, name: standing.name, epoch: r.epoch + 1, cursor: 0 };
   if (standing.role === 'employee') return { employees: withoutPayrollIds(state.employees), receiving: again };
   return { employees: state.employees, receiving: { ...again, held: {} } };
+}
+
+// ---- What the company did not take, in words ------------------------------------------------------------
+
+const fullName = (people: readonly Employee[], id: string | undefined) => {
+  const p = people.find((e) => e.id === id);
+  return p ? `${p.firstName} ${p.lastName}` : 'someone';
+};
+
+/**
+ * What a change the company did not take from this phone's sign-in is, the way
+ * the person knows it, and why, with what to do: for the list on More.
+ */
+export function notTakenWords(
+  change: { kind: string; id: string },
+  reason: HeldReason,
+  data: {
+    employees: readonly Employee[];
+    equipment: readonly Equipment[];
+    areaSheets: readonly AreaSheet[];
+    leave: readonly { id: string; employeeId: string; day: number }[];
+    shifts: readonly { id: string; employeeId: string; clockIn: { at: number } }[];
+    mrfs: readonly Mrf[];
+  },
+): { what: string; why: string } {
+  const { employees } = data;
+  let what: string;
+  switch (change.kind) {
+    case 'leave': {
+      const entry = data.leave.find((l) => l.id === change.id);
+      what = entry ? `Paid leave for ${fullName(employees, entry.employeeId)} on ${fmtDate(entry.day)}` : 'Paid leave taken off';
+      break;
+    }
+    case 'shift': {
+      const shift = data.shifts.find((s) => s.id === change.id);
+      what = shift ? `A correction to ${fullName(employees, shift.employeeId)}’s shift on ${fmtDate(shift.clockIn.at)}` : 'A shift taken off';
+      break;
+    }
+    case 'mrf': {
+      const mrf = data.mrfs.find((m) => m.id === change.id);
+      what = mrf ? `Request #${mrf.number}${mrf.assignedTo ? ` assigned to ${fullName(employees, mrf.assignedTo)}` : ''}` : 'A maintenance request taken off';
+      break;
+    }
+    case 'equipment':
+      what = `Unit ${data.equipment.find((e) => e.id === change.id)?.unit ?? change.id}`;
+      break;
+    case 'areaSheet':
+      what = `The ${data.areaSheets.find((s) => s.id === change.id)?.title ?? change.id} sheet`;
+      break;
+    case 'settings':
+      what = 'The company settings';
+      break;
+    case 'exam':
+      what = 'A pre shift exam';
+      break;
+    case 'inspection':
+      what = 'An equipment checklist';
+      break;
+    case 'opLog':
+      what = 'The use of a unit';
+      break;
+    default:
+      what = 'A turned-down punch';
+  }
+  const why =
+    reason === 'supervisor_only'
+      ? 'Only a supervisor’s company sign-in can send this. Enter it on the dashboard, or join this phone with a supervisor’s sign-in on Company account.'
+      : reason === 'not_yours'
+        ? 'Another person’s record: the company keeps theirs.'
+        : reason === 'signed'
+          ? 'Already signed: a signed record is not changed.'
+          : 'The company’s server would not take it as it is. Tell the office.';
+  return { what, why };
 }

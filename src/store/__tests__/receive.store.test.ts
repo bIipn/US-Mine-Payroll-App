@@ -223,3 +223,19 @@ describe('the marks of a send', () => {
     expect(s().receiving!.notices[0].words).toBe(`Unit ${unit.unit} stays marked for a defect: a maintenance request on it is still open with the company.`);
   });
 });
+
+describe('Done, on what the company did not take and on its notices', () => {
+  it('keeps a change held and takes it off the list, and marks a notice seen', () => {
+    connect('employee');
+    s().holdRefused([{ key: 'leave:l1', rev: 'r1', reason: 'not_yours' }], COMPANY);
+    s().dismissHeld([{ key: 'leave:l1', rev: 'r1' }, { key: 'areaSheet:a1', rev: 'r9' }]);
+    expect(s().receiving!.held).toEqual({
+      'leave:l1': { rev: 'r1', reason: 'not_yours', seen: true },
+      // Passed over for the phone's role: held from now on at that version.
+      'areaSheet:a1': { rev: 'r9', reason: 'supervisor_only', seen: true },
+    });
+    useStore.setState({ receiving: { ...s().receiving!, notices: [{ id: 'n1', at: at(6), words: 'Something' }] } });
+    s().dismissNotice('n1');
+    expect(s().receiving!.notices).toEqual([{ id: 'n1', at: at(6), words: 'Something', seen: true }]);
+  });
+});

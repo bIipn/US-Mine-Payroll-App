@@ -6,6 +6,7 @@
 import fixtures from './fixtures/sharedRecords.json';
 import {
   changedFields,
+  notTakenWords,
   EQUIPMENT_CATEGORIES,
   freshReceiving,
   listed,
@@ -546,3 +547,35 @@ function dataOf(state: ReturnType<typeof mergeRows>): SyncData {
     mrfs: [],
   } as SyncData;
 }
+
+describe('notTakenWords', () => {
+  const people = [person(), person({ id: 'emp_dana', firstName: 'Dana', lastName: 'Fry', role: 'supervisor' })];
+  const day = new Date(2026, 10, 13, 9).getTime();
+  const data = {
+    employees: people,
+    equipment: [unit()],
+    areaSheets: [sheet()],
+    leave: [{ id: 'lv1', employeeId: 'emp_lee', day, type: 'pto' as const, hours: 800, enteredBy: 'emp_dana', at: day }],
+    shifts: [{ id: 'sh1', employeeId: 'emp_lee', clockIn: { at: day }, lunches: [], breaks: [] }],
+    mrfs: [{ id: 'mrf1', number: 1042, requestedBy: 'emp_lee', createdAt: day, description: 'x', priority: 'routine' as const, items: [], taggedOut: false, status: 'open' as const, history: [], assignedTo: 'emp_dana' }],
+  };
+  const change = (key: string) => ({ key, kind: key.slice(0, key.indexOf(':')) as never, id: key.slice(key.indexOf(':') + 1), rev: 'r1', record: {} });
+
+  it('names what was not taken the way the person knows it', () => {
+    expect(notTakenWords(change('leave:lv1'), 'supervisor_only', data).what).toBe('Paid leave for Lee Park on Fri, Nov 13');
+    expect(notTakenWords(change('shift:sh1'), 'supervisor_only', data).what).toBe('A correction to Lee Park’s shift on Fri, Nov 13');
+    expect(notTakenWords(change('mrf:mrf1'), 'supervisor_only', data).what).toBe('Request #1042 assigned to Dana Fry');
+    expect(notTakenWords(change('equipment:eq_t14'), 'supervisor_only', data).what).toBe('Unit T-14');
+    expect(notTakenWords(change('areaSheet:wash-bay'), 'supervisor_only', data).what).toBe('The Wash bay sheet');
+    expect(notTakenWords(change('settings:company'), 'supervisor_only', data).what).toBe('The company settings');
+  });
+
+  it('says why, and what to do', () => {
+    expect(notTakenWords(change('leave:lv1'), 'supervisor_only', data).why).toBe(
+      'Only a supervisor’s company sign-in can send this. Enter it on the dashboard, or join this phone with a supervisor’s sign-in on Company account.',
+    );
+    expect(notTakenWords(change('shift:sh1'), 'not_yours', data).why).toBe('Another person’s record: the company keeps theirs.');
+    expect(notTakenWords(change('shift:sh1'), 'signed', data).why).toBe('Already signed: a signed record is not changed.');
+    expect(notTakenWords(change('equipment:eq_t14'), 'malformed', data).why).toBe('The company’s server would not take it as it is. Tell the office.');
+  });
+});

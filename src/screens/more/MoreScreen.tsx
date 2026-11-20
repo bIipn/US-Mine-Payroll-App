@@ -8,12 +8,13 @@ import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
 import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
 import { keepsTime } from '../../domain/company';
-import { syncWords } from '../../domain/sync';
+import { notTakenWords } from '../../domain/receive';
+import { receiveWords, syncWords } from '../../domain/sync';
 import { deadlineWords } from '../../domain/time';
 import { CAN_CONNECT, disconnect, useServerAccount } from '../../services/connection';
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
-import { useSyncStatus } from '../../services/sync';
+import { notTakenChanges, useSyncStatus } from '../../services/sync';
 import { openShiftOf, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
@@ -60,6 +61,24 @@ export function MoreScreen() {
   if (!me) return null;
   const records = syncWords(sync, fmtTime);
   const RecordsIcon = !sync.online ? WifiOff : records.done ? CloudCheck : CloudUpload;
+  // What comes from the company, under what goes to it.
+  const receiving = useStore.getState().receiving;
+  const fromCompany = linked
+    ? receiveWords(
+        {
+          connected: true,
+          online: sync.online,
+          role: receiving?.role ?? null,
+          caughtUpAt: receiving?.caughtUpAt ?? null,
+          closed: sync.trouble === 'closed',
+          unreadable: receiving?.unreadable.length ?? 0,
+          notTaken: sync.notTaken,
+          company: linked.name,
+          email: linked.email ?? null,
+        },
+        fmtTime,
+      )
+    : null;
   // Where this phone stands with its company: said here, not only on the account screen, so a
   // phone that has stopped sending says so where the person looks.
   const serverLine = !linked
@@ -129,9 +148,9 @@ export function MoreScreen() {
             testID="more-sync"
             left={<RecordsIcon color={color.ink} size={24} />}
             title={records.title}
-            sub={records.sub}
-            subColor={records.warn ? color.red : undefined}
-            subLines={4}
+            sub={fromCompany ? `${records.sub}\n${fromCompany.line}` : records.sub}
+            subColor={records.warn || fromCompany?.warn ? color.red : undefined}
+            subLines={6}
           />
           {CAN_CONNECT ? (
             <>
@@ -149,6 +168,9 @@ export function MoreScreen() {
             </>
           ) : null}
         </Panel>
+
+        {linked ? <NotTaken /> : null}
+        {linked ? <FromTheCompany /> : null}
 
         {time ? (
           <Panel title="Reminders" flush>
@@ -253,3 +275,45 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xxl, gap: space.xl },
   profile: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
 });
+
+/** What the company did not take from this phone's sign-in, each with why and what to do. */
+function NotTaken() {
+  const sync = useSyncStatus();
+  const receiving = useStore((s) => s.receiving);
+  const data = useStore((s) => s);
+  const dismissHeld = useStore((s) => s.dismissHeld);
+  void sync.notTaken;
+  const items = notTakenChanges().filter((c) => !receiving?.held[c.key]?.seen);
+  if (!items.length) return null;
+  return (
+    <Panel title="Not taken by the company" flush>
+      {items.map((c, i) => {
+        const { what, why } = notTakenWords(c, receiving?.held[c.key]?.reason ?? 'supervisor_only', data);
+        return (
+          <View key={c.key}>
+            {i > 0 ? <Divider inset={space.lg} /> : null}
+            <Row testID={`not-taken-${c.key}`} title={what} sub={why} subLines={4} right={<Button label="Done" kind="quiet" size="md" onPress={() => dismissHeld([c])} />} />
+          </View>
+        );
+      })}
+    </Panel>
+  );
+}
+
+/** What of a change made here the company's newer version stood over, said once. */
+function FromTheCompany() {
+  const notices = useStore((s) => s.receiving?.notices ?? []);
+  const dismissNotice = useStore((s) => s.dismissNotice);
+  const unseen = notices.filter((n) => !n.seen);
+  if (!unseen.length) return null;
+  return (
+    <Panel title="From the company" flush>
+      {unseen.map((n, i) => (
+        <View key={n.id}>
+          {i > 0 ? <Divider inset={space.lg} /> : null}
+          <Row testID={`notice-${n.id}`} title={n.words} titleLines={6} sub={fmtTime(n.at)} right={<Button label="Done" kind="quiet" size="md" onPress={() => dismissNotice(n.id)} />} />
+        </View>
+      ))}
+    </Panel>
+  );
+}

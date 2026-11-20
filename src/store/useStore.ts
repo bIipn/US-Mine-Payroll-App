@@ -287,6 +287,10 @@ interface Actions {
   holdRefused: (held: PushAnswer['held'], companyId: string) => void;
   /** Units the server keeps at the floor of the company's open requests on them. */
   keepFloor: (floored: PushAnswer['floored'], companyId: string) => void;
+  /** Done, on the list of what the company did not take: kept as it is and not sent again, off the list. */
+  dismissHeld: (changes: readonly Pick<Change, 'key' | 'rev'>[]) => void;
+  /** Done, on a notice from the company. */
+  dismissNotice: (id: string) => void;
   /**
    * Send this phone's records to a company from now on, as the server account
    * that joined it. A phone whose records already went to another company is
@@ -1298,6 +1302,20 @@ export const useStore = create<Store>()(
             delete marks[key];
           }
           set({ receiving: { ...r, held, sent: marks } });
+        },
+
+        dismissHeld: (changes) => {
+          const r = get().receiving;
+          if (!r || !changes.length) return;
+          const held = { ...r.held };
+          for (const { key, rev } of changes) held[key] = { rev, reason: held[key]?.rev === rev ? held[key].reason : 'supervisor_only', seen: true };
+          set({ receiving: { ...r, held } });
+        },
+
+        dismissNotice: (id) => {
+          const r = get().receiving;
+          if (!r || !r.notices.some((n) => n.id === id && !n.seen)) return;
+          set({ receiving: { ...r, notices: r.notices.map((n) => (n.id === id ? { ...n, seen: true as const } : n)) } });
         },
 
         keepFloor: (floored, companyId) => {
