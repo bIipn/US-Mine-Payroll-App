@@ -29,6 +29,8 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
   const accounts = useStore((s) => s.accounts);
   const { addEmployee, addEmployeesBulk, setEmployeeActive, setEmployeeRole, showToast } = useStore.getState();
   const time = useStore((s) => keepsTime(s.settings.company));
+  // On a phone joined to a company, people change on the dashboard's Roster page, with the sign-in roster.
+  const fromTheOffice = useStore((s) => !!s.connectedCompany);
 
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
@@ -68,7 +70,12 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
       haptic.success();
       showToast(`${first.trim()} ${last.trim()} can now create an account`);
     } else {
-      const { added, skipped } = addEmployeesBulk(list);
+      const { added, skipped, error: refused } = addEmployeesBulk(list);
+      if (refused) {
+        haptic.error();
+        setError(refused);
+        return;
+      }
       if (added === 0) {
         haptic.error();
         setError(skipped > 0 ? 'Nobody new was added. Those names are already on the roster, or are missing a last name.' : 'Type or paste one name per line.');
@@ -87,9 +94,17 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
       title="Roster"
       sub={`${peopleCount(total)}, ${registered} with an account`}
       onBack={navigation.goBack}
-      footer={<Button testID="roster-add" label="Add people" icon={UserPlus} kind="yellow" onPress={() => { reset(); setAdding(true); }} />}
+      footer={fromTheOffice ? undefined : <Button testID="roster-add" label="Add people" icon={UserPlus} kind="yellow" onPress={() => { reset(); setAdding(true); }} />}
     >
-      <Notice tone="info" title="Only people on this list can sign up" body="A new account has to match a first and last name here. Remove someone and their sign-in stops working; their hours and records are kept." />
+      {fromTheOffice ? (
+        <Notice
+          tone="info"
+          title="People change on the dashboard"
+          body="On a phone joined to a company, people are added, taken off and given a role or a payroll ID on the dashboard’s Roster page, which changes the sign-in roster too. This phone gets the change the next time it has signal."
+        />
+      ) : (
+        <Notice tone="info" title="Only people on this list can sign up" body="A new account has to match a first and last name here. Remove someone and their sign-in stops working; their hours and records are kept." />
+      )}
       {MIXED ? (
         <View testID="roster-sample-note">
           <Notice tone="neutral" title="People marked Sample are made up" body="The sample hours, checklists and requests in this preview belong to them. Nothing is made up for a real person." />
@@ -171,7 +186,7 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
             <Txt v="body" c={color.inkSoft}>
               {open.title ? `${open.title}. ` : ''}{signedUp(open) ? 'Has created an account.' : 'Has not signed up yet.'}
             </Txt>
-            {open.active ? (
+            {fromTheOffice ? null : open.active ? (
               <>
                 <Toggle
                   testID="person-supervisor"
@@ -183,7 +198,8 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
                       showToast('You cannot remove your own supervisor access.', 'warn');
                       return;
                     }
-                    setEmployeeRole(open.id, on ? 'supervisor' : 'employee');
+                    const done = setEmployeeRole(open.id, on ? 'supervisor' : 'employee');
+                    if (!done.ok) showToast(done.error, 'bo');
                   }}
                 />
                 {time ? <PayrollIdField key={open.id} person={open} /> : null}
@@ -193,7 +209,8 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
                   kind="red"
                   disabled={open.id === me?.id}
                   onPress={() => {
-                    setEmployeeActive(open.id, false);
+                    const done = setEmployeeActive(open.id, false);
+                    if (!done.ok) return showToast(done.error, 'bo');
                     showToast(`${fullName(open)} can no longer sign in`, 'info');
                     setOpenId(null);
                   }}
@@ -205,7 +222,8 @@ export function RosterScreen({ navigation }: ScreenProps<'Roster'>) {
                 label="Put back on the roster"
                 kind="ink"
                 onPress={() => {
-                  setEmployeeActive(open.id, true);
+                  const done = setEmployeeActive(open.id, true);
+                  if (!done.ok) return showToast(done.error, 'bo');
                   showToast(`${fullName(open)} is back on the roster`);
                   setOpenId(null);
                 }}

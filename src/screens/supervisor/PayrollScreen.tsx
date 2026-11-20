@@ -43,6 +43,9 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
   const totals = useMemo(() => sumPayroll(rows), [rows]);
   const [fileOpen, setFileOpen] = useState(false);
   const missingIds = rows.filter((r) => r.total > 0 && !r.employee.payrollId).length;
+  // On a phone joined to a company, payroll IDs are set on the dashboard and come with the roster.
+  const fromTheOffice = useStore((s) => !!s.connectedCompany);
+  const caughtUp = useStore((s) => s.receiving?.caughtUpAt != null && s.receiving.cursor > 0);
   const hoursFile = (layout: 'day' | 'period') => {
     setFileOpen(false);
     void exportCsv(() => payrollHoursFile({ ...useStore.getState() }, { start, end }, layout, Date.now()));
@@ -169,11 +172,16 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
       </Txt>
       <Sheet testID="hours-file-sheet" visible={fileOpen} onClose={() => setFileOpen(false)} title="Payroll hours file">
         <Txt v="body" c={color.inkSoft}>
-          A CSV of the hours in this {which} for your payroll system's import: each person's payroll ID, an earning code and the hours, before taxes. Set the codes on More, Company, and each person's payroll ID on the roster.
+          A CSV of the hours in this {which} for your payroll system's import: each person's payroll ID, an earning code and the hours, before taxes.{' '}
+          {fromTheOffice
+            ? 'Set the codes and each person’s payroll ID on the dashboard; they come to this phone with the roster.'
+            : 'Set the codes on More, Company, and each person’s payroll ID on the roster.'}
         </Txt>
         {missingIds ? (
           <Txt v="strong" c={color.red} testID="hours-file-missing-ids">
-            {peopleCount(missingIds)} with hours {missingIds === 1 ? 'has' : 'have'} no payroll ID yet. Their lines go out with that column blank.
+            {fromTheOffice && !caughtUp
+              ? 'Payroll IDs come to this phone with the roster. They are here the next time it has signal.'
+              : `${peopleCount(missingIds)} with hours ${missingIds === 1 ? 'has' : 'have'} no payroll ID yet. Their lines go out with that column blank.`}
           </Txt>
         ) : null}
         <Button testID="hours-file-period" label="Totals for the period" kind="ink" onPress={() => hoursFile('period')} />

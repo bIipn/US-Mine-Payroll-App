@@ -192,7 +192,10 @@ export function MoreScreen() {
               label={'Allow "Rest are OK"'}
               sub="Lets a person mark the unanswered lines of a checklist or an exam OK with one tap. Turn off to make them answer every line."
               value={settings.allowSectionAllOk}
-              onChange={setAllowSectionAllOk}
+              onChange={(on) => {
+                const done = setAllowSectionAllOk(on);
+                if (!done.ok) showToast(done.error, 'bo');
+              }}
             />
           </Panel>
         ) : null}

@@ -143,12 +143,12 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
       {supervisor ? (
         <Panel title="Adjust the boundary">
           <View style={styles.stepper}>
-            <IconButton testID="radius-minus" icon={Minus} label="Smaller boundary" bg={color.grayTint} onPress={() => setRadius(site.radiusM - 50)} />
+            <IconButton testID="radius-minus" icon={Minus} label="Smaller boundary" bg={color.grayTint} onPress={() => { const done = setRadius(site.radiusM - 50); if (!done.ok) showToast(done.error, 'bo'); }} />
             <View style={{ flex: 1, alignItems: 'center' }}>
               <Txt v="num" testID="radius-value">{commas(site.radiusM)} m</Txt>
               <Txt v="small" c={color.silica}>{fmtDistance(site.radiusM)} radius, {commas(circleAcres(site.radiusM))} acres</Txt>
             </View>
-            <IconButton testID="radius-plus" icon={Plus} label="Larger boundary" bg={color.grayTint} onPress={() => setRadius(site.radiusM + 50)} />
+            <IconButton testID="radius-plus" icon={Plus} label="Larger boundary" bg={color.grayTint} onPress={() => { const done = setRadius(site.radiusM + 50); if (!done.ok) showToast(done.error, 'bo'); }} />
           </View>
           <Txt v="small" c={color.silica} style={{ marginTop: space.md }}>
             Between {MIN_RADIUS_M} and {commas(MAX_RADIUS_M)} m, in steps of 50 m.

@@ -108,7 +108,8 @@ export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
               label="Remove from fleet"
               kind="red"
               onPress={() => {
-                removeEquipment(open.id);
+                const done = removeEquipment(open.id);
+                if (!done.ok) return showToast(done.error, 'bo');
                 showToast(`Unit ${open.unit} removed`, 'info');
                 setOpenId(null);
               }}

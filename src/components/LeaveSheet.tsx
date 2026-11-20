@@ -118,7 +118,8 @@ export function LeaveSheet({ visible, onClose, employeeId, employeeName, days, l
                   label={`Remove ${LEAVE_LABEL[entry.type]} on ${fmtDate(entry.day)}`}
                   tint={color.red}
                   onPress={() => {
-                    removeLeave(entry.id);
+                    const done = removeLeave(entry.id);
+                    if (!done.ok) return showToast(done.error, 'bo');
                     showToast(`${LEAVE_LABEL[entry.type]} on ${fmtDate(entry.day)} removed`, 'info');
                   }}
                 />

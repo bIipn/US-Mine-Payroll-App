@@ -112,7 +112,8 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
                 sub="Its exams stay on record. Tap to put it back."
                 right={<Tag label="Off" tone="neutral" />}
                 onPress={() => {
-                  setAreaSheetActive(sheet.id, true);
+                  const done = setAreaSheetActive(sheet.id, true);
+                  if (!done.ok) return showToast(done.error, 'bo');
                   showToast(`${sheet.title} is back on the list`);
                 }}
               />
@@ -168,7 +169,8 @@ export function AreaSheetsScreen({ navigation }: ScreenProps<'AreaSheets'>) {
             label="Take it off the list"
             kind="outline"
             onPress={() => {
-              setAreaSheetActive(current.id, false);
+              const done = setAreaSheetActive(current.id, false);
+              if (!done.ok) return showToast(done.error, 'bo');
               showToast(
                 openHere > 0
                   ? `${current.title} taken off the list. ${openHere} still open on the Crew board.`

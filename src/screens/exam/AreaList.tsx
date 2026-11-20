@@ -22,8 +22,14 @@ export function AreaList({ now }: { now: number }) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const today = startOfDay(now);
-  const active = sheets.filter((s) => s.active);
   const open = useMemo(() => openFindings(exams), [exams]);
+  // The sheets in use, then each stopped sheet with a condition still open, a danger first: the office's stop
+  // takes a sheet off the list people examine from, never a danger off the list people see.
+  const active = useMemo(() => {
+    const stopped = sheets.filter((s) => !s.active && open.some((f) => f.sheetId === s.id));
+    const danger = (id: string) => (open.some((f) => f.sheetId === id && f.danger) ? 0 : 1);
+    return [...sheets.filter((s) => s.active), ...stopped.sort((a, b) => danger(a.id) - danger(b.id))];
+  }, [sheets, open]);
   /** The latest exam of each area today. */
   const latest = useMemo(() => {
     const map = new Map<string, AreaExam>();
@@ -78,7 +84,11 @@ export function AreaList({ now }: { now: number }) {
                   below={
                     <>
                       {danger ? <Tag label="Danger, keep out" tone="bo" solid icon={Siren} /> : null}
-                      <Tag label={exam ? `Examined, ${onShift(exam)}` : 'Exam due'} tone={exam ? 'ok' : 'warn'} />
+                      {s.active ? (
+                        <Tag label={exam ? `Examined, ${onShift(exam)}` : 'Exam due'} tone={exam ? 'ok' : 'warn'} />
+                      ) : (
+                        <Tag label="Not in use" tone="neutral" />
+                      )}
                       {waiting > 0 ? <Tag label={`${waiting} open`} tone="bo" solid={!danger} /> : null}
                     </>
                   }
@@ -138,7 +148,11 @@ export function AreaList({ now }: { now: number }) {
               </View>
             ) : null}
 
-            <Button testID="start-exam" label="Start pre shift exam" kind="yellow" onPress={() => go(() => navigation.navigate('AreaExam', { sheetId: sheet.id }))} />
+            {sheet.active ? (
+              <Button testID="start-exam" label="Start pre shift exam" kind="yellow" onPress={() => go(() => navigation.navigate('AreaExam', { sheetId: sheet.id }))} />
+            ) : (
+              <Txt v="small" c={color.inkSoft}>This sheet is no longer in use, so no new exam is made on it. What is still open here stays on the list until it is fixed.</Txt>
+            )}
             {sheetExam ? (
               <Button testID="see-exam" label="See today's exam" kind="outline" onPress={() => go(() => navigation.navigate('AreaExamDetail', { examId: sheetExam.id }))} />
             ) : null}
