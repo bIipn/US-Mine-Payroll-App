@@ -22,7 +22,13 @@
 // SUPABASE_SERVICE_ROLE_KEY (a JWT, sent as apikey and as the bearer token).
 // No secret, key or body is ever written to the log.
 
+import { keyHeaders, serverFrom, type Server } from '../_shared/server.ts';
 import { checkHeader, verifyStripeSignature } from './verify.ts';
+
+// The project's address and keys are read in one place for every function (../_shared/server.ts), and
+// kept here under their old names.
+export { keyHeaders, serverFrom };
+export type { Server };
 
 export interface WebhookDeps {
   /** An environment variable, or undefined. */
@@ -37,37 +43,6 @@ export interface WebhookDeps {
 export const SECRET_TTL_MS = 60_000;
 /** How long a call to the database may take before it counts as failed. */
 export const DATABASE_TIMEOUT_MS = 15_000;
-
-export interface Server {
-  url: string;
-  key: string;
-}
-
-/** The project's URL and server key from the environment, or null when either is missing. */
-export function serverFrom(env: WebhookDeps['env']): Server | null {
-  const url = (env('SUPABASE_URL') ?? '').trim().replace(/\/+$/, '');
-  if (!/^https?:\/\/\S+$/.test(url)) return null;
-  let key = '';
-  const named = env('SUPABASE_SECRET_KEYS');
-  if (named && named.trim()) {
-    try {
-      const keys: unknown = JSON.parse(named);
-      const first = keys && typeof keys === 'object' ? (keys as Record<string, unknown>).default : undefined;
-      if (typeof first === 'string') key = first.trim();
-    } catch {
-      // Not JSON: fall through to the legacy key.
-    }
-  }
-  if (!key) key = (env('SUPABASE_SERVICE_ROLE_KEY') ?? '').trim();
-  return key ? { url, key } : null;
-}
-
-/** The headers PostgREST takes the server key in: a secret key as apikey only, a legacy JWT as both. */
-export function keyHeaders(key: string): Record<string, string> {
-  const headers: Record<string, string> = { apikey: key };
-  if (!key.startsWith('sb_')) headers.Authorization = `Bearer ${key}`;
-  return headers;
-}
 
 type Called = { ok: true; data: unknown } | { ok: false; status: number; code?: string };
 

@@ -4,6 +4,8 @@
 const mockSignOut = jest.fn(async (_options?: unknown) => ({ error: null }));
 const mockRpc = jest.fn();
 const mockGetSession = jest.fn();
+const mockSignInWithPassword = jest.fn();
+const mockInvoke = jest.fn();
 let mockAuthEvent: (event: string, session: unknown) => void = () => undefined;
 /** Each sign-in's own row of the company's roster, by account; none is not on the roster. */
 const mockRosterRows: Record<string, { first_name: string; last_name: string; role: string }> = {
@@ -27,9 +29,12 @@ jest.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     rpc: mockRpc,
     from: (table: string) => mockFrom(table),
+    functions: { invoke: (...args: unknown[]) => mockInvoke(...args) },
     auth: {
       signOut: mockSignOut,
       getSession: mockGetSession,
+      signInWithPassword: (...args: unknown[]) => mockSignInWithPassword(...args),
+      getUser: async () => ({ data: { user: null }, error: null }),
       onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
         mockAuthEvent = cb;
         return { data: { subscription: { unsubscribe: () => undefined } } };
@@ -146,6 +151,8 @@ const warned = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 beforeEach(() => {
   mockSignOut.mockClear();
+  mockSignInWithPassword.mockReset();
+  mockInvoke.mockReset();
   mockRpc.mockReset();
   warned.mockClear();
   signedInAs(AVERY);
@@ -435,5 +442,140 @@ describe('disconnecting while records are on their way', () => {
     expect(pushes.filter((p) => p.companyId === 'c-a')).toHaveLength(1);
     expect(app.sync.useSyncStatus.getState().waiting).toBe(0);
     stop();
+  });
+});
+
+describe('deleting the company sign-in from the phone', () => {
+  // Sending and watching stop after each test, passed or not, so a failure leaves no timer running.
+  let running: (() => void) | null = null;
+  afterEach(() => {
+    running?.();
+    running = null;
+  });
+  const deletedOk = () => {
+    mockSignInWithPassword.mockResolvedValueOnce({ data: { session: sessionOf(AVERY), user: AVERY }, error: null });
+    mockInvoke.mockResolvedValueOnce({ data: { deleted: true, closed: [] }, error: null });
+  };
+  /** A phone joined to Test Pit A with Avery's own sign-in, sending. */
+  async function joinedPhone(shifts = 0) {
+    const app = build(CONNECTS);
+    const pushes = fakeServer();
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    if (shifts) useStore.setState({ shifts: shiftsOf(shifts) });
+    useStore.getState().connectCompany(PIT_A, AVERY);
+    const stopSync = app.sync.startSync();
+    const stopLink = app.connection.watchConnection();
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      stopLink();
+      stopSync();
+    };
+    running = stop;
+    await settle();
+    return { app, pushes, useStore, stop };
+  }
+
+  it('sends what waits first, deletes the sign-in, and only then stops sending and signs out', async () => {
+    const { app, pushes, useStore, stop } = await joinedPhone(2);
+    expect(pushes.length).toBeGreaterThan(0);
+    expect(app.sync.useSyncStatus.getState().waiting).toBe(0);
+    useStore.getState().setJoinAsked({ code: 'ABCD2345', firstName: 'Avery', lastName: 'Quill', accountId: AVERY.id, at: 1 });
+    deletedOk();
+
+    expect(await app.connection.deleteMyServerAccount('haulroad88')).toEqual({ ok: true });
+    expect(mockSignInWithPassword).toHaveBeenCalledWith({ email: 'avery@example.com', password: 'haulroad88' });
+    // The body names nobody: the server deletes the account the session is.
+    expect(mockInvoke).toHaveBeenCalledWith('delete-account', expect.objectContaining({ body: {} }));
+    expect(mockSignInWithPassword.mock.invocationCallOrder[0]).toBeLessThan(mockInvoke.mock.invocationCallOrder[0]);
+    expect(mockInvoke.mock.invocationCallOrder[0]).toBeLessThan(mockSignOut.mock.invocationCallOrder[0]);
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(useStore.getState().connectedCompany).toBeNull();
+    expect(useStore.getState().joinAsked).toBeNull();
+    expect(app.sync.useSyncStatus.getState().server).toBe(false);
+
+    // Nothing more goes anywhere: a punch made now stays on the phone.
+    const sent = pushes.length;
+    useStore.setState({ shifts: [...useStore.getState().shifts, ...shiftsOf(3).slice(2)] });
+    await app.sync.syncNow();
+    await settle();
+    expect(pushes.length).toBe(sent);
+    stop();
+  });
+
+  it('calls nothing while records wait to reach the company, and says so', async () => {
+    const { app, useStore, stop } = await joinedPhone();
+    app.sync.useSyncStatus.setState({ online: false });
+    // Two punches made with no signal.
+    useStore.setState({ shifts: shiftsOf(2) });
+    const result = await app.connection.deleteMyServerAccount('haulroad88');
+    expect(result).toEqual({
+      ok: false,
+      reason: 'waiting',
+      error: '2 records have not reached Test Pit A yet. They are sent before your company sign-in is deleted, so the company has them. This needs signal.',
+    });
+    expect(mockSignInWithPassword).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(useStore.getState().connectedCompany).not.toBeNull();
+    stop();
+  });
+
+  it('needs signal with nothing waiting, and calls nothing without it', async () => {
+    const { app, stop } = await joinedPhone();
+    app.sync.useSyncStatus.setState({ online: false });
+    expect(await app.connection.deleteMyServerAccount('haulroad88')).toMatchObject({ ok: false, reason: 'no_signal' });
+    expect(mockInvoke).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('changes nothing on the phone when the server says no', async () => {
+    const { app, useStore, stop } = await joinedPhone();
+    mockSignInWithPassword.mockResolvedValueOnce({ data: { session: sessionOf(AVERY), user: AVERY }, error: null });
+    mockInvoke.mockResolvedValueOnce({
+      data: null,
+      error: { name: 'FunctionsHttpError', context: { status: 409, json: async () => ({ error: 'last_supervisor', companies: [{ id: 'c-a', name: 'Test Pit A', successors: [] }] }) } },
+    });
+    expect(await app.connection.deleteMyServerAccount('haulroad88')).toEqual({
+      ok: false,
+      reason: 'last_supervisor',
+      error: 'Test Pit A has no other supervisor now. Finish on the office dashboard.',
+    });
+    expect(useStore.getState().connectedCompany).toMatchObject({ id: 'c-a', userId: AVERY.id });
+    expect(mockSignOut).not.toHaveBeenCalled();
+    expect(app.sync.useSyncStatus.getState().server).toBe(true);
+    stop();
+  });
+
+  it('deletes the sign-in of a phone that never joined, and signs it out', async () => {
+    const app = build(CONNECTS);
+    fakeServer();
+    app.store.useStore.getState().ensureSeeded();
+    const stopLink = app.connection.watchConnection();
+    running = stopLink;
+    await settle();
+    expect(app.connection.useServerAccount.getState().account).toEqual(AVERY);
+    deletedOk();
+    expect(await app.connection.deleteMyServerAccount('haulroad88')).toEqual({ ok: true });
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(app.connection.useServerAccount.getState().account).toBeNull();
+    stopLink();
+  });
+
+  it('lets go of a sign-in the server deleted already, without asking it anything', async () => {
+    const { app, useStore, stop } = await joinedPhone();
+    await app.connection.forgetDeletedSignIn(AVERY.id);
+    expect(useStore.getState().connectedCompany).toBeNull();
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(mockInvoke).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('has nothing to delete from in a build with no server', async () => {
+    const app = build({ ...SERVER_ENV, EXPO_PUBLIC_ROSTER: ROSTER });
+    expect(app.connection.server).toBeNull();
+    expect(await app.connection.deleteMyServerAccount('haulroad88')).toMatchObject({ ok: false, reason: 'no_server' });
+    expect(mockSignInWithPassword).not.toHaveBeenCalled();
   });
 });

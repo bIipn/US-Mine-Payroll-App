@@ -29,6 +29,25 @@ const FAILED = 'The message did not go through. Try again in a few minutes.';
 
 const clean = (value) => value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(/\s+/g, ' ').trim();
 
+// A link from another page can start the message for the person: /contact?about=delete-account, from
+// the Delete your account page, for someone who cannot sign in. Only these topics; nothing else from
+// the address goes into the form.
+const TOPICS = {
+  'delete-account': 'Please delete my MineMuster account. The email above is the one I sign in with, and the company above is the one I work for.',
+};
+
+function startMessage(form) {
+  let about = null;
+  try {
+    about = new URLSearchParams(window.location.search).get('about');
+  } catch {
+    about = null;
+  }
+  const text = about && Object.prototype.hasOwnProperty.call(TOPICS, about) ? TOPICS[about] : null;
+  const message = form.elements.namedItem('message');
+  if (text && message && !message.value) message.value = text;
+}
+
 function check(values) {
   const errors = {};
   if (!values.name) errors.name = 'Type your name.';
@@ -44,6 +63,7 @@ function check(values) {
 }
 
 function setUp(form) {
+  startMessage(form);
   const field = (name) => form.elements.namedItem(name);
   const button = form.querySelector('button[type="submit"]');
   const status = form.querySelector('.form-status');

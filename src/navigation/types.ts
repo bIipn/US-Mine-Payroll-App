@@ -35,6 +35,8 @@ export type RootStackParamList = {
   Company: undefined;
   /** Signing this phone in to the company's server, and connecting it. Only in a build that names a server. */
   CompanyAccount: undefined;
+  /** Delete my account: the account on this phone, and the person's own company sign-in with it. */
+  DeleteAccount: undefined;
 };
 
 export type TabParamList = {

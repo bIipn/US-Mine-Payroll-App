@@ -3,11 +3,15 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { AppState, Platform } from 'react-native';
 
 import { SERVER } from '../config';
+import type { DeletionAnswer, DeletionCheckCompany } from '../domain/accountDeletion';
 import {
   ALREADY_AN_ACCOUNT,
   authWords,
+  deletionAnswerWords,
   pushTrouble,
   readCompanies,
+  readDeletionAnswer,
+  readDeletionCheck,
   readJoinAnswer,
   readCompanyRow,
   readPushAnswer,
@@ -356,6 +360,79 @@ export function companyTransport(companyId: string): SyncTransport {
 
 /** The transport's name before the phones received. */
 export const pushTransport = companyTransport;
+
+// ---- Deleting the company sign-in ----------------------------------------------------------
+
+/** How long the phone waits for the server to delete the account before it says it could not be reached. */
+export const DELETE_TIMEOUT_MS = 60_000;
+
+/**
+ * What deleting the signed-in account means in each of its companies (account_deletion_check): the
+ * role there, whether it is the company's last supervisor, who could take over, and whether a
+ * subscription still runs. Asked only with a session, never under the publishable key alone.
+ */
+export async function deletionCheck(): Promise<Done<{ companies: DeletionCheckCompany[] }>> {
+  try {
+    const { data: found } = await api().auth.getSession();
+    if (!found.session) return { ok: false, error: 'You are signed out of the company server.' };
+    const { data, error } = await api().rpc('account_deletion_check');
+    if (error) return { ok: false, error: serverWords(problemOf(error)) };
+    const companies = readDeletionCheck(data);
+    return companies ? { ok: true, companies } : { ok: false, error: 'The server answered in a way this phone does not understand.' };
+  } catch (error) {
+    return { ok: false, error: serverWords(problemOf(error)) };
+  }
+}
+
+/** Whether Supabase Auth no longer knows the account of the session this phone holds: it was deleted. */
+async function accountGone(): Promise<boolean> {
+  try {
+    const { error } = await api().auth.getUser();
+    return problemOf(error).code === 'user_not_found';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Delete this phone's company sign-in from MineMuster's server, for good. The password is checked
+ * first by signing in with it again, which also gives the server a sign-in made just now: the
+ * delete-account function deletes an account only within ten minutes of its password. The request
+ * names nothing; the server deletes the account the session is. The phone is still signed in
+ * afterwards, to an account that is gone: `connection.ts` stops sending and signs it out.
+ */
+export async function deleteAccount(email: string, password: string): Promise<{ ok: true; closed: string[] } | { ok: false; answer: DeletionAnswer; error: string }> {
+  const address = email.trim().toLowerCase();
+  const fail = (answer: DeletionAnswer) => ({ ok: false as const, answer, error: deletionAnswerWords(answer, { email: address }) });
+  try {
+    const { data, error } = await api().auth.signInWithPassword({ email: address, password });
+    if (error || !data.session) {
+      const problem = problemOf(error);
+      if (problem.name === 'AuthRetryableFetchError' || problem.status === 0) return fail({ kind: 'unreachable' });
+      if (problem.status === 429 || problem.code === 'over_request_rate_limit') return fail({ kind: 'too_many' });
+      // Supabase Auth answers a deleted account's password as it answers a wrong one.
+      return fail((await accountGone()) ? { kind: 'already_deleted' } : { kind: 'wrong_password' });
+    }
+  } catch {
+    return fail({ kind: 'unreachable' });
+  }
+  try {
+    const { data, error } = await api().functions.invoke('delete-account', { body: {}, timeout: DELETE_TIMEOUT_MS });
+    if (!error) {
+      const answer = readDeletionAnswer(200, data);
+      return answer.kind === 'deleted' ? { ok: true, closed: answer.closed } : fail(answer);
+    }
+    const reply = (error as { name?: unknown; context?: unknown }).context as { status?: unknown; json?: () => Promise<unknown> } | undefined;
+    if ((error as { name?: unknown }).name === 'FunctionsHttpError' && reply && typeof reply.status === 'number') {
+      const body = typeof reply.json === 'function' ? await reply.json().catch(() => null) : null;
+      return fail(readDeletionAnswer(reply.status, body));
+    }
+    // FunctionsFetchError or FunctionsRelayError: the request did not reach the function, or got no answer.
+    return fail({ kind: 'unreachable' });
+  } catch {
+    return fail({ kind: 'unreachable' });
+  }
+}
 
 /**
  * Whether this is the password of the company sign-in on this phone. Making a

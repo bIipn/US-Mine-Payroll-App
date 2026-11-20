@@ -35,6 +35,11 @@ const CALLABLE_BY = {
   push_records: ['authenticated'],
   // The phones read the company's settings, roster, fleet and area sheets (migration 20261120000100).
   read_shared_records: ['authenticated'],
+  // Deleting an account (migration 20261120000200): what deleting it means in each of the caller's
+  // companies, and a last supervisor closing a company nobody else can take over. Neither takes an
+  // account id: the delete-account function asks them with the person's own token.
+  account_deletion_check: ['authenticated'],
+  close_company: ['authenticated'],
   is_last_supervisor: ['service_role'],
   step_down_everywhere: ['service_role'],
   // Billing (migration 20261117000500): the webhook applies Stripe's events and
@@ -55,9 +60,11 @@ const CALLABLE_BY = {
 };
 
 const SECURITY_DEFINER = [
+  'account_deletion_check',
   'apply_stripe_event',
   'approve_join_request',
   'billing_standing',
+  'close_company',
   'companies_before_write',
   'company_billing',
   'company_by_code',
@@ -220,6 +227,12 @@ const NOT_FOUND_OR_WRONG_STATE = {
     [NOT_FOUND, 'No such roster row.'],
     [WRONG_STATE, 'That roster row is not active.'],
     [WRONG_STATE, 'That roster row is already claimed.', 'Approve with replace_claim to hand it to this person in one step, or release it first.'],
+  ],
+  close_company: [
+    [NOT_FOUND, 'No such company.'],
+    [NOT_FOUND, 'No such company.'],
+    [WRONG_STATE, 'Someone else can take over this company. Make them a supervisor instead.', 'someone_can_take_over'],
+    [WRONG_STATE, "The company's subscription is still running. Cancel it first.", 'subscription_running'],
   ],
   company_billing: [[NOT_FOUND, 'No such company.']],
   deny_join_request: [NO_SUCH_REQUEST, NO_SUCH_REQUEST, ALREADY_DECIDED],

@@ -22,6 +22,7 @@ import { HoursScreen } from '../screens/hours/HoursScreen';
 import { ShiftDetailScreen } from '../screens/hours/ShiftDetailScreen';
 import { MoreScreen } from '../screens/more/MoreScreen';
 import { CompanyScreen } from '../screens/more/CompanyScreen';
+import { DeleteAccountScreen } from '../screens/more/DeleteAccountScreen';
 import { MyRecordsScreen } from '../screens/more/MyRecordsScreen';
 import { SiteScreen } from '../screens/more/SiteScreen';
 import { StandardsScreen } from '../screens/more/StandardsScreen';
@@ -132,6 +133,8 @@ export function RootNavigator() {
           <Stack.Screen name="Auth" component={AuthScreen} />
           {/* A new phone connects to its company from the sign-in screen, so it has the company's roster first. */}
           {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
+          {/* A company sign-in with no account on this phone is deleted from there too. */}
+          {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} /> : null}
         </>
       ) : view === 'clock_only' ? (
         <>
@@ -165,6 +168,7 @@ export function RootNavigator() {
           <Stack.Screen name="Roster" component={RosterScreen} />
           <Stack.Screen name="Fleet" component={FleetScreen} />
           <Stack.Screen name="Company" component={CompanyScreen} />
+          <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} />
           {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
         </>
       )}

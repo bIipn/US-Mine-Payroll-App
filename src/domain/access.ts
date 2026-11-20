@@ -26,6 +26,11 @@ const fits = (person: PersonName, name: PersonName | null): boolean => {
 };
 const full = (p: PersonName) => `${p.firstName} ${p.lastName}`;
 
+/** Whether the phone's company sign-in is this person's own, by the name the company has for it. */
+export function signInIsTheirs(person: PersonName, standing: SignInStanding | null): boolean {
+  return fits(person, standing?.name ?? null);
+}
+
 /** Whether the person signed in to the app has a supervisor's powers on this phone. */
 export function supervisorHere(state: {
   session: { employeeId: string } | null;

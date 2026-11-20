@@ -1,5 +1,5 @@
 import { useNavigation } from '@react-navigation/native';
-import { Banknote, BookOpen, Building2, ClipboardList, CloudCheck, CloudUpload, Link2, LogOut, MapPin, RotateCcw, Scale, WifiOff } from '../../components/icons';
+import { Banknote, BookOpen, Building2, ClipboardList, CloudCheck, CloudUpload, Link2, LogOut, MapPin, RotateCcw, Scale, UserX, WifiOff } from '../../components/icons';
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -8,6 +8,7 @@ import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
+import { moreRowWords } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
 import { notTakenWords } from '../../domain/receive';
 import { receiveWords, syncWords } from '../../domain/sync';
@@ -16,6 +17,7 @@ import { CAN_CONNECT, disconnect, useServerAccount } from '../../services/connec
 import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { notTakenChanges, useSyncStatus } from '../../services/sync';
+import { SAMPLE_CREW_IDS } from '../../store/seed';
 import { openShiftOf, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
@@ -91,6 +93,8 @@ export function MoreScreen() {
         : { sub: `Connected to ${linked.name}`, warn: false };
   // Clearing a device that keeps real records is a supervisor's to do: what has not reached the server is lost.
   const canClear = DEMO_MODE || (CAN_CONNECT && supervisor);
+  // Every account can be deleted from here, but a made-up sample person's, which is reset instead.
+  const deleteRow = moreRowWords({ keepsTime: time, sample: SAMPLE_CREW_IDS.has(me.id), company: settings.company.name || linked?.name || '' });
 
   const toggleReminders = async (on: boolean) => {
     setLunchReminders(on);
@@ -236,6 +240,18 @@ export function MoreScreen() {
             />
           </Panel>
         ) : null}
+
+        <Panel title="Your account" flush>
+          <Row
+            testID="more-delete-account"
+            left={<UserX color={color.ink} size={24} />}
+            title={deleteRow.title}
+            sub={deleteRow.sub}
+            subLines={3}
+            chevron
+            onPress={() => navigation.navigate('DeleteAccount')}
+          />
+        </Panel>
 
         <Button testID="sign-out" label="Sign out" icon={LogOut} kind="outline" onPress={signOut} />
         <Txt v="small" c={color.silica} center testID="build-note">

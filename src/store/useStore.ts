@@ -10,7 +10,7 @@ import { floorWords, freshReceiving, mergeRows, standingChange, withNotices, wor
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
-import { DELETED, markSent, REFERENCE_KINDS, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
+import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
 import { addedPerson, cleanText, findOnRoster, parsePersonName, payrollIdProblem, sameName, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
@@ -56,6 +56,7 @@ import {
   DEMO_EMPLOYEE_ID,
   DEMO_SUPERVISOR_ID,
   emptyData,
+  SAMPLE_CREW_IDS,
   type SeedData,
 } from './seed';
 
@@ -67,6 +68,9 @@ export interface Toast {
 }
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
+
+/** A sign-in whose password was right, for a person taken off the roster: they may delete the account from the sign-in screen. */
+export type OffRoster = { ok: false; error: string; offRoster: true };
 
 interface Data extends SeedData {
   session: Session | null;
@@ -208,7 +212,18 @@ interface Actions {
   resetDemo: (owner?: PersonName | null, sheets?: AreaSheet[], people?: RosterEntry[], samples?: boolean) => void;
 
   signUp: (input: SignUpInput) => Result<{ note?: string }>;
-  signIn: (email: string, password: string) => Result;
+  signIn: (email: string, password: string) => Result | OffRoster;
+  /**
+   * Delete the account signed in on this phone: the account, its session and its own hourly rate.
+   * Never a made-up sample person's, and never while they are on the clock. The person's employee
+   * record and every record stay. With `clearPhone`, and only when nothing on the phone would be lost
+   * (no other account on it, and everything it holds has reached the company it was joined to), the
+   * phone is cleared and starts as the build does. A company sign-in is deleted on the server first,
+   * in `src/services/connection.ts`.
+   */
+  deleteMyAccount: (options: { clearPhone: boolean }) => Result<{ cleared: boolean }>;
+  /** The sign-in screen: a person taken off the roster deletes their account from this phone with its password. */
+  deleteAccountWithPassword: (email: string, password: string) => Result;
   signInWithProvider: (provider: AuthProvider, firstName: string, lastName: string) => Result;
   signInDemo: (role: Role) => Result;
   /** Preview only: open the app as the person the build is made for, with no account to set up first. */
@@ -462,6 +477,34 @@ export const useStore = create<Store>()(
         if (receiving.caughtUpAt == null) return { ok: false, error: 'This phone has not got the company’s roster, fleet and sheets yet. Try again once it has had signal.' };
         return null;
       };
+      /**
+       * Why this person's account is not deleted now, or null when it may be: a made-up sample
+       * person's never is, and nobody's while they are on the clock, so no punch is left open by it.
+       */
+      const keepsAccount = (employeeId: string, path: 'mine' | 'off_roster'): { ok: false; error: string } | null => {
+        if (SAMPLE_CREW_IDS.has(employeeId)) return { ok: false, error: 'Sample accounts are not deleted. To start over, reset the sample data on More.' };
+        const now = Date.now();
+        const open = openShiftOf(get().shifts, employeeId, now);
+        if (!open) return null;
+        if (path === 'off_roster') {
+          return { ok: false, error: 'You are still on the clock on this phone. Ask a supervisor to set the end of your shift, then delete this account.' };
+        }
+        const lunch = open.lunches[open.lunches.length - 1];
+        if (lunch && now < lunchEndAt(lunch)) return { ok: false, error: `You are at lunch until ${fmtTime(lunchEndAt(lunch))}. Clock out after that, then delete your account.` };
+        return { ok: false, error: 'You are on the clock. Clock out, then delete your account.' };
+      };
+      /**
+       * Whether everything this phone holds has reached the company it was joined to, by the sort the
+       * round sends by (sortedChanges): nothing waiting, and nothing the company would not take from its
+       * sign-in. A phone that never joined a company has nothing of its own on any server.
+       */
+      const nothingUnsent = () => {
+        const state = get();
+        const r = state.receiving;
+        if (!state.syncedWith || !r || r.company !== state.syncedWith) return false;
+        const sorted = sortedChanges(state, state.synced, SAMPLE_CREW_IDS, { connected: true, role: r.role, caughtUp: r.caughtUpAt != null, unreadable: r.unreadable, held: r.held });
+        return sorted.now.length === 0 && sorted.afterReceive.length === 0 && sorted.notTaken.length === 0;
+      };
       /** A request is worked by a supervisor or by the person it is assigned to. */
       const canWork = (mrf: Mrf) => isSupervisor() || (!!mrf.assignedTo && mrf.assignedTo === get().session?.employeeId);
       const notYours = { ok: false as const, error: 'Only a supervisor, or the person it is assigned to, can work this request.' };
@@ -565,9 +608,42 @@ export const useStore = create<Store>()(
           const wrong: Result = { ok: false, error: 'That email and password do not match an account.' };
           if (!account || account.passwordHash !== hashPassword(password, account.salt ?? '')) return wrong;
           if (!employees.find((e) => e.id === account.employeeId)?.active) {
-            return { ok: false, error: 'This account is no longer on the active roster. See your supervisor.' };
+            return { ok: false, error: 'This account is no longer on the active roster. See your supervisor.', offRoster: true };
           }
           startSession(account);
+          return { ok: true };
+        },
+
+        deleteMyAccount: ({ clearPhone }) => {
+          const { session, accounts, payRates } = get();
+          if (!session) return signedOut;
+          const refused = keepsAccount(session.employeeId, 'mine');
+          if (refused) return refused;
+          const others = accounts.filter((a) => a.id !== session.accountId);
+          if (clearPhone && others.length === 0 && nothingUnsent()) {
+            // The clearDevice path, open to anyone here because nothing on the phone is lost.
+            get().resetDemo();
+            return { ok: true, cleared: true };
+          }
+          const rates = { ...payRates };
+          delete rates[session.employeeId];
+          set({ accounts: others, session: null, payRates: rates });
+          return { ok: true, cleared: false };
+        },
+
+        deleteAccountWithPassword: (email, password) => {
+          const address = email.trim().toLowerCase();
+          const { accounts, employees, payRates, session } = get();
+          const account = accounts.find((a) => a.email === address && a.passwordHash && a.salt);
+          if (!account || account.passwordHash !== hashPassword(password, account.salt ?? '')) {
+            return { ok: false, error: 'That email and password do not match an account.' };
+          }
+          const refused = keepsAccount(account.employeeId, 'off_roster');
+          if (refused) return refused;
+          if (employees.find((e) => e.id === account.employeeId)?.active) return { ok: false, error: 'Sign in, then delete your account on More.' };
+          const rates = { ...payRates };
+          delete rates[account.employeeId];
+          set({ accounts: accounts.filter((a) => a.id !== account.id), payRates: rates, ...(session?.accountId === account.id ? { session: null } : null) });
           return { ok: true };
         },
 

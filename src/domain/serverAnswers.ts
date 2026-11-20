@@ -1,3 +1,4 @@
+import type { DeletionAnswer, DeletionCheckCompany } from './accountDeletion';
 import { isNotFound } from './refusals';
 import { cleanText } from './roster';
 import type { ConnectedCompany } from './server';
@@ -377,4 +378,73 @@ export function authWords(e: ServerProblem | null | undefined): string {
 /** The person's role on the server's roster, for the account screen. */
 export function roleWords(role: Role): string {
   return role === 'supervisor' ? 'Supervisor' : 'Crew';
+}
+
+// ---- Deleting a company sign-in --------------------------------------------------------------
+
+/** account_deletion_check's answer: what deleting the account means in each of its companies, or null when the phone cannot read it. */
+export function readDeletionCheck(raw: unknown): DeletionCheckCompany[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: DeletionCheckCompany[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') return null;
+    const { id, name, role, last_supervisor, successors, running } = row as Record<string, unknown>;
+    if (typeof id !== 'string' || typeof name !== 'string' || !isRole(role) || typeof last_supervisor !== 'boolean' || !Array.isArray(successors)) return null;
+    const people: DeletionCheckCompany['successors'] = [];
+    for (const s of successors) {
+      const { roster_id, first_name, last_name } = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+      if (typeof roster_id !== 'string' || typeof first_name !== 'string' || typeof last_name !== 'string') return null;
+      people.push({ rosterId: roster_id, firstName: first_name, lastName: last_name });
+    }
+    out.push({ id, name, role, lastSupervisor: last_supervisor, successors: people, running: typeof running === 'number' ? running : null });
+  }
+  return out;
+}
+
+export type { DeletionAnswer };
+
+const ids = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
+
+/** The delete-account function's answer, by its status and body. */
+export function readDeletionAnswer(status: number, body: unknown): DeletionAnswer {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  if (status === 200 && b.deleted === true) return { kind: 'deleted', closed: ids(b.closed) };
+  if (status === 401) return { kind: 'already_deleted' };
+  if (status === 403 && b.error === 'password_needed') return { kind: 'password_needed' };
+  if (status === 409 && b.error === 'last_supervisor') {
+    const companies = Array.isArray(b.companies) ? b.companies : [];
+    const names = companies.map((c) => (c && typeof c === 'object' ? (c as Record<string, unknown>).name : null)).filter((n): n is string => typeof n === 'string');
+    return { kind: 'last_supervisor', companies: names };
+  }
+  if (status === 404 || (status === 500 && b.error === 'not_set_up')) return { kind: 'not_ready' };
+  return { kind: 'try_again', closed: ids(b.closed) };
+}
+
+/** What to tell the person about a deletion that did not go through, or went only part way. */
+export function deletionAnswerWords(answer: DeletionAnswer, { email }: { email: string }): string {
+  switch (answer.kind) {
+    case 'deleted':
+      return 'Your account is deleted.';
+    case 'wrong_password':
+      return `That is not the password for ${email}. Try again.`;
+    case 'password_needed':
+      return 'Enter your password again. It has to be typed within ten minutes of deleting.';
+    case 'last_supervisor': {
+      const names = answer.companies.length ? answer.companies : ['The company'];
+      const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+      return `${list} ${names.length === 1 ? 'has' : 'have'} no other supervisor now. Finish on the office dashboard.`;
+    }
+    case 'already_deleted':
+      return 'Your company sign-in is already deleted. Delete the rest from this phone.';
+    case 'unreachable':
+      return 'Could not reach MineMuster’s server. Nothing was deleted. Try again when you have signal.';
+    case 'too_many':
+      return 'Too many tries for now. Wait a few minutes and try again. Nothing was deleted.';
+    case 'not_ready':
+      return 'Deleting a company sign-in is not ready on MineMuster’s server yet. Nothing was deleted. Try again later.';
+    case 'try_again':
+      return answer.closed.length
+        ? 'The company is closed, but your account could not be deleted just now. Try again in a few minutes.'
+        : 'MineMuster’s server could not delete your account just now. Nothing was deleted. Try again in a few minutes.';
+  }
 }

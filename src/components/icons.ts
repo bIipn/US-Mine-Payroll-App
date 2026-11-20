@@ -53,6 +53,7 @@ export { default as Truck } from 'lucide-react-native/icons/truck';
 export { default as UserCheck } from 'lucide-react-native/icons/user-check';
 export { default as UserCog } from 'lucide-react-native/icons/user-cog';
 export { default as UserPlus } from 'lucide-react-native/icons/user-plus';
+export { default as UserX } from 'lucide-react-native/icons/user-x';
 export { default as Users } from 'lucide-react-native/icons/users';
 export { default as Utensils } from 'lucide-react-native/icons/utensils';
 export { default as WifiOff } from 'lucide-react-native/icons/wifi-off';

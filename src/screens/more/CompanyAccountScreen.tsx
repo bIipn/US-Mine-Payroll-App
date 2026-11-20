@@ -1,10 +1,11 @@
+import { useNavigation } from '@react-navigation/native';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { Building2, CloudCheck, CloudUpload, Eye, EyeOff, LogIn, LogOut, RotateCcw, Users, WifiOff } from '../../components/icons';
+import { Building2, CloudCheck, CloudUpload, Eye, EyeOff, LogIn, LogOut, RotateCcw, Users, UserX, WifiOff } from '../../components/icons';
 import { Button, Divider, Field, IconButton, Notice, Panel, Page, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
-import { companyAccountView } from '../../domain/access';
+import { companyAccountView, signInIsTheirs } from '../../domain/access';
 import { keepsTime } from '../../domain/company';
 import { otherCompany } from '../../domain/server';
 import {
@@ -510,7 +511,7 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
         </View>
       </Panel>
 
-      <AccountRow email={email} />
+      <AccountRow email={email} canDelete />
 
       <Sheet testID="server-other-company" visible={sure != null} onClose={() => setSure(null)} title={sure ? `Send to ${sure.name}?` : undefined}>
         <Txt v="body" c={color.inkSoft}>
@@ -569,6 +570,10 @@ function Connected({ email }: { email: string }) {
   const joinCode = useServerAccount((s) => s.joinCode);
   const notOnLinked = useServerAccount((s) => s.notOnLinked);
   const sync = useSyncStatus();
+  const me = useMe();
+  const receiving = useStore((s) => s.receiving);
+  // Deleting the sign-in is its own person's: by the name the company has for it.
+  const theirs = !!me && signInIsTheirs(me, receiving ? { role: receiving.role, name: receiving.name } : null);
   // The role, the company's name and a supervisor's join code, as the server has them now.
   useEffect(() => checkAccount(), []);
   if (!linked) return null;
@@ -654,7 +659,7 @@ function Connected({ email }: { email: string }) {
       <WebPageLinks testID="server-pages" />
 
       <DisconnectButton />
-      <AccountRow email={email} />
+      <AccountRow email={email} canDelete={theirs} />
     </>
   );
 }
@@ -755,14 +760,21 @@ function DisconnectButton() {
   );
 }
 
-/** Who is signed in to the server on this phone, and signing out. */
-function AccountRow({ email }: { email: string }) {
+/**
+ * Who is signed in to the server on this phone, and signing out. With `canDelete`, deleting that
+ * sign-in too: on a phone that never joined a company, and on one joined with this person's own.
+ */
+function AccountRow({ email, canDelete = false }: { email: string; canDelete?: boolean }) {
+  const navigation = useNavigation();
   return (
     <View style={{ gap: space.md }}>
       <Panel flush>
         <Row testID="server-account" left={<Users color={color.ink} size={24} />} title={email} sub="Signed in to the company server" subLines={3} />
       </Panel>
       <Button testID="server-sign-out" label="Sign out of the server" icon={LogOut} kind="quiet" onPress={() => void server?.signOut()} />
+      {canDelete ? (
+        <Button testID="server-delete-sign-in" label="Delete this company sign-in" icon={UserX} kind="quiet" onPress={() => navigation.navigate('DeleteAccount')} />
+      ) : null}
     </View>
   );
 }

@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 
 import { CAN_SEND } from '../config';
+import { NO_SIGNAL_BLOCKER, waitingBlocker, type DeletionAnswer } from '../domain/accountDeletion';
 import type { ConnectedCompany } from '../domain/server';
 import { useStore } from '../store/useStore';
 import type * as Server from './server';
-import { setSyncTransport, syncSettled, useSyncStatus } from './sync';
+import { setSyncTransport, syncNow, syncSettled, useSyncStatus } from './sync';
 
 /**
  * Whether this build connects to a company server, and the connection itself.
@@ -171,6 +172,50 @@ export function watchConnection(): () => void {
  */
 export async function disconnect(): Promise<void> {
   useStore.getState().disconnectCompany();
+  await syncSettled();
+  await server?.signOut();
+}
+
+/** Why the company sign-in was not deleted: what stops it on the phone, or what the server answered. */
+export type ServerDeletion = { ok: true } | { ok: false; reason: 'no_server' | 'signed_out' | 'waiting' | 'no_signal' | DeletionAnswer['kind']; error: string };
+
+/**
+ * Delete the company sign-in signed in on this phone from MineMuster's server, for good. A phone that
+ * sends with it sends what waits first, while the sign-in still can, and nothing is asked of the
+ * server while anything still waits. The server checks the password and deletes the account the
+ * session is (`server.deleteAccount`); only once it has does the phone stop sending with it and sign
+ * out. Nothing of the app's own account is touched here: the screen deletes that next, from the store.
+ */
+export async function deleteMyServerAccount(password: string): Promise<ServerDeletion> {
+  if (!server) return { ok: false, reason: 'no_server', error: 'This build has no company server.' };
+  const link = server;
+  const account = useServerAccount.getState().account;
+  if (!account) return { ok: false, reason: 'signed_out', error: 'Sign in to your company sign-in on Company account first.' };
+  const linked = useStore.getState().connectedCompany;
+  if (linked && linked.userId === account.id) {
+    await syncNow();
+    const { waiting, online } = useSyncStatus.getState();
+    if (waiting > 0) {
+      const words = waitingBlocker(waiting, linked.name, online);
+      return { ok: false, reason: 'waiting', error: `${words.title}. ${words.body}` };
+    }
+  }
+  if (!useSyncStatus.getState().online) return { ok: false, reason: 'no_signal', error: `${NO_SIGNAL_BLOCKER.title}. ${NO_SIGNAL_BLOCKER.body}` };
+  const deleted = await link.deleteAccount(account.email, password);
+  if (!deleted.ok) return { ok: false, reason: deleted.answer.kind, error: deleted.error };
+  await forgetDeletedSignIn(account.id);
+  return { ok: true };
+}
+
+/**
+ * Once the server has deleted the company sign-in, or had deleted it already: the phone stops sending
+ * with it, forgets the request to join a company it made, and signs out of it. A round on its way
+ * stops at once, and is over before the phone signs out.
+ */
+export async function forgetDeletedSignIn(accountId: string | undefined = useServerAccount.getState().account?.id): Promise<void> {
+  const store = useStore.getState();
+  if (accountId && store.connectedCompany?.userId === accountId) store.disconnectCompany();
+  if (accountId && store.joinAsked?.accountId === accountId) store.setJoinAsked(null);
   await syncSettled();
   await server?.signOut();
 }

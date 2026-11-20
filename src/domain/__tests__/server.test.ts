@@ -2,6 +2,9 @@ import { connectProblem, otherCompany, parseServer } from '../server';
 import {
   authWords,
   checkEmail,
+  deletionAnswerWords,
+  readDeletionAnswer,
+  readDeletionCheck,
   checkJoinCode,
   checkJoinName,
   checkPassword,
@@ -404,5 +407,49 @@ describe('what read_shared_records and the roster answered', () => {
       trouble: 'closed',
       message: 'MineMuster is not active for this company.',
     });
+  });
+});
+
+describe('deleting a company sign-in', () => {
+  it('reads account_deletion_check, and none from an answer it does not understand', () => {
+    const raw = [
+      { id: 'c-a', name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [{ roster_id: 'r-1', first_name: 'Riley J', last_name: 'Quinn' }], running: 1 },
+      { id: 'c-b', name: 'Test Pit B', role: 'employee', last_supervisor: false, successors: [], running: null },
+    ];
+    expect(readDeletionCheck(raw)).toEqual([
+      { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [{ rosterId: 'r-1', firstName: 'Riley J', lastName: 'Quinn' }], running: 1 },
+      { id: 'c-b', name: 'Test Pit B', role: 'employee', lastSupervisor: false, successors: [], running: null },
+    ]);
+    expect(readDeletionCheck([])).toEqual([]);
+    for (const bad of [null, {}, 'x', [{ id: 'c-a' }], [{ ...raw[0], role: 'owner' }], [{ ...raw[0], successors: [{ roster_id: 1 }] }]]) expect(readDeletionCheck(bad)).toBeNull();
+  });
+
+  it('reads each answer of the delete-account function', () => {
+    expect(readDeletionAnswer(200, { deleted: true, closed: [] })).toEqual({ kind: 'deleted', closed: [] });
+    expect(readDeletionAnswer(200, { deleted: true, closed: ['c-a'] })).toEqual({ kind: 'deleted', closed: ['c-a'] });
+    expect(readDeletionAnswer(401, { error: 'signed_out' })).toEqual({ kind: 'already_deleted' });
+    expect(readDeletionAnswer(403, { error: 'password_needed' })).toEqual({ kind: 'password_needed' });
+    expect(readDeletionAnswer(409, { error: 'last_supervisor', companies: [{ id: 'c-a', name: 'Test Pit A', successors: [] }] })).toEqual({ kind: 'last_supervisor', companies: ['Test Pit A'] });
+    expect(readDeletionAnswer(500, { error: 'try_again', closed: ['c-a'] })).toEqual({ kind: 'try_again', closed: ['c-a'] });
+    expect(readDeletionAnswer(500, { error: 'not_set_up' })).toEqual({ kind: 'not_ready' });
+    // The function not deployed yet: the gateway answers 404.
+    expect(readDeletionAnswer(404, { code: 'NOT_FOUND', message: 'Requested function was not found' })).toEqual({ kind: 'not_ready' });
+    for (const [status, body] of [[200, { deleted: false }], [200, null], [409, { error: 'close_refused', reason: 'wrong_name' }], [400, { error: 'bad_request' }], [502, null], [418, 'teapot']] as const) {
+      expect(readDeletionAnswer(status, body)).toEqual({ kind: 'try_again', closed: [] });
+    }
+  });
+
+  it('says in plain words what happened, and that nothing was deleted when nothing was', () => {
+    const at = { email: 'riley@example.com' };
+    expect(deletionAnswerWords({ kind: 'wrong_password' }, at)).toBe('That is not the password for riley@example.com. Try again.');
+    expect(deletionAnswerWords({ kind: 'password_needed' }, at)).toBe('Enter your password again. It has to be typed within ten minutes of deleting.');
+    expect(deletionAnswerWords({ kind: 'last_supervisor', companies: ['Test Pit A'] }, at)).toBe('Test Pit A has no other supervisor now. Finish on the office dashboard.');
+    expect(deletionAnswerWords({ kind: 'last_supervisor', companies: ['Test Pit A', 'Test Pit B'] }, at)).toBe('Test Pit A and Test Pit B have no other supervisor now. Finish on the office dashboard.');
+    expect(deletionAnswerWords({ kind: 'unreachable' }, at)).toBe('Could not reach MineMuster’s server. Nothing was deleted. Try again when you have signal.');
+    expect(deletionAnswerWords({ kind: 'try_again', closed: [] }, at)).toBe('MineMuster’s server could not delete your account just now. Nothing was deleted. Try again in a few minutes.');
+    expect(deletionAnswerWords({ kind: 'try_again', closed: ['c-a'] }, at)).toBe('The company is closed, but your account could not be deleted just now. Try again in a few minutes.');
+    expect(deletionAnswerWords({ kind: 'already_deleted' }, at)).toBe('Your company sign-in is already deleted. Delete the rest from this phone.');
+    expect(deletionAnswerWords({ kind: 'not_ready' }, at)).toBe('Deleting a company sign-in is not ready on MineMuster’s server yet. Nothing was deleted. Try again later.');
+    expect(deletionAnswerWords({ kind: 'too_many' }, at)).toBe('Too many tries for now. Wait a few minutes and try again. Nothing was deleted.');
   });
 });

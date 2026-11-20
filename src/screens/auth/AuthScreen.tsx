@@ -1,4 +1,4 @@
-import { Building2, Eye, EyeOff, HardHat, ShieldCheck } from '../../components/icons';
+import { Building2, Eye, EyeOff, HardHat, ShieldCheck, UserX } from '../../components/icons';
 import { useNavigation } from '@react-navigation/native';
 import React, { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -8,6 +8,7 @@ import { CompanyLogoPlate, MineMusterLogo, ProviderMark } from '../../components
 import { Button, Divider, Field, IconButton, Notice, Row, Segmented, Sheet, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
+import { DELETED_TOAST, offRosterWords } from '../../domain/accountDeletion';
 import { findOnRoster } from '../../domain/roster';
 import { receiveWords } from '../../domain/sync';
 import type { AuthProvider, Role } from '../../domain/types';
@@ -38,6 +39,7 @@ export function AuthScreen() {
   const insets = useSafeAreaInsets();
   const signIn = useStore((s) => s.signIn);
   const signUp = useStore((s) => s.signUp);
+  const deleteAccountWithPassword = useStore((s) => s.deleteAccountWithPassword);
   const signInWithProvider = useStore((s) => s.signInWithProvider);
   const signInDemo = useStore((s) => s.signInDemo);
   const openAsOwner = useStore((s) => s.openAsOwner);
@@ -82,10 +84,22 @@ export function AuthScreen() {
     typedPerson?.role === 'supervisor' &&
     !!receiving.name &&
     !!findOnRoster([typedPerson], receiving.name.firstName, receiving.name.lastName);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmailText] = useState('');
+  const [password, setPasswordText] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The password was right, but the person is off the roster: they may delete the account from this phone.
+  const [offRoster, setOffRoster] = useState(false);
+  const [askingDelete, setAskingDelete] = useState(false);
+  const setEmail = (text: string) => {
+    setEmailText(text);
+    setOffRoster(false);
+  };
+  const setPassword = (text: string) => {
+    setPasswordText(text);
+    setOffRoster(false);
+  };
+  const offRosterSheet = offRosterWords(email.trim().toLowerCase(), company.name || linked?.name || '');
 
   const [provider, setProvider] = useState<Provider | null>(null);
   const [providerFirst, setProviderFirst] = useState('');
@@ -105,7 +119,11 @@ export function AuthScreen() {
   };
 
   const submit = () => {
-    if (mode === 'signin') return finish(signIn(email, password));
+    if (mode === 'signin') {
+      const result = signIn(email, password);
+      setOffRoster(!result.ok && 'offRoster' in result);
+      return finish(result);
+    }
     if (!needsCompanyPassword) return finish(signUp({ firstName, lastName, email, password }));
     // The company sign-in's password is checked once with the server and dropped; it is never kept here.
     if (busyRef.current || !server || !linked?.email) return;
@@ -268,6 +286,10 @@ export function AuthScreen() {
             </View>
           ) : null}
 
+          {offRoster && mode === 'signin' ? (
+            <Button testID="auth-delete-account" label={offRosterSheet.button} icon={UserX} kind="outline" size="md" onPress={() => setAskingDelete(true)} />
+          ) : null}
+
           <Button
             testID="auth-submit"
             label={mode === 'signin' ? 'Sign in' : 'Create account'}
@@ -387,6 +409,31 @@ export function AuthScreen() {
         <Field testID="provider-last" label="Last name" value={providerLast} onChangeText={setProviderLast} autoCapitalize="words" />
         {providerError ? <Txt v="smallStrong" c={color.red}>{providerError}</Txt> : null}
         <Button testID="provider-continue" label="Continue" kind="ink" onPress={continueWithProvider} />
+      </Sheet>
+
+      <Sheet testID="auth-delete-sheet" visible={askingDelete} onClose={() => setAskingDelete(false)} title={offRosterSheet.title}>
+        <Txt v="body" c={color.inkSoft}>{offRosterSheet.body}</Txt>
+        <Button
+          testID="auth-delete-confirm"
+          label={offRosterSheet.confirm}
+          kind="red"
+          onPress={() => {
+            setAskingDelete(false);
+            const result = deleteAccountWithPassword(email, password);
+            if (!result.ok) {
+              haptic.error();
+              setError(result.error);
+              return;
+            }
+            haptic.success();
+            setOffRoster(false);
+            setError(null);
+            setEmailText('');
+            setPasswordText('');
+            showToast(DELETED_TOAST);
+          }}
+        />
+        <Button testID="auth-delete-keep" label={offRosterSheet.keep} kind="outline" onPress={() => setAskingDelete(false)} />
       </Sheet>
     </KeyboardAvoidingView>
   );

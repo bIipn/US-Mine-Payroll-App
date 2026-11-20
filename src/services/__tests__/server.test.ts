@@ -14,7 +14,10 @@ const mockAuth = {
   stopAutoRefresh: jest.fn(),
   resend: jest.fn(),
   resetPasswordForEmail: jest.fn(),
+  getUser: jest.fn(),
 };
+/** supabase-js's edge function client: invoke(name, options). */
+const mockInvoke = jest.fn();
 /** A read of one table: each call of the chain is noted, and the read answers with `mockTable`'s answer. */
 const mockReads: { table: string; calls: [string, unknown[]][]; signal?: AbortSignal }[] = [];
 let mockTable: (table: string) => { data: unknown; error: unknown; status?: number } = () => ({ data: null, error: null });
@@ -27,7 +30,7 @@ const mockFrom = jest.fn((table: string) => {
   chain.then = (ok: (v: unknown) => unknown, fail: (e: unknown) => unknown) => Promise.resolve(mockTable(table)).then(ok, fail);
   return chain;
 });
-const mockCreateClient = jest.fn((..._args: unknown[]) => ({ rpc: mockRpc, auth: mockAuth, from: mockFrom }));
+const mockCreateClient = jest.fn((..._args: unknown[]) => ({ rpc: mockRpc, auth: mockAuth, from: mockFrom, functions: { invoke: mockInvoke } }));
 jest.mock('@supabase/supabase-js', () => ({ createClient: (...args: unknown[]) => mockCreateClient(...args) }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -49,6 +52,7 @@ const offline = { name: 'AuthRetryableFetchError', message: 'Failed to fetch', s
 
 beforeEach(() => {
   mockRpc.mockReset();
+  mockInvoke.mockReset();
   Object.values(mockAuth).forEach((f) => f.mockReset());
   unsubscribe.mockReset();
   mockAuth.onAuthStateChange.mockImplementation((cb: (event: string, session: unknown) => void) => {
@@ -324,5 +328,93 @@ describe('checking the company sign-in’s password', () => {
       ok: false,
       error: 'Making a supervisor’s account needs signal once, to check your company sign-in. Try again when you have signal.',
     });
+  });
+});
+
+describe('deleting the company sign-in', () => {
+  /** The function's answer when it is not 2xx, as supabase-js hands it back: a FunctionsHttpError holding the response. */
+  const httpError = (status: number, body: unknown) => ({
+    data: null,
+    error: { name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code', context: { status, json: async () => body } },
+  });
+  const signedIn = () => mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: sessionOf(AVERY), user: AVERY }, error: null });
+  const wrong = { name: 'AuthApiError', code: 'invalid_credentials', status: 400, message: 'Invalid login credentials' };
+
+  it('checks the password again first, then asks the server to delete the account the session is, naming nobody', async () => {
+    signedIn();
+    mockInvoke.mockResolvedValueOnce({ data: { deleted: true, closed: [] }, error: null });
+    expect(await server.deleteAccount(' Avery@Example.com ', 'haulroad88')).toEqual({ ok: true, closed: [] });
+    expect(mockAuth.signInWithPassword).toHaveBeenCalledWith({ email: 'avery@example.com', password: 'haulroad88' });
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+    const [name, options] = mockInvoke.mock.calls[0] as [string, { body: unknown; timeout: number }];
+    expect(name).toBe('delete-account');
+    // The body names no account: the server deletes the one the session is.
+    expect(options.body).toEqual({});
+    expect(options.timeout).toBe(server.DELETE_TIMEOUT_MS);
+    expect(mockAuth.signInWithPassword.mock.invocationCallOrder[0]).toBeLessThan(mockInvoke.mock.invocationCallOrder[0]);
+    // Nothing is signed out here: connection.ts does that, once the phone has stopped sending.
+    expect(mockAuth.signOut).not.toHaveBeenCalled();
+  });
+
+  it('says the password is wrong, or that the sign-in was deleted already, and asks the server nothing', async () => {
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: wrong });
+    mockAuth.getUser.mockResolvedValueOnce({ data: { user: AVERY }, error: null });
+    expect(await server.deleteAccount('avery@example.com', 'wrong')).toEqual({
+      ok: false,
+      answer: { kind: 'wrong_password' },
+      error: 'That is not the password for avery@example.com. Try again.',
+    });
+    // Supabase Auth answers a deleted account's password the same way; the session the phone still holds says which.
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: wrong });
+    mockAuth.getUser.mockResolvedValueOnce({ data: { user: null }, error: { name: 'AuthApiError', code: 'user_not_found', status: 403, message: 'User from sub claim in JWT does not exist' } });
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer: { kind: 'already_deleted' } });
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('needs signal, and says when there have been too many tries', async () => {
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: offline });
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toEqual({
+      ok: false,
+      answer: { kind: 'unreachable' },
+      error: 'Could not reach MineMuster’s server. Nothing was deleted. Try again when you have signal.',
+    });
+    mockAuth.signInWithPassword.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ answer: { kind: 'unreachable' } });
+    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: { name: 'AuthApiError', code: 'over_request_rate_limit', status: 429 } });
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ answer: { kind: 'too_many' } });
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('reads what the server answered, and a call that never reached it', async () => {
+    const cases: [unknown, unknown][] = [
+      [httpError(409, { error: 'last_supervisor', companies: [{ id: 'c-a', name: 'Test Pit A', successors: [] }] }), { kind: 'last_supervisor', companies: ['Test Pit A'] }],
+      [httpError(403, { error: 'password_needed' }), { kind: 'password_needed' }],
+      [httpError(401, { error: 'signed_out' }), { kind: 'already_deleted' }],
+      [httpError(500, { error: 'try_again', closed: [] }), { kind: 'try_again', closed: [] }],
+      [httpError(404, { code: 'NOT_FOUND' }), { kind: 'not_ready' }],
+      [{ data: null, error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' } }, { kind: 'unreachable' }],
+      [{ data: null, error: { name: 'FunctionsRelayError', message: 'Relay Error invoking the Edge Function' } }, { kind: 'unreachable' }],
+      [{ data: { deleted: false }, error: null }, { kind: 'try_again', closed: [] }],
+    ];
+    for (const [reply, answer] of cases) {
+      signedIn();
+      mockInvoke.mockResolvedValueOnce(reply);
+      expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer });
+    }
+    signedIn();
+    mockInvoke.mockRejectedValueOnce(new Error('The operation was aborted.'));
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer: { kind: 'unreachable' } });
+  });
+
+  it('reads what deleting the account means in each company, with a session only', async () => {
+    mockRpc.mockResolvedValueOnce({ data: [{ id: 'c-a', name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [], running: 0 }], error: null });
+    expect(await server.deletionCheck()).toEqual({ ok: true, companies: [{ id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], running: 0 }] });
+    expect(mockRpc).toHaveBeenCalledWith('account_deletion_check');
+    mockRpc.mockResolvedValueOnce({ data: { not: 'a list' }, error: null });
+    expect(await server.deletionCheck()).toMatchObject({ ok: false });
+    mockAuth.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    mockRpc.mockClear();
+    expect(await server.deletionCheck()).toMatchObject({ ok: false });
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });

@@ -131,7 +131,7 @@ await visit('home', `${WEBSITE}/`, {
     return { logo3d: `drawn on a ${canvas.width} by ${canvas.height} canvas` };
   },
 });
-for (const name of ['pricing', 'contact', 'security', 'privacy', 'terms']) {
+for (const name of ['pricing', 'contact', 'security', 'privacy', 'terms', 'delete-account']) {
   await visit(name, `${WEBSITE}/${name}`, { ready: (page) => page.locator('h1').first().waitFor({ state: 'visible', timeout: 15000 }) });
 }
 await visit('demo', `${WEBSITE}/demo`, {
