@@ -88,6 +88,13 @@ export type Synced = Record<string, string>;
 /** The settings a company shares. The rest are this phone's own. */
 const SHARED_SETTINGS = ['company', 'site', 'workweekStartsOn', 'allowSectionAllOk'] as const;
 
+/** The settings record as it is sent and received: the four shared fields, and nothing of this phone's own. */
+export type SharedSettings = Pick<Settings, (typeof SHARED_SETTINGS)[number]>;
+
+export function sharedSettings(settings: Settings): SharedSettings {
+  return { company: settings.company, site: settings.site, workweekStartsOn: settings.workweekStartsOn, allowSectionAllOk: settings.allowSectionAllOk };
+}
+
 /** JSON with every object's keys in order, so the same record always reads the same. Undefined fields are left out, as JSON does. */
 export function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -145,7 +152,7 @@ export function changesToSend(data: SyncData, synced: Synced, holdBack: Readonly
     const rev = revOf(record);
     if (synced[key] !== rev) out.push({ key, kind, id, rev, ...(synced[key] ? { base: synced[key] } : null), record });
   };
-  const shared = Object.fromEntries(SHARED_SETTINGS.map((k) => [k, data.settings[k]]));
+  const shared = sharedSettings(data.settings);
   // With the sample crew held back, so are the made-up company and site: on the server they would take the place of the real ones.
   if (!(holdBack.size && madeUpSettings(data.settings))) add('settings', 'company', shared);
   const lists: [SyncKind, { id: string }[]][] = [

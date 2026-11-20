@@ -1,3 +1,4 @@
+import { listed } from '@app/domain/receive';
 import { fmtDateTime } from '@app/util/format';
 
 import { useCompany } from '../lib/company';
@@ -6,7 +7,6 @@ import { PHONES_DO_NOT_RECEIVE } from '../lib/setup';
 import { useHidden } from '../lib/versions';
 import { Button, Notice } from '../ui/kit';
 
-const listed = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
 /**
  * At the head of each page that saves a record: phones do not receive what is

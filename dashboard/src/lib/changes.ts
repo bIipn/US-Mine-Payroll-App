@@ -1,3 +1,4 @@
+import { changedFields, listed } from '@app/domain/receive';
 import { DELETED, fitsServer, revOf, stableJson, type Change, type SyncKind } from '@app/domain/sync';
 
 import { accessOpens, type BillingView } from './billing';
@@ -43,42 +44,16 @@ export function removeChange(kind: WrittenKind, id: string, loaded: RecordRow): 
 
 // ---- Changed since the page loaded it ------------------------------------------------------------
 
+/**
+ * The fields of a record that are not the same in two versions of it, by the
+ * name the page gives them. The phones say the same words when the office's
+ * change stands over theirs, so the rule lives in the app's domain.
+ */
+export const whatChanged = changedFields;
+
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : {});
-
-/** What each field of a record is called on the page. */
-const FIELD_WORDS: Record<WrittenKind, Record<string, string>> = {
-  equipment: {
-    unit: 'unit number', category: 'type', make: 'make', model: 'model', status: 'status', meter: 'last reading', meterUnit: 'hours or miles',
-  },
-  areaSheet: { title: 'name', rows: 'lines', active: 'whether it is in use', single: 'columns' },
-  settings: { site: 'clock-in site', workweekStartsOn: 'workweek', allowSectionAllOk: '“Rest are OK” switch' },
-};
-
-const COMPANY_WORDS: Record<string, string> = {
-  name: 'company name', state: 'state', place: 'place', mineId: 'mine ID', logo: 'logo', pay: 'pay schedule', timeClock: 'time clock', payCodes: 'earning codes',
-};
-
 const differs = (a: unknown, b: unknown) => stableJson(a ?? null) !== stableJson(b ?? null);
-
-/** The fields of a record that are not the same in two versions of it, by the name the page gives them. */
-export function whatChanged(kind: string, before: unknown, after: unknown): string[] {
-  const [was, now] = [obj(before), obj(after)];
-  const words = FIELD_WORDS[kind as WrittenKind] ?? {};
-  const out: string[] = [];
-  for (const field of [...new Set([...Object.keys(was), ...Object.keys(now)])].sort()) {
-    if (field === 'id' || !differs(was[field], now[field])) continue;
-    if (kind === 'settings' && field === 'company') {
-      const [a, b] = [obj(was.company), obj(now.company)];
-      for (const part of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
-        if (differs(a[part], b[part])) out.push(COMPANY_WORDS[part] ?? part);
-      }
-      continue;
-    }
-    out.push(words[field] ?? field);
-  }
-  return out;
-}
 
 export type Since =
   | { changed: false }
@@ -107,7 +82,6 @@ export function changedSince(loaded: RecordRow | undefined, fresh: RecordRow | n
   return { changed: true, how: 'edited', fields: whatChanged(loaded.kind, loaded.data, fresh.data) };
 }
 
-const listed = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 const cap = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** How a record is spoken of in a sentence, beside its name. */

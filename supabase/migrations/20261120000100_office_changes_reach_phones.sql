@@ -266,8 +266,12 @@ begin
       return 'holds a company with no state the app has';
     end if;
 
+    -- Every phone sends all four fields; a site of none is null, not left out.
+    if not (data ? 'site') then
+      return 'holds no clock-in site, not even none';
+    end if;
     site := data -> 'site';
-    if site is not null and pg_catalog.jsonb_typeof(site) <> 'null' then
+    if pg_catalog.jsonb_typeof(site) <> 'null' then
       if pg_catalog.jsonb_typeof(site) <> 'object'
          or pg_catalog.jsonb_typeof(site -> 'name') is distinct from 'string'
          or pg_catalog.jsonb_typeof(site -> 'radiusM') is distinct from 'number'

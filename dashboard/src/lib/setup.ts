@@ -1,3 +1,4 @@
+import { listed } from '@app/domain/receive';
 import { openFindings } from '@app/domain/areaExam';
 import { checkCompany, type Company } from '@app/domain/company';
 import { codesOf, sameCodes, scheduleOf, type CompanyDraft } from '@app/domain/companyForm';
@@ -112,7 +113,6 @@ export function openOnUnit(unit: Equipment, data: FleetData): OpenOnUnit {
 }
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
-const listed = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
 /** Whether anything is open on a unit. */
 export const anythingOpen = (open: OpenOnUnit) => open.redTagged || open.requests.length > 0 || open.badOrders.length > 0;
