@@ -452,9 +452,9 @@ function ConnectPanel({ linked, joinAsked, joinedAs, company, anyone, second, on
           body="Connect this phone to your company first, so it has the company’s roster. Then make your account under your own name."
         />
         {joinAsked ? (
-          <Notice tone="warn" title={`Your request to join ${joinAsked} waits for a supervisor.`} body="Check on it under Connect this phone to your company." />
+          <Notice tone="warn" title={`Your request to join ${joinAsked} waits for a supervisor.`} body="Check on it under Connect to your company." />
         ) : null}
-        <Button testID="auth-connect-button" label="Connect this phone to your company" icon={Building2} kind={anyone ? 'outline' : 'yellow'} onPress={onConnect} />
+        <Button testID="auth-connect-button" label="Connect to your company" icon={Building2} kind={anyone ? 'outline' : 'yellow'} onPress={onConnect} />
         {anyone ? null : <Txt v="small" c={color.inkSoft}>Once this phone has your company’s roster, you make your account here.</Txt>}
       </View>
     );
