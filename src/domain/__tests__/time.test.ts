@@ -2,11 +2,15 @@ import { fmtHM, fmtHrs, HOUR, MIN, minuteDecimal, toHundredths } from '../../uti
 import {
   backFromLunchAt,
   CA_RULES,
+  FEDERAL_RULES,
+  FLAG_LABEL,
+  flagHelp,
   LUNCH_MS,
   lunchEndAt,
   lunchOverReminder,
   lunchReminders,
   mealStatus,
+  punchAt,
   reminderPlan,
   shiftFlags,
   shiftTotals,
@@ -212,6 +216,43 @@ describe('shiftFlags', () => {
   });
   it('treats a shift open for more than 16 hours as a missing clock-out', () => {
     expect(shiftFlags(shift(), at(6) + 16 * HOUR + MIN)).toEqual(['missing_out']);
+  });
+});
+
+describe('a clock-in with no location', () => {
+  const lunch = [{ start: { at: at(10) }, end: { at: at(10, 30), auto: true } }];
+  const day = (partial: Partial<Shift>) => shiftFlags(shift({ clockOut: { at: at(14, 30) }, lunches: lunch, ...partial }), at(20));
+
+  it('is flagged for a supervisor to review, from the clock-in alone', () => {
+    for (const noLocation of ['off', 'approximate', 'no_fix'] as const) {
+      expect(day({ clockIn: { at: at(6), noLocation } })).toEqual(['no_location']);
+    }
+    // A clock-out or a lunch with no location is not checked against the boundary, so there is nothing to review.
+    expect(day({ clockOut: { at: at(14, 30), noLocation: 'off' } })).toEqual([]);
+    expect(day({ lunches: [{ start: { at: at(10), noLocation: 'no_fix' }, end: { at: at(10, 30), auto: true } }] })).toEqual([]);
+    expect(day({ clockIn: { at: at(6), geo: geo(true) } })).toEqual([]);
+  });
+
+  it('is flagged while the person is still on the clock', () => {
+    expect(shiftFlags(shift({ clockIn: { at: at(6), noLocation: 'approximate' } }), at(9))).toEqual(['no_location']);
+  });
+
+  it('is said the same way under every state’s rules, with none of their numbers in it', () => {
+    expect(FLAG_LABEL.no_location).toBe('No location');
+    const help = flagHelp('no_location', CA_RULES);
+    expect(help).toBe(
+      'The phone gave no location when this shift was clocked in (location off, approximate only, or no fix), so the clock-in was not checked against the mine boundary. Nothing is paid or docked for it.',
+    );
+    expect(flagHelp('no_location', FEDERAL_RULES)).toBe(help);
+    expect(help).not.toMatch(/\d/);
+  });
+});
+
+describe('punchAt', () => {
+  it('writes a punch with where it was made, or why there is no location, and never both', () => {
+    expect(punchAt(at(6), geo(true))).toEqual({ at: at(6), geo: geo(true) });
+    expect(punchAt(at(6), 'approximate')).toEqual({ at: at(6), noLocation: 'approximate' });
+    expect(punchAt(at(6))).toEqual({ at: at(6) });
   });
 });
 

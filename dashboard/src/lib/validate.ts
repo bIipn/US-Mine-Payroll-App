@@ -32,7 +32,9 @@ const MRF_PRIORITY = oneOf('safety', 'high', 'routine');
 export const CATEGORIES = ['loader', 'haul_truck', 'excavator', 'dozer', 'grader', 'water_truck', 'skid_steer', 'forklift', 'light_vehicle'];
 
 const geo = (v: unknown) => isObj(v) && isBool(v.inside) && opt(v.distanceM, isNum);
-const punch = (v: unknown) => isObj(v) && isNum(v.at) && opt(v.geo, geo) && opt(v.auto, isBool);
+/** Why a punch has no location, when the phone gave none. */
+const NO_LOCATION = oneOf('off', 'approximate', 'no_fix');
+const punch = (v: unknown) => isObj(v) && isNum(v.at) && opt(v.geo, geo) && opt(v.auto, isBool) && opt(v.noLocation, NO_LOCATION);
 const lunch = (v: unknown) => isObj(v) && punch(v.start) && opt(v.end, punch);
 const restBreak = (v: unknown) => isObj(v) && isNum(v.start) && opt(v.end, isNum);
 const edit = (v: unknown) =>

@@ -1,4 +1,4 @@
-import type { GeoStamp, LatLng, SiteConfig } from './types';
+import type { GeoStamp, LatLng, NoLocation, SiteConfig } from './types';
 
 const EARTH_RADIUS_M = 6_371_008.8;
 const SQ_M_PER_ACRE = 4046.8564224;
@@ -94,6 +94,42 @@ export function toGeoStamp(site: SiteConfig, fix: RawFix, source: GeoStamp['sour
     mocked: fix.mocked || undefined,
     source,
   };
+}
+
+/** Why a clock-in made with a position is turned down. */
+export type TurnDown = Exclude<FixVerdict, 'inside'>;
+
+/**
+ * Why a clock-in at this stamped position is turned down: outside the
+ * boundary, simulated, or too vague to trust. Nothing when it may go through.
+ */
+export function turnDownOf(geo: GeoStamp): TurnDown | undefined {
+  if (geo.mocked) return 'mocked';
+  if (geo.inside) return undefined;
+  return geo.accuracyM != null && geo.accuracyM > MAX_ACCURACY_M ? 'weak_gps' : 'outside';
+}
+
+/** What the phone gave for a punch: a position, or why it has none. */
+export type Reading = { fix: RawFix; source: GeoStamp['source'] } | { none: NoLocation };
+
+export type ClockInVerdict =
+  | { ok: true; geo: GeoStamp }
+  | { ok: true; noLocation: NoLocation }
+  | { ok: false; kind: TurnDown; geo: GeoStamp };
+
+/**
+ * Whether a clock-in goes through. A position the phone gives has to be inside
+ * the boundary, and not simulated or too vague to trust; one that is not is
+ * turned down, with where it was, to be logged. With no position at all
+ * (location off, only an approximate location, or no fix) the clock-in goes
+ * through with none, flagged for a supervisor to review: it is never turned
+ * down for want of a location.
+ */
+export function clockInVerdict(site: SiteConfig, reading: Reading): ClockInVerdict {
+  if ('none' in reading) return { ok: true, noLocation: reading.none };
+  const geo = toGeoStamp(site, reading.fix, reading.source);
+  const kind = turnDownOf(geo);
+  return kind ? { ok: false, kind, geo } : { ok: true, geo };
 }
 
 export function circleAcres(radiusM: number): number {

@@ -8,13 +8,14 @@ import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
+import { turnDownOf, type TurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
 import { addedPerson, cleanText, findOnRoster, parsePersonName, payrollIdProblem, sameName, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
 import { rulesFor } from '../domain/stateRules';
-import { CA_RULES, LUNCH_MS, lunchEndAt, startedLunch, type TimeRules } from '../domain/time';
+import { CA_RULES, LUNCH_MS, lunchEndAt, punchAt, startedLunch, type TimeRules } from '../domain/time';
 import type {
   Account,
   AreaExam,
@@ -34,6 +35,7 @@ import type {
   Mrf,
   MrfItem,
   MrfPriority,
+  NoLocation,
   OperatingLog,
   Punch,
   Role,
@@ -213,10 +215,16 @@ interface Actions {
   openAsOwner: (owner?: PersonName | null) => Result;
   signOut: () => void;
 
-  clockIn: (geo: GeoStamp) => Result<{ shift: Shift }>;
-  startLunch: (geo?: GeoStamp) => Result<{ shift: Shift }>;
+  /**
+   * Where the phone was, or why it gave no location. A position outside the
+   * boundary, or a simulated one, is turned down and logged; with no location
+   * the clock-in goes through, flagged for a supervisor to review.
+   */
+  clockIn: (where: GeoStamp | NoLocation) => Result<{ shift: Shift }>;
+  /** Never blocked by location. Left out when no location was read at all. */
+  startLunch: (where?: GeoStamp | NoLocation) => Result<{ shift: Shift }>;
   toggleBreak: () => Result<{ shift: Shift }>;
-  clockOut: (geo?: GeoStamp, mealNote?: MealNote) => Result<{ shift: Shift }>;
+  clockOut: (where?: GeoStamp | NoLocation, mealNote?: MealNote) => Result<{ shift: Shift }>;
   logDenied: (action: DeniedPunch['action'], reason: DeniedPunch['reason'], geo?: GeoStamp) => void;
   editShiftTimes: (shiftId: string, patch: ShiftTimesPatch, reason: string) => Result;
   demoRewindShift: (minutes: number) => Shift | undefined;
@@ -315,6 +323,13 @@ export type Store = Data & Actions;
 
 const clean = cleanText;
 const hashPassword = (password: string, salt: string) => sha256(`${salt}:${password}`);
+
+/** What a clock-in turned down for where the phone was says. The Clock screen shows its own sheet before it gets here. */
+const TURNED_DOWN: Record<TurnDown, string> = {
+  outside: 'You are outside the clock-in boundary. Clock in once you are on site.',
+  weak_gps: 'Your phone cannot place you closely enough to check. Step out into the open and try again.',
+  mocked: 'The phone reported a simulated location. Turn off any mock-location app and try again.',
+};
 
 /** The shift a person is on right now. A shift left open for 16+ hours no longer counts. */
 export function openShiftOf(shifts: Shift[], employeeId: string, now: number): Shift | undefined {
@@ -604,7 +619,7 @@ export const useStore = create<Store>()(
         signOut: () => set({ session: null }),
 
         // ---- Time clock ----------------------------------------------------------------
-        clockIn: (geo) => {
+        clockIn: (where) => {
           const { session, shifts, employees, connectedCompany, receiving } = get();
           if (!session) return { ok: false, error: 'You are signed out.' };
           if (!employees.find((e) => e.id === session.employeeId)?.active) {
@@ -618,10 +633,17 @@ export const useStore = create<Store>()(
           }
           const now = Date.now();
           if (openShiftOf(shifts, session.employeeId, now)) return { ok: false, error: 'You are already clocked in.' };
+          // A position has to be inside the boundary and not simulated. With none at all the clock-in
+          // goes through, and its flag puts it in front of a supervisor.
+          const turnedDown = typeof where === 'string' ? undefined : turnDownOf(where);
+          if (turnedDown && typeof where !== 'string') {
+            get().logDenied('clock_in', turnedDown, where);
+            return { ok: false, error: TURNED_DOWN[turnedDown] };
+          }
           const shift: Shift = {
             id: uid('sh_'),
             employeeId: session.employeeId,
-            clockIn: { at: now, geo },
+            clockIn: punchAt(now, where),
             lunches: [],
             breaks: [],
           };
@@ -630,12 +652,12 @@ export const useStore = create<Store>()(
         },
 
         // One tap starts lunch. It ends by itself 30 minutes later, so there is no action to end it.
-        startLunch: (geo) =>
+        startLunch: (where) =>
           updateOpenShift((shift, now) => {
             const last = shift.lunches[shift.lunches.length - 1];
             if (last && now < lunchEndAt(last)) return 'You are already at lunch.';
             const breaks = shift.breaks.map((b) => (b.end ? b : { ...b, end: now }));
-            return { ...shift, breaks, lunches: [...shift.lunches, startedLunch({ at: now, geo })] };
+            return { ...shift, breaks, lunches: [...shift.lunches, startedLunch(punchAt(now, where))] };
           }),
 
         toggleBreak: () =>
@@ -647,14 +669,14 @@ export const useStore = create<Store>()(
             return { ...shift, breaks: [...shift.breaks, { start: now }] };
           }),
 
-        clockOut: (geo, mealNote) =>
+        clockOut: (where, mealNote) =>
           updateOpenShift((shift, now) => {
             const last = shift.lunches[shift.lunches.length - 1];
             if (last && now < lunchEndAt(last)) {
               return `You are at lunch until ${fmtTime(lunchEndAt(last))}. Clock out after that.`;
             }
             const breaks = shift.breaks.map((b) => (b.end ? b : { ...b, end: now }));
-            return { ...shift, breaks, clockOut: { at: now, geo }, mealNote: mealNote ?? shift.mealNote };
+            return { ...shift, breaks, clockOut: punchAt(now, where), mealNote: mealNote ?? shift.mealNote };
           }),
 
         logDenied: (action, reason, geo) => {

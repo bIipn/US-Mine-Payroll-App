@@ -178,6 +178,24 @@ describe('computeRange', () => {
   });
 });
 
+describe('a clock-in with no location', () => {
+  it('pays the same hours and overtime as the same shift clocked in with one: only the flag differs', () => {
+    // Five 10-hour days: daily overtime every day.
+    const shifts = [9, 10, 11, 12, 13].map((d) => worked(d, 10));
+    const marked = shifts.map((s, i): Shift => (i === 1 ? { ...s, clockIn: { at: s.clockIn.at, noLocation: 'off' } } : s));
+    const plain = computeRange(shifts, NO_LEAVE, NOV_1, NOV_16, NOW);
+    const flagged = computeRange(marked, NO_LEAVE, NOV_1, NOV_16, NOW);
+    const figures = (r: typeof plain) => [r.gross, r.lunch, r.paid, r.reg, r.ot, r.dt, r.total, r.daysWorked, r.mealFlags, r.needsFix];
+    expect(figures(flagged)).toEqual(figures(plain));
+    expect([plain.reg, plain.ot]).toEqual([4000, 1000]);
+    expect(plain.flagCounts.no_location).toBeUndefined();
+    expect(flagged.flagCounts.no_location).toBe(1);
+    // Day by day, the hours agree and the flag sits on the one day.
+    expect(flagged.days.map((d) => [d.paid, d.reg, d.ot, d.dt])).toEqual(plain.days.map((d) => [d.paid, d.reg, d.ot, d.dt]));
+    expect(flagged.days.filter((d) => d.flags.includes('no_location')).map((d) => ymd(d.dayStart))).toEqual(['2026-11-10']);
+  });
+});
+
 describe('computePayroll', () => {
   const employees: Employee[] = [
     { id: 'e1', firstName: 'Ana', lastName: 'Diaz', role: 'employee', active: true },

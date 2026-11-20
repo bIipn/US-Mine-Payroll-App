@@ -3,8 +3,10 @@ import { strFromU8, unzipSync } from 'fflate';
 import { SAMPLE_COMPANY } from '../../domain/company';
 import { payPeriodOf as periodOf } from '../../domain/payPeriod';
 import { checklistFor } from '../../domain/templates';
-import { buildDemoData } from '../../store/seed';
-import { addDays, startOfDay, startOfWeek } from '../../util/format';
+import { CA_RULES, flagHelp, startedLunch } from '../../domain/time';
+import type { Shift } from '../../domain/types';
+import { buildDemoData, DEMO_EMPLOYEE_ID } from '../../store/seed';
+import { addDays, HOUR, startOfDay, startOfWeek } from '../../util/format';
 import { payrollHoursFile, payrollReport, safetyReport } from '../reports';
 
 const now = new Date(2026, 10, 13, 10, 42).getTime();
@@ -73,6 +75,40 @@ describe('payroll report', () => {
       // Sam Nakamura started lunch 14 minutes before the report was made.
       expect(count('Nakamura, Sam', 'Lunch start')).toBe(count('Nakamura, Sam', 'Lunch end') + 1);
       expect(count('Bell, Marcus', 'Lunch start')).toBe(count('Bell, Marcus', 'Lunch end'));
+    });
+  });
+
+  describe('a shift with no location', () => {
+    const person = data.employees.find((e) => e.id === DEMO_EMPLOYEE_ID)!;
+    const day = new Date(2026, 10, 12).getTime();
+    const shift: Shift = {
+      id: 'sh_no_location',
+      employeeId: person.id,
+      clockIn: { at: day + 6 * HOUR, noLocation: 'off' },
+      lunches: [startedLunch({ at: day + 10 * HOUR, noLocation: 'approximate' })],
+      clockOut: { at: day + 14.5 * HOUR, noLocation: 'no_fix' },
+      breaks: [],
+    };
+    const book = payrollReport({ ...data, shifts: [...data.shifts, shift] }, { start: period.start, end: period.end, payDate: period.payDate }, now);
+    const name = `${person.lastName}, ${person.firstName}`;
+    const punches = (bytes: Uint8Array) => sheetRows(bytes, 4).filter((row) => typeof row.D === 'string' && row.D !== 'Punch');
+
+    it('says on the punch log why each punch has no location, and that the clock-in was not checked', () => {
+      const rows = punches(book.bytes).filter((row) => String(row.H).startsWith('No location'));
+      expect(rows.map((row) => [row.A, row.D, row.E, row.H])).toEqual([
+        [name, 'Clock in', 'Not checked', 'No location (location off)'],
+        [name, 'Lunch start', undefined, 'No location (approximate only)'],
+        [name, 'Clock out', undefined, 'No location (no fix)'],
+      ]);
+      // None of them is taken for a punch a supervisor entered.
+      const entered = (bytes: Uint8Array) => punches(bytes).filter((row) => row.H === 'Entered by supervisor').length;
+      expect(entered(book.bytes)).toBe(entered(report.bytes));
+    });
+
+    it('lists the clock-in under the flags for review, with what it means', () => {
+      const flags = table(book.bytes, 5).filter((row) => row.Flag === 'No location');
+      expect(flags).toEqual([expect.objectContaining({ Employee: name, 'What it means': flagHelp('no_location', CA_RULES) })]);
+      expect(table(report.bytes, 5).some((row) => row.Flag === 'No location')).toBe(false);
     });
   });
 });

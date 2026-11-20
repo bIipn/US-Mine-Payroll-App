@@ -5,8 +5,9 @@ import { StyleSheet, View } from 'react-native';
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Divider, Field, Notice, Page, Panel, Sheet, Tag, Txt } from '../../components/ui';
 import { flagTone } from '../../components/WeekSheet';
+import { APP_NAME } from '../../config';
 import { backFromLunchAt, FLAG_LABEL, flagHelp, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../../domain/time';
-import type { Punch, ShiftEdit } from '../../domain/types';
+import type { NoLocation, Punch, ShiftEdit } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
 import { employeeName, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
@@ -22,8 +23,15 @@ const EDIT_FIELD: Record<ShiftEdit['field'], string> = {
   lunchEnd: 'Lunch end',
 };
 
+const NO_LOCATION: Record<NoLocation, string> = {
+  off: `No location: location was off for ${APP_NAME}`,
+  approximate: 'No location: the phone shared only an approximate location',
+  no_fix: 'No location: the phone could not find its location',
+};
+
 function where(punch?: Punch): string {
   if (punch?.auto) return 'Automatic, 30 minutes after lunch started';
+  if (punch?.noLocation) return NO_LOCATION[punch.noLocation];
   if (!punch?.geo) return 'Entered by a supervisor';
   const { geo } = punch;
   const source = geo.source === 'demo' ? ' (demo GPS)' : '';

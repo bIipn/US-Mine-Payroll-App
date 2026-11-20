@@ -51,6 +51,7 @@ const BAD: [string, string, (d: Obj) => void][] = [
   ['shift', 'breaks', (d) => { d.breaks = 'none'; }],
   ['shift', 'edit', (d) => { d.edits = [{}]; }],
   ['shift', 'meal-note', (d) => { d.mealNote = 'nap'; }],
+  ['shift', 'no-location', (d) => { d.clockIn = { at: (d.clockIn as Obj).at, noLocation: 'gone' }; }],
   ['leave', 'type', (d) => { d.type = 'vacation'; }],
   ['leave', 'hours', (d) => { d.hours = '8'; }],
   ['inspection', 'answers-null', (d) => { d.answers = null; }],
@@ -124,6 +125,21 @@ describe('a record that is not the shape the app writes', () => {
       expect(shaped.settingsFrom).toBe('server');
       expect(shaped.company.name).toBe('Test Pit A');
     }
+  });
+
+  it('takes a punch made with no location, saying why, and sets aside a reason the app does not have', () => {
+    const fine = sample('shift');
+    const data = fine.data as Obj;
+    const at = (data.clockIn as Obj).at as number;
+    for (const noLocation of ['off', 'approximate', 'no_fix']) {
+      const shaped = shapeRecords([{ ...fine, data: { ...data, clockIn: { at, noLocation } } }]);
+      expect(shaped.skipped).toEqual([]);
+      expect(shaped.data.shifts[0].clockIn).toEqual({ at, noLocation });
+    }
+    expect(shapeRecords([{ ...fine, data: { ...data, clockIn: { at, noLocation: 'gone' } } }]).skipped[0].why).toBe(
+      'a punch that is not the shape the app writes',
+    );
+    expect(shapeRecords([{ ...fine, data: { ...data, clockOut: { at: at + 3_600_000, noLocation: null } } }]).skipped).toHaveLength(1);
   });
 
   it('takes a field the app leaves out as the app does, but not a null in its place', () => {

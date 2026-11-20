@@ -1,4 +1,16 @@
-import { checkFix, circleAcres, destination, haversineM, offsetM, pointInPolygon, toGeoStamp } from '../geofence';
+import {
+  checkFix,
+  circleAcres,
+  clockInVerdict,
+  destination,
+  haversineM,
+  MAX_ACCURACY_M,
+  offsetM,
+  pointInPolygon,
+  toGeoStamp,
+  turnDownOf,
+  type RawFix,
+} from '../geofence';
 import { awayFromSite, SAMPLE_SITE } from '../site';
 
 const MINE_CENTER = SAMPLE_SITE.center;
@@ -71,6 +83,58 @@ describe('toGeoStamp', () => {
     const stamp = toGeoStamp(DEFAULT_SITE, { ...north(250), accuracyM: 9 }, 'gps');
     expect(stamp).toMatchObject({ distanceM: 250, inside: true, source: 'gps', accuracyM: 9 });
     expect(stamp.mocked).toBeUndefined();
+  });
+});
+
+describe('clockInVerdict', () => {
+  const gps = (fix: RawFix) => ({ fix, source: 'gps' as const });
+  const town: RawFix = { ...SAMPLE_SITE.town!.center, accuracyM: 5 };
+
+  it('lets a clock-in through with its position when the phone puts it inside the boundary', () => {
+    const fix = { ...north(300), accuracyM: 6 };
+    expect(clockInVerdict(DEFAULT_SITE, gps(fix))).toEqual({ ok: true, geo: toGeoStamp(DEFAULT_SITE, fix, 'gps') });
+  });
+
+  it('turns down a trusted position outside the boundary, a simulated one and one too vague to trust, with where it was', () => {
+    expect(clockInVerdict(DEFAULT_SITE, gps(town))).toEqual({ ok: false, kind: 'outside', geo: toGeoStamp(DEFAULT_SITE, town, 'gps') });
+    expect(clockInVerdict(DEFAULT_SITE, gps({ ...north(100), accuracyM: 5, mocked: true }))).toMatchObject({
+      ok: false, kind: 'mocked', geo: { inside: false, mocked: true },
+    });
+    expect(clockInVerdict(DEFAULT_SITE, gps({ ...north(100), accuracyM: 250 }))).toMatchObject({
+      ok: false, kind: 'weak_gps', geo: { inside: false, accuracyM: 250 },
+    });
+  });
+
+  it('lets a clock-in with no position through, saying why there is none: it is never turned down for want of one', () => {
+    for (const none of ['off', 'approximate', 'no_fix'] as const) {
+      expect(clockInVerdict(DEFAULT_SITE, { none })).toEqual({ ok: true, noLocation: none });
+    }
+  });
+
+  it('decides the way checkFix does, for every kind of fix', () => {
+    const fixes: RawFix[] = [
+      { ...north(300), accuracyM: 6 }, { ...north(1030), accuracyM: 40 }, { ...north(1045), accuracyM: 40 },
+      town, { ...north(100), accuracyM: 5, mocked: true }, { ...north(100), accuracyM: 450 }, { ...north(50), accuracyM: null },
+    ];
+    for (const fix of fixes) {
+      const verdict = clockInVerdict(DEFAULT_SITE, gps(fix));
+      expect(verdict.ok ? 'inside' : verdict.kind).toBe(checkFix(DEFAULT_SITE, fix).verdict);
+    }
+  });
+});
+
+describe('turnDownOf', () => {
+  const stamp = (fix: RawFix) => toGeoStamp(DEFAULT_SITE, fix, 'gps');
+
+  it('says why a stamped position may not clock in, and nothing for one inside the boundary', () => {
+    expect(turnDownOf(stamp({ ...north(300), accuracyM: 6 }))).toBeUndefined();
+    expect(turnDownOf(stamp({ ...SAMPLE_SITE.town!.center, accuracyM: 5 }))).toBe('outside');
+    expect(turnDownOf(stamp({ ...north(100), accuracyM: 5, mocked: true }))).toBe('mocked');
+    expect(turnDownOf(stamp({ ...north(100), accuracyM: MAX_ACCURACY_M + 50 }))).toBe('weak_gps');
+  });
+
+  it('turns down a simulated position even when it says it is inside', () => {
+    expect(turnDownOf({ ...stamp({ ...north(100), accuracyM: 5 }), mocked: true })).toBe('mocked');
   });
 });
 

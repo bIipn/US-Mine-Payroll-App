@@ -3,6 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 
 import { Avatar, Divider, EmptyState, Page, Panel, Row, Segmented, Tag } from '../../components/ui';
+import { FLAG_LABEL } from '../../domain/time';
 import type { ScreenProps } from '../../navigation/types';
 import { openLogs, useRules, useStore } from '../../store/useStore';
 import { space } from '../../theme/theme';
@@ -59,7 +60,15 @@ export function OnSiteScreen({ navigation }: ScreenProps<'OnSite'>) {
                       ? `In ${fmtTime(line.shift.clockIn.at)}, ${fmtHrs(line.paid)} paid so far${unit ? `, running ${unit}` : ''}`
                       : line.employee.title
                   }
-                  below={line.presence === 'off' ? undefined : <Tag label={line.label} tone={line.tone} solid={line.solid} />}
+                  below={
+                    line.presence === 'off' ? undefined : (
+                      <>
+                        <Tag label={line.label} tone={line.tone} solid={line.solid} />
+                        {/* Counted as here, but the clock-in was not checked against the boundary. */}
+                        {line.noLocation ? <Tag label={FLAG_LABEL.no_location} tone="warn" /> : null}
+                      </>
+                    )
+                  }
                   chevron={!!line.shift}
                   onPress={line.shift ? () => navigation.navigate('ShiftDetail', { shiftId: line.shift!.id }) : undefined}
                 />

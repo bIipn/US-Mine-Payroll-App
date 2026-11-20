@@ -1,7 +1,7 @@
 import { useNavigation } from '@react-navigation/native';
 import { BellRing, ChevronRight, ClipboardCheck, Coffee, Factory, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils, Wrench } from '../../components/icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 
@@ -10,16 +10,16 @@ import { SiteMap } from '../../components/SiteMap';
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Divider, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
 import { APP_NAME, DEMO_MODE } from '../../config';
-import { checkFix, toGeoStamp, type FixVerdict } from '../../domain/geofence';
+import { clockInVerdict, toGeoStamp, type Reading, type TurnDown } from '../../domain/geofence';
 import { monthOf, nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
 import { deadlineWords, floorMin, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals, type TimeRules } from '../../domain/time';
-import type { DemoLocation, GeoStamp, MealNote, Shift } from '../../domain/types';
+import type { DemoLocation, GeoStamp, MealNote, NoLocation, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
 import { requestNotificationPermission, scheduleLocal } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
-import { openLogs, openShiftOf, staleShiftOf, useMe, useRules, useStore } from '../../store/useStore';
+import { openLogs, openShiftOf, staleShiftOf, useMe, useRules, useStore, type ToastTone } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
 import {
   addDays,
@@ -40,10 +40,19 @@ import {
 import { useNow } from '../../util/hooks';
 
 type Status = 'off' | 'on' | 'lunch' | 'overdue';
-/** Why a clock-in did not go through. Clock-in is the only punch that needs the person at the mine. */
-type Problem =
-  | { kind: Exclude<FixVerdict, 'inside'>; geo: GeoStamp }
-  | { kind: 'denied' | 'unavailable' | 'no_site' };
+/**
+ * Why a clock-in did not go through: no boundary set, or a position outside it,
+ * simulated or too vague to trust. Clock-in is the only punch checked against
+ * the boundary, and one with no location at all is never turned down for it.
+ */
+type Problem = { kind: TurnDown; geo: GeoStamp } | { kind: 'no_site' };
+
+/** After "Clocked in at 6:02 AM.": why the clock-in has no location, and that a supervisor will see it. */
+const NO_LOCATION_TOAST: Record<NoLocation, string> = {
+  off: `Location is off for ${APP_NAME}, so this clock-in is marked for your supervisor to check.`,
+  approximate: 'Your phone shares only an approximate location, so this clock-in is marked for your supervisor to check.',
+  no_fix: 'The phone could not find its location, so this clock-in is marked for your supervisor to check.',
+};
 
 const FIELD: Record<Status, { bg: string; fg: string; muted: string; label: string; bar: 'light' | 'dark' }> = {
   off: { bg: color.ink, fg: color.white, muted: color.onDarkMuted, label: 'Off the clock', bar: 'light' },
@@ -104,16 +113,18 @@ export function ClockScreen() {
   const canWaive = !!shift && owed?.waiverMaxMs != null && elapsed <= owed.waiverMaxMs;
 
   /**
-   * Read the phone's position for a punch. Returns null when the punch must not
-   * go ahead. Only clock-in has to be made at the mine. There is no punch at the
+   * Read the phone's position for a punch: where it was, or why it gave no
+   * location. Returns null when the punch must not go ahead, which only a
+   * clock-in can be: with no boundary set, or with a position outside it,
+   * simulated or too vague to trust (`clockInVerdict`). A clock-in with no
+   * location at all goes through, flagged for review. There is no punch at the
    * end of lunch, so no location is read then.
    */
-  const readLocation = async (action: 'clock_in' | 'start_lunch' | 'clock_out'): Promise<GeoStamp | undefined | null> => {
-    const mustBeOnSite = action === 'clock_in';
+  const readLocation = async (action: 'clock_in' | 'start_lunch' | 'clock_out'): Promise<GeoStamp | NoLocation | undefined | null> => {
     const site = settings.site;
     if (!site) {
       // With no boundary there is nothing to check a clock-in against, and nothing to measure anything else from.
-      if (!mustBeOnSite) return undefined;
+      if (action !== 'clock_in') return undefined;
       haptic.error();
       setProblem({ kind: 'no_site' });
       return null;
@@ -121,31 +132,31 @@ export function ClockScreen() {
     setBusy(action);
     const result = await locate(site, settings.demoLocation);
     setBusy(null);
-    if (!result.ok) {
-      if (!mustBeOnSite) return undefined;
+    const reading: Reading = result.ok ? { fix: result.fix, source: result.source } : { none: result.reason };
+    // Starting lunch and clocking out are never blocked: whatever the phone gave goes on the punch.
+    if (action !== 'clock_in') return 'none' in reading ? reading.none : toGeoStamp(site, reading.fix, reading.source);
+    const verdict = clockInVerdict(site, reading);
+    if (!verdict.ok) {
       haptic.error();
-      setProblem({ kind: result.reason });
+      actions.logDenied('clock_in', verdict.kind, verdict.geo);
+      setProblem({ kind: verdict.kind, geo: verdict.geo });
       return null;
     }
-    const check = checkFix(site, result.fix);
-    const geo = toGeoStamp(site, result.fix, result.source);
-    if (mustBeOnSite && check.verdict !== 'inside') {
-      haptic.error();
-      actions.logDenied('clock_in', check.verdict === 'outside' ? 'outside' : check.verdict, geo);
-      setProblem({ kind: check.verdict, geo });
-      return null;
-    }
-    return geo;
+    return 'geo' in verdict ? verdict.geo : verdict.noLocation;
   };
 
-  const finish = (result: { ok: true; shift: Shift } | { ok: false; error: string }, message: string, off = false) => {
+  const finish = (
+    result: { ok: true; shift: Shift } | { ok: false; error: string },
+    message: string,
+    { off = false, tone }: { off?: boolean; tone?: ToastTone } = {},
+  ) => {
     if (!result.ok) {
       haptic.error();
       actions.showToast(result.error, 'bo');
       return;
     }
     haptic.success();
-    actions.showToast(message);
+    actions.showToast(message, tone);
     void armNotices(off ? undefined : result.shift);
   };
 
@@ -161,15 +172,17 @@ export function ClockScreen() {
   };
 
   const clockIn = async () => {
-    const geo = await readLocation('clock_in');
-    if (!geo) return;
-    finish(actions.clockIn(geo), `Clocked in at ${fmtTime(Date.now())}`);
+    const where = await readLocation('clock_in');
+    if (!where) return;
+    const said = `Clocked in at ${fmtTime(Date.now())}`;
+    if (typeof where === 'string') finish(actions.clockIn(where), `${said}. ${NO_LOCATION_TOAST[where]}`, { tone: 'warn' });
+    else finish(actions.clockIn(where), said);
   };
   // One tap. The lunch ends by itself 30 minutes later and the app says so.
   const startLunch = async () => {
-    const geo = await readLocation('start_lunch');
-    if (geo === null) return;
-    const result = actions.startLunch(geo);
+    const where = await readLocation('start_lunch');
+    if (where === null) return;
+    const result = actions.startLunch(where);
     const lunch = result.ok ? result.shift.lunches[result.shift.lunches.length - 1] : undefined;
     finish(result, lunch ? `Lunch started. Back on the clock at ${fmtTime(lunchEndAt(lunch))}.` : '');
   };
@@ -179,9 +192,9 @@ export function ClockScreen() {
   };
   const clockOut = async () => {
     setConfirmOut(false);
-    const geo = await readLocation('clock_out');
-    if (geo === null) return;
-    finish(actions.clockOut(geo, mealNote ?? undefined), `Clocked out at ${fmtTime(Date.now())}`, true);
+    const where = await readLocation('clock_out');
+    if (where === null) return;
+    finish(actions.clockOut(where, mealNote ?? undefined), `Clocked out at ${fmtTime(Date.now())}`, { off: true });
     setMealNote(null);
   };
   const retry = () => {
@@ -196,9 +209,11 @@ export function ClockScreen() {
       ? 'Demo GPS: at the mine'
       : DEMO_MODE && settings.demoLocation === 'in_town'
         ? 'Demo GPS: in town'
-        : lastGeo
-          ? `Punched in on site, ${fmtDistance(lastGeo.distanceM)} from the pin`
-          : 'GPS is checked when you punch';
+        : shift?.clockIn.noLocation
+          ? 'Clocked in with no location: marked for your supervisor'
+          : lastGeo
+            ? `Punched in on site, ${fmtDistance(lastGeo.distanceM)} from the pin`
+            : 'GPS is checked when you punch';
 
   return (
     <View style={styles.root}>
@@ -331,14 +346,11 @@ export function ClockScreen() {
         </View>
       </ScrollView>
 
-      {/* Location problems: say what happened and what to do about it. */}
+      {/* A clock-in turned down: say what happened and what to do about it. */}
       <Sheet testID="gps-sheet" visible={problem != null} onClose={() => setProblem(null)} title={problemTitle(problem)}>
         {problem ? <ProblemBody problem={problem} /> : null}
         {problem && 'geo' in problem && settings.site ? (
           <SiteMap site={settings.site} you={problem.geo} youInside={false} height={240} />
-        ) : null}
-        {problem?.kind === 'denied' && Platform.OS !== 'web' ? (
-          <Button label="Open phone settings" kind="ink" onPress={() => void Linking.openSettings()} />
         ) : null}
         {problem?.kind === 'no_site' ? (
           <Button testID="gps-close" label="Close" kind="ink" onPress={() => setProblem(null)} />
@@ -626,8 +638,6 @@ function problemTitle(problem: Problem | null): string {
     case 'outside': return "You're not at the mine";
     case 'weak_gps': return 'GPS signal is too weak';
     case 'mocked': return 'Simulated location';
-    case 'denied': return 'Turn on location to punch';
-    case 'unavailable': return "Couldn't get your location";
     case 'no_site': return 'The mine boundary is not set';
     default: return '';
   }
@@ -643,12 +653,8 @@ function ProblemBody({ problem }: { problem: Problem }) {
     text = `Your phone can only place you to within ${fmtDistance(problem.geo.accuracyM ?? 0)}. Step out into the open, give it a few seconds and try again.`;
   } else if (problem.kind === 'mocked') {
     text = 'The phone reported a simulated location. Turn off any mock-location or GPS-changing app and try again. This attempt was logged.';
-  } else if (problem.kind === 'no_site') {
-    text = 'No one can clock in until a supervisor sets the clock-in boundary: on More, Mine boundary, standing on the mine. Ask a supervisor to set it.';
-  } else if (problem.kind === 'denied') {
-    text = `${APP_NAME} reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.`;
   } else {
-    text = 'Check that Location Services are on, step out into the open and try again.';
+    text = 'No one can clock in until a supervisor sets the clock-in boundary: on More, Mine boundary, standing on the mine. Ask a supervisor to set it.';
   }
   return <Txt v="body" c={color.inkSoft} testID="gps-problem">{text}</Txt>;
 }

@@ -344,6 +344,67 @@ describe('time clock', () => {
   });
 });
 
+describe('a punch with no location', () => {
+  const open = () => openShiftOf(s().shifts, 'emp_demo', Date.now());
+
+  beforeEach(() => {
+    s().signInDemo('employee');
+  });
+
+  it('clocks in with none, saying why, flagged for review and not logged as turned down', () => {
+    const denied = s().denied.length;
+    expect(s().clockIn('off')).toMatchObject({ ok: true });
+    expect(open()?.clockIn).toStrictEqual({ at: at(6, 15), noLocation: 'off' });
+    expect(s().denied).toHaveLength(denied);
+    jest.setSystemTime(at(9));
+    expect(shiftFlags(open()!, Date.now())).toEqual(['no_location']);
+  });
+
+  it('clocks in the same way when the phone shares only an approximate location, or finds none', () => {
+    expect(s().clockIn('approximate')).toMatchObject({ ok: true, shift: { clockIn: { at: at(6, 15), noLocation: 'approximate' } } });
+    jest.setSystemTime(at(14, 45));
+    s().clockOut();
+    jest.setSystemTime(at(15));
+    expect(s().clockIn('no_fix')).toMatchObject({ ok: true, shift: { clockIn: { at: at(15), noLocation: 'no_fix' } } });
+  });
+
+  it('turns down a position outside the boundary, and a simulated one: no shift is made, and each is logged', () => {
+    const away = toGeoStamp(SAMPLE_SITE, { ...SAMPLE_SITE.town!.center, accuracyM: 5 }, 'gps');
+    const fake = toGeoStamp(SAMPLE_SITE, { ...SAMPLE_SITE.center, accuracyM: 5, mocked: true }, 'gps');
+    const shifts = s().shifts.length;
+    const denied = s().denied.length;
+    expect(s().clockIn(away)).toMatchObject({ ok: false });
+    expect(s().clockIn(fake)).toMatchObject({ ok: false });
+    expect(s().clockIn({ ...onSite, mocked: true })).toMatchObject({ ok: false });
+    expect(s().shifts).toHaveLength(shifts);
+    expect(open()).toBeUndefined();
+    expect(s().denied.slice(denied).map((d) => [d.employeeId, d.action, d.reason])).toEqual([
+      ['emp_demo', 'clock_in', 'outside'],
+      ['emp_demo', 'clock_in', 'mocked'],
+      ['emp_demo', 'clock_in', 'mocked'],
+    ]);
+    expect(s().denied[denied].geo).toEqual(away);
+  });
+
+  it('starts lunch and clocks out with none, never blocked, and neither is flagged', () => {
+    s().clockIn(onSite);
+    jest.setSystemTime(at(10));
+    expect(s().startLunch('no_fix')).toMatchObject({ ok: true });
+    jest.setSystemTime(at(14, 30));
+    const out = s().clockOut('approximate');
+    if (!out.ok) throw new Error(out.error);
+    expect(out.shift.lunches[0].start).toEqual({ at: at(10), noLocation: 'no_fix' });
+    expect(out.shift.clockOut).toEqual({ at: at(14, 30), noLocation: 'approximate' });
+    expect(shiftFlags(out.shift, Date.now())).toEqual([]);
+  });
+
+  it('still allows one clock-in at a time', () => {
+    expect(s().clockIn('off').ok).toBe(true);
+    expect(s().clockIn('off')).toEqual({ ok: false, error: 'You are already clocked in.' });
+    expect(s().clockIn(onSite)).toEqual({ ok: false, error: 'You are already clocked in.' });
+  });
+});
+
 describe('equipment', () => {
   beforeEach(() => {
     s().signInDemo('employee');

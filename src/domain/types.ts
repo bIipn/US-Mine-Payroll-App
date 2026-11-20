@@ -51,9 +51,21 @@ export interface GeoStamp extends LatLng {
   source: 'gps' | 'demo' | 'manual';
 }
 
+/**
+ * Why a punch has no location: location is off for the app (or for the whole
+ * phone), the phone shares only an approximate location, or it found no position.
+ */
+export type NoLocation = 'off' | 'approximate' | 'no_fix';
+
 export interface Punch {
   at: number;
   geo?: GeoStamp;
+  /**
+   * The phone gave no location for this punch, and why. Never set together with
+   * `geo`. A clock-in made this way goes through unchecked against the boundary
+   * and is flagged for a supervisor to review; nothing is paid or docked for it.
+   */
+  noLocation?: NoLocation;
   /**
    * Set by the app rather than tapped: the end of a lunch, 30 minutes after it
    * started. No location is read for it.
@@ -124,7 +136,9 @@ export type ShiftFlag =
   | 'offsite_out'
   | 'missing_out'
   | 'edited'
-  | 'mock_gps';
+  | 'mock_gps'
+  /** Clocked in with no location, so the clock-in was not checked against the boundary. */
+  | 'no_location';
 
 export interface DeniedPunch {
   id: string;

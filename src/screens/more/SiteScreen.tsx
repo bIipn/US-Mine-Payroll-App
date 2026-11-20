@@ -4,9 +4,10 @@ import { StyleSheet, View } from 'react-native';
 
 import { SiteMap } from '../../components/SiteMap';
 import { Button, Divider, IconButton, Notice, Page, Panel, Txt } from '../../components/ui';
-import { DEMO_MODE } from '../../config';
+import { APP_NAME, DEMO_MODE } from '../../config';
 import { checkFix, circleAcres, MAX_ACCURACY_M, type FixCheck, type RawFix } from '../../domain/geofence';
 import { MAX_RADIUS_M, MIN_RADIUS_M, townGap } from '../../domain/site';
+import type { NoLocation } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { locate } from '../../services/location';
 import { useMe, useStore, useSupervisorHere } from '../../store/useStore';
@@ -14,6 +15,20 @@ import { color, space } from '../../theme/theme';
 import { fmtDistance } from '../../util/format';
 
 const commas = (n: number) => Math.round(n).toLocaleString('en-US');
+
+/** Why the phone gave no position, and what to do about it. Putting the pin needs a precise one. */
+function noPosition(reason: NoLocation, forPin: boolean): string {
+  switch (reason) {
+    case 'off':
+      return 'Location is turned off for this app. Turn it on in your phone settings.';
+    case 'approximate':
+      return forPin
+        ? `Your phone shares only an approximate location with ${APP_NAME}. Putting the pin needs your precise location: turn on Precise Location for ${APP_NAME} in your phone settings.`
+        : `Your phone shares only an approximate location with ${APP_NAME}, so it cannot place you against the boundary. To check, turn on Precise Location for ${APP_NAME} in your phone settings.`;
+    case 'no_fix':
+      return 'The phone could not get a position. Step into the open and try again.';
+  }
+}
 
 export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
   const me = useMe();
@@ -36,7 +51,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
     const result = await locate(site, settings.demoLocation);
     setBusy(false);
     if (!result.ok) {
-      setFailed(result.reason === 'denied' ? 'Location is turned off for this app. Turn it on in your phone settings.' : 'The phone could not get a position. Step into the open and try again.');
+      setFailed(noPosition(result.reason, true));
       return;
     }
     if (result.fix.mocked) {
@@ -83,7 +98,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
     if (!result.ok) {
       setFix(null);
       setCheck(null);
-      setFailed(result.reason === 'denied' ? 'Location is turned off for this app. Turn it on in your phone settings.' : 'The phone could not get a position. Step into the open and try again.');
+      setFailed(noPosition(result.reason, false));
       return;
     }
     setFix(result.fix);
@@ -117,7 +132,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
         <View style={styles.fact}>
           <Txt v="strong">{fmtDistance(site.radiusM)} around the mine pin</Txt>
           <Txt v="body" c={color.inkSoft}>
-            About {commas(circleAcres(site.radiusM))} acres. You have to be inside it to clock in.
+            About {commas(circleAcres(site.radiusM))} acres. A clock-in made with a location has to be inside it.
           </Txt>
         </View>
         {away && away.gapM > 0 ? (
@@ -135,7 +150,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
         <View style={styles.fact}>
           <Txt v="strong">Your location is read only when you punch</Txt>
           <Txt v="body" c={color.inkSoft}>
-            The app never follows you in the background. Clocking out and starting lunch are never blocked: the location is noted, and an off-site clock-out is flagged for review. Lunch ends by itself after 30 minutes, so no location is read then.
+            The app never follows you in the background. With location off, only an approximate location, or no position found, a clock-in still goes through, marked for a supervisor to check. Clocking out and starting lunch are never blocked: the location is noted, and an off-site clock-out is flagged for review. Lunch ends by itself after 30 minutes, so no location is read then.
           </Txt>
         </View>
       </Panel>

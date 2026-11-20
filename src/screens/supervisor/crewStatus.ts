@@ -17,6 +17,8 @@ export interface CrewLine {
   /** Higher sorts first: the people a supervisor has to look at. */
   urgency: number;
   paid: number;
+  /** On a shift clocked in with no location: here, but the clock-in was not checked against the boundary. */
+  noLocation?: boolean;
 }
 
 /** Where each active person stands right now. */
@@ -32,7 +34,8 @@ export function crewNow(employees: Employee[], shifts: Shift[], now: number, rul
       if (!shift) return { employee, presence: 'off', label: 'Off', tone: 'neutral', urgency: 0, paid: 0 };
       const meal = mealStatus(shift, now, rules);
       const paid = shiftTotals(shift, now).paid;
-      const base = { employee, shift, meal: meal.state, paid };
+      const noLocation = shiftFlags(shift, now, rules).includes('no_location');
+      const base = { employee, shift, meal: meal.state, paid, noLocation };
       switch (meal.state) {
         case 'at_lunch':
           // Lunch ends by itself, so the board can say when the person is back on the clock.

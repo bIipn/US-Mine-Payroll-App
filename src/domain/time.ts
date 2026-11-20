@@ -1,5 +1,5 @@
 import { fmtTime, HOUR, MIN, toHundredths } from '../util/format';
-import type { Lunch, Punch, Shift, ShiftFlag } from './types';
+import type { GeoStamp, Lunch, NoLocation, Punch, Shift, ShiftFlag } from './types';
 
 /**
  * Timekeeping rules. Overtime and meal periods follow the state the company
@@ -104,6 +104,15 @@ export function overtimeSummary(rules: TimeRules): string {
 
 /** Punches count to the minute, the way a wall time clock does. */
 export const floorMin = (ms: number) => Math.floor(ms / MIN) * MIN;
+
+/**
+ * A punch at `at`, with where the phone was or why it gave no location: never
+ * both. With neither, no location was read for it at all.
+ */
+export function punchAt(at: number, where?: GeoStamp | NoLocation): Punch {
+  if (where === undefined) return { at };
+  return typeof where === 'string' ? { at, noLocation: where } : { at, geo: where };
+}
 
 /**
  * A lunch, from the one tap that starts it. Nobody punches back in: the lunch
@@ -279,6 +288,8 @@ export function shiftFlags(shift: Shift, now: number, rules: TimeRules = CA_RULE
 
   const punches = [shift.clockIn, shift.clockOut, ...shift.lunches.flatMap((l) => [l.start, l.end])];
   if (punches.some((p) => p?.geo?.mocked)) flags.push('mock_gps');
+  // Only a clock-in is checked against the boundary, so only a clock-in with no location is one to review.
+  if (shift.clockIn.noLocation) flags.push('no_location');
 
   return flags;
 }
@@ -294,6 +305,7 @@ export const FLAG_LABEL: Record<ShiftFlag, string> = {
   missing_out: 'Missing clock-out',
   edited: 'Edited',
   mock_gps: 'Simulated GPS',
+  no_location: 'No location',
 };
 
 /** What a flag means, by the state's own times. */
@@ -316,6 +328,8 @@ export function flagHelp(flag: ShiftFlag, rules: TimeRules): string {
       return 'A supervisor changed one or more punch times.';
     case 'mock_gps':
       return 'The phone reported a simulated location for a punch.';
+    case 'no_location':
+      return 'The phone gave no location when this shift was clocked in (location off, approximate only, or no fix), so the clock-in was not checked against the mine boundary. Nothing is paid or docked for it.';
   }
 }
 

@@ -6,7 +6,7 @@ import { standard } from '../domain/standards';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, checklistSignedOn, findItem, isHazard, onTheCard } from '../domain/templates';
 import { rulesFor } from '../domain/stateRules';
 import { backFromLunchAt, FLAG_LABEL, flagHelp, MEAL_NOTE_LABEL, shiftFlags, shiftTotals } from '../domain/time';
-import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, OperatingLog, Punch, Settings, Shift } from '../domain/types';
+import type { Answer, AreaExam, Employee, Equipment, Inspection, LeaveEntry, Mrf, NoLocation, OperatingLog, Punch, Settings, Shift } from '../domain/types';
 import { addDays, DAY, fmtDateTime, fmtDayShort, fmtWeekday, HOUR, startOfDay, ymd } from '../util/format';
 import { buildWorkbook, type CellInput, type Sheet } from './xlsx';
 
@@ -51,6 +51,12 @@ const byName = (a: Employee, b: Employee) =>
   a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName);
 const nameOf = (e?: Employee) => (e ? `${e.lastName}, ${e.firstName}` : 'Unknown');
 const feet = (metres?: number | null): CellInput => (metres == null ? null : { v: Math.round(metres * 3.28084), s: 'int' });
+/** Why a punch on the punch log has no location. */
+const NO_LOCATION_SOURCE: Record<NoLocation, string> = {
+  off: 'No location (location off)',
+  approximate: 'No location (approximate only)',
+  no_fix: 'No location (no fix)',
+};
 
 function finish(name: string, sheets: Sheet[]): Report {
   return {
@@ -198,15 +204,21 @@ export function payrollReport(data: ReportData, range: ReportRange, now: number)
 
   const source = (punch: Punch): string => {
     if (punch.auto) return 'Automatic, 30 minutes after lunch start';
+    if (punch.noLocation) return NO_LOCATION_SOURCE[punch.noLocation];
     if (!punch.geo) return 'Entered by supervisor';
     return punch.geo.mocked ? 'Simulated GPS' : punch.geo.source === 'demo' ? 'Demo GPS' : 'Phone GPS';
+  };
+  /** Whether the punch was at the mine. A clock-in made with no location went through unchecked, for review. */
+  const atMine = (shift: Shift, punch: Punch): CellInput => {
+    if (punch.geo) return punch.geo.inside ? { v: 'Yes', s: 'ok' } : { v: 'No', s: 'bad' };
+    return punch === shift.clockIn && punch.noLocation ? { v: 'Not checked', s: 'warn' } : '';
   };
   // A lunch end is written down when the lunch starts, so one still in the future is left out.
   const punchRow = (shift: Shift, label: string, punch?: Punch): CellInput[] | null =>
     punch && punch.at <= now
       ? [
           nameOf(employeeOf.get(shift.employeeId)), date(punch.at), time(punch.at), label,
-          punch.geo ? (punch.geo.inside ? { v: 'Yes', s: 'ok' } : { v: 'No', s: 'bad' }) : '',
+          atMine(shift, punch),
           feet(punch.geo?.distanceM), feet(punch.geo?.accuracyM),
           source(punch),
         ]
