@@ -741,7 +741,10 @@ export const useStore = create<Store>()(
         submitInspection: (draft) => {
           const { session, equipment, inspections, opLogs } = get();
           if (!session) return { ok: false, error: 'You are signed out.' };
-          const unit = equipment.find((e) => e.id === draft.equipmentId);
+          // Signed on the unit as the form opened with it, though the office changed it, or took it
+          // out, meanwhile. The reading and the status go onto the unit as the phone holds it now.
+          const current = equipment.find((e) => e.id === draft.equipmentId);
+          const unit = draft.unit?.id === draft.equipmentId ? draft.unit : current;
           if (!unit) return { ok: false, error: 'That unit is no longer in the fleet list.' };
           // A card is signed once. A second tap on the same card gets the checklist already on record.
           const signed = inspections.find(
@@ -764,6 +767,8 @@ export const useStore = create<Store>()(
           const inspection: Inspection = {
             id: uid('insp_'),
             equipmentId: unit.id,
+            // The standards printed beside its lines stay the ones it was signed under.
+            category: unit.category,
             employeeId: session.employeeId,
             templateId: template.id,
             templateVersion: template.version,
@@ -775,7 +780,7 @@ export const useStore = create<Store>()(
             fuelGal: draft.fuelGal != null && draft.fuelGal > 0 ? draft.fuelGal : undefined,
             comments: draft.comments && clean(draft.comments) ? clean(draft.comments) : undefined,
           };
-          let status = unit.status;
+          let status = current?.status ?? unit.status;
           if (result === 'bad_order') status = 'out_of_service';
           else if (result === 'defect' && status === 'ready') status = 'defect';
 
@@ -783,7 +788,8 @@ export const useStore = create<Store>()(
           let logs = opLogs.map((log) =>
             log.equipmentId === unit.id && !log.endAt ? { ...log, endAt: now, endMeter: draft.meter } : log,
           );
-          if (result === 'pass') {
+          // A unit taken out of the fleet while it was being checked is not checked out.
+          if (result === 'pass' && current) {
             logs = [...logs, {
               id: uid('op_'), equipmentId: unit.id, employeeId: session.employeeId, inspectionId: inspection.id,
               startAt: now, startMeter: draft.meter,
@@ -815,17 +821,26 @@ export const useStore = create<Store>()(
         },
 
         endUse: (logId, input) => {
-          const { opLogs, equipment } = get();
+          const { opLogs, equipment, receiving } = get();
           const log = opLogs.find((l) => l.id === logId);
           if (!log || log.endAt) return { ok: false, error: 'That unit has already been checked back in.' };
           if (!(input.endMeter >= log.startMeter)) {
             return { ok: false, error: 'The ending meter cannot be lower than the starting meter.' };
+          }
+          // A unit the company took out of the fleet while it was checked out here is kept in `gone`
+          // only so its use can be ended: ending it lets the copy go.
+          const kept = receiving?.gone[log.equipmentId];
+          let gone = receiving?.gone;
+          if (kept && receiving) {
+            const { [log.equipmentId]: _ended, ...rest } = receiving.gone;
+            gone = rest;
           }
           set({
             opLogs: opLogs.map((l) => (l.id === logId ? { ...l, ...input, endAt: Date.now() } : l)),
             equipment: equipment.map((e) =>
               e.id === log.equipmentId ? { ...e, meter: Math.max(e.meter, input.endMeter) } : e,
             ),
+            ...(kept && receiving && gone ? { receiving: { ...receiving, gone } } : null),
           });
           return { ok: true };
         },
@@ -897,7 +912,8 @@ export const useStore = create<Store>()(
             mrfs: all,
             mrfSeq: mrfSeq + 1,
             equipment: equipment.map((e) =>
-              e.id === input.equipmentId ? { ...e, status: statusFromMrfs(e.id, all) } : e,
+              // Making a request never makes a unit better: one red-tagged by a checklist, or by another phone, stays so.
+              e.id === input.equipmentId ? { ...e, status: worseStatus(e.status, statusFromMrfs(e.id, all)) } : e,
             ),
             inspections: inspections.map((i) => (i.id === input.inspectionId ? { ...i, mrfId: mrf.id } : i)),
             // The line on the exam shows the request it was sent on.
@@ -966,7 +982,14 @@ export const useStore = create<Store>()(
           const { examId, findingKey } = mrf;
           set({
             mrfs: all,
-            equipment: equipment.map((e) => (e.id === mrf.equipmentId ? { ...e, status: statusFromMrfs(e.id, all) } : e)),
+            // Completing a request takes off what that request put on, and nothing more: a unit worse
+            // than it (red-tagged by a checklist, or by another phone) keeps its status.
+            equipment: equipment.map((e) => {
+              if (e.id !== mrf.equipmentId) return e;
+              const putOn: EquipmentStatus = mrf.taggedOut ? 'out_of_service' : 'defect';
+              if (e.status !== putOn && worseStatus(e.status, putOn) === e.status) return e;
+              return { ...e, status: statusFromMrfs(e.id, all) };
+            }),
             // The repair is the corrective action: its date goes on the exam the condition was found on.
             exams:
               examId && findingKey
@@ -985,7 +1008,8 @@ export const useStore = create<Store>()(
             (x) => x.sheetId === draft.sheetId && x.employeeId === session.employeeId && x.startedAt === draft.startedAt,
           );
           if (signed) return { ok: true, exam: signed };
-          const sheet = areaSheets.find((s) => s.id === draft.sheetId && s.active);
+          // Signed on the sheet as the form opened with it, though the office changed or stopped it meanwhile.
+          const sheet = draft.sheet?.id === draft.sheetId ? draft.sheet : areaSheets.find((s) => s.id === draft.sheetId && s.active);
           if (!sheet) return { ok: false, error: 'That area sheet is no longer on the list.' };
           const built = buildExam(sheet, draft, { id: uid('exam_'), employeeId: session.employeeId, submittedAt: Date.now() });
           if (!built.ok) return built;
