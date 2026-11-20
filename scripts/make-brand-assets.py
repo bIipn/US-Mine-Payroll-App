@@ -13,6 +13,11 @@ Writes, in assets/:
     splash-icon.png              the lockup on transparent, for the black launch screen on iOS
     splash-icon-android.png      the mark alone, for Android's launch screen, which shows only a circle
     favicon.png                  the mark as a solid silver shape on black, 48 px, for a browser tab
+    notification-icon.png        the mark as a solid white shape on transparent, 96 px, for Android's
+                                 status bar, which draws a notification's icon in one colour
+    store/play-icon.png          Google Play's listing icon: the app icon at 512 square, 32-bit
+    store/play-feature-graphic.png  Google Play's feature graphic, 1024 x 500, no transparency: the
+                                 lockup on the app's ink colour over a stripe of equipment yellow
 
 and, for the website in site/:
     brand/minemuster-logo.webp   the lockup, 1600 px wide, for large screens
@@ -39,6 +44,9 @@ SITE = os.path.join(ROOT, 'site')
 SOURCE = os.path.join(ASSETS, 'brand', 'source')
 LOCKUP = Image.open(os.path.join(SOURCE, 'minemuster-lockup.png')).convert('RGB')
 MARK = Image.open(os.path.join(SOURCE, 'minemuster-mark.png')).convert('RGB')
+# The app's ink and equipment yellow (src/theme/theme.ts), for the store graphic.
+INK = (0x1C, 0x1B, 0x19)
+YELLOW = (0xFF, 0xC4, 0x00)
 
 
 def unscreen(img, black=10):
@@ -131,6 +139,22 @@ def main():
     big.paste(Image.new('RGB', tab.size, (228, 230, 234)), ((480 - tab.width) // 2, (480 - tab.height) // 2), tab)
     favicon = big.resize((48, 48), Image.LANCZOS)
     favicon.save(os.path.join(ASSETS, 'favicon.png'), optimize=True)
+
+    # Android draws a notification's small icon from its alpha alone, in one colour: a solid shape reads.
+    note = silhouette(80)
+    small = Image.new('RGBA', (96, 96), (0, 0, 0, 0))
+    small.paste(Image.new('RGBA', note.size, (255, 255, 255, 255)), ((96 - note.width) // 2, (96 - note.height) // 2), note)
+    small.save(os.path.join(ASSETS, 'notification-icon.png'), optimize=True)
+
+    # Google Play's listing: the store pages ask for these; the app does not use them.
+    os.makedirs(os.path.join(ASSETS, 'store'), exist_ok=True)
+    whole_mark((1024, 1024), 820).resize((512, 512), Image.LANCZOS).convert('RGBA').save(
+        os.path.join(ASSETS, 'store', 'play-icon.png'), optimize=True)
+    feature = Image.new('RGBA', (1024, 500), INK + (255,))
+    shown = fit(lock, 560)
+    feature.alpha_composite(shown, ((1024 - shown.width) // 2, (500 - 16 - shown.height) // 2))
+    feature.paste(Image.new('RGBA', (1024, 16), YELLOW + (255,)), (0, 500 - 16))
+    feature.convert('RGB').save(os.path.join(ASSETS, 'store', 'play-feature-graphic.png'), optimize=True)
 
     # The website.
     os.makedirs(os.path.join(SITE, 'brand'), exist_ok=True)

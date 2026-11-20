@@ -3,6 +3,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { Building2, CloudCheck, CloudUpload, Eye, EyeOff, LogIn, LogOut, RotateCcw, Users, WifiOff } from '../../components/icons';
 import { Button, Divider, Field, IconButton, Notice, Panel, Page, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
+import { WebPageLinks } from '../../components/WebPageLinks';
 import { companyAccountView } from '../../domain/access';
 import { keepsTime } from '../../domain/company';
 import { otherCompany } from '../../domain/server';
@@ -649,6 +650,8 @@ function Connected({ email }: { email: string }) {
           )}
         </View>
       </Panel>
+
+      <WebPageLinks testID="server-pages" />
 
       <DisconnectButton />
       <AccountRow email={email} />

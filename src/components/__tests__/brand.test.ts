@@ -47,6 +47,16 @@ describe('MineMuster brand assets', () => {
     expect(png('favicon.png')).toMatchObject({ width: 48, height: 48 });
   });
 
+  it('has a notification icon Android can draw in one colour: a white shape on transparent, 96 square', () => {
+    expect(png('notification-icon.png')).toEqual({ width: 96, height: 96, alpha: true });
+  });
+
+  it('has Google Play\'s listing icon (512 square, 32-bit) and feature graphic (1024 x 500, no transparency)', () => {
+    expect(png('store/play-icon.png')).toEqual({ width: 512, height: 512, alpha: true });
+    expect(fs.readFileSync(`${assets}/store/play-icon.png`).length).toBeLessThan(1024 * 1024);
+    expect(png('store/play-feature-graphic.png')).toEqual({ width: 1024, height: 500, alpha: false });
+  });
+
   it('has the sign-in logo sharp at 280 points on a 3x screen, see-through, in the shape the screen sizes it to', () => {
     expect(webp('brand/minemuster-logo.webp')).toEqual({ width: 840, height: 390, alpha: true });
   });

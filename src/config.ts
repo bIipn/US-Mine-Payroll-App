@@ -125,3 +125,13 @@ if (BUILD_SERVER.server && !CAN_SEND) {
 export const SERVER: ServerConfig | null = CAN_SEND ? BUILD_SERVER.server : null;
 
 export const APP_NAME = 'MineMuster';
+
+/**
+ * MineMuster's own pages the app opens in the phone's browser: the privacy
+ * policy, which the stores require a link to inside the app, and where to ask
+ * for help. Every build offers them, before anyone has signed in.
+ */
+export const WEB_PAGES = {
+  privacy: 'https://minemuster.com/privacy',
+  help: 'https://minemuster.com/contact',
+} as const;

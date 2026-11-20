@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CompanyLogoPlate, MineMusterLogo, ProviderMark } from '../../components/Brand';
 import { Button, Divider, Field, IconButton, Notice, Row, Segmented, Sheet, Txt } from '../../components/ui';
+import { WebPageLinks } from '../../components/WebPageLinks';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
 import { findOnRoster } from '../../domain/roster';
 import { receiveWords } from '../../domain/sync';
@@ -365,6 +366,10 @@ export function AuthScreen() {
             ) : null}
           </View>
         ) : null}
+
+        <View style={styles.pages}>
+          <WebPageLinks testID="auth-pages" />
+        </View>
       </ScrollView>
 
       <Sheet
@@ -419,6 +424,7 @@ const styles = StyleSheet.create({
   providerText: { fontFamily: font.bodySemi, fontSize: 18, color: color.ink },
   rosterNote: { flexDirection: 'row', gap: space.md, alignItems: 'flex-start' },
   demo: { marginTop: space.xxl, marginHorizontal: space.lg, gap: space.sm },
+  pages: { marginTop: space.xxl, marginHorizontal: space.lg },
   demoRows: {
     marginTop: space.sm,
     backgroundColor: color.paper,

@@ -7,8 +7,11 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.minemuster.app"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.minemuster.app",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.minemuster.app",
@@ -22,8 +25,11 @@
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.SYSTEM_ALERT_WINDOW"
-      ]
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.ACCESS_WIFI_STATE",
+        "com.google.android.gms.permission.AD_ID"
+      ],
+      "allowBackup": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -47,16 +53,20 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "MineMuster reads your location only at the moment you punch, to confirm you are at the mine. It never tracks you in the background.",
+          "locationWhenInUsePermission": "MineMuster reads your location once when you clock in, start lunch or clock out, and when a supervisor sets the mine boundary, to check you are at the mine. It is saved with that punch, so your company's supervisors can see where it was made. It is never read in the background.",
           "locationAlwaysAndWhenInUsePermission": false,
-          "locationAlwaysPermission": false
+          "locationAlwaysPermission": false,
+          "motionUsagePermission": false,
+          "locationFullAccuracyPermission": false
         }
       ],
       [
         "expo-notifications",
         {
           "color": "#FFC400",
-          "defaultChannel": "lunch"
+          "defaultChannel": "lunch",
+          "enableRemoteNotifications": false,
+          "icon": "./assets/notification-icon.png"
         }
       ]
     ]

@@ -5,7 +5,20 @@ import Svg, { Path, Rect } from 'react-native-svg';
 import type { CompanyLogo } from '../domain/company';
 import type { AuthProvider } from '../domain/types';
 import { color } from '../theme/theme';
-import { LOGO_ART } from './logoArt';
+
+/**
+ * The traced artwork of US Mine Corporation's logo, or null in a build that
+ * leaves it out. A store build sets EXPO_PUBLIC_LOGO_ART=0 (eas.json): the
+ * public app carries no customer's trademark. The condition is written with
+ * the setting itself, so the bundler reads it as a constant and drops the
+ * artwork from such a build. Without it, a company whose logo is the traced
+ * art shows no logo, and its screens keep their plain colour.
+ */
+const LOGO_ART: typeof import('./logoArt').LOGO_ART | null =
+  process.env.EXPO_PUBLIC_LOGO_ART !== '0' ? require('./logoArt').LOGO_ART : null;
+
+/** Whether this build has the traced artwork to draw a company's built-in logo with. */
+export const HAS_LOGO_ART = LOGO_ART != null;
 
 /**
  * US Mine Corporation's logo: the navy lettering over the gold stepped rule.
@@ -13,6 +26,7 @@ import { LOGO_ART } from './logoArt';
  * for, always in its own proportions and its own colours.
  */
 export const Logo = React.memo(function Logo({ width }: { width: number }) {
+  if (!LOGO_ART) return null;
   const height = (width * LOGO_ART.height) / LOGO_ART.width;
   return (
     <Svg width={width} height={height} viewBox={`0 0 ${LOGO_ART.width} ${LOGO_ART.height}`}>
@@ -28,6 +42,7 @@ export const Logo = React.memo(function Logo({ width }: { width: number }) {
  * plate, the way it runs to the edges of the company's own artwork.
  */
 export function LogoPlate({ width, radius = 8 }: { width: number; radius?: number }) {
+  if (!LOGO_ART) return null;
   return (
     <View
       testID="brand-logo"
@@ -52,7 +67,7 @@ export function CompanyLogoPlate({ logo, name, width, radius = 8 }: {
   radius?: number;
 }) {
   if (!logo) return null;
-  if ('art' in logo) return <LogoPlate width={width} radius={radius} />;
+  if ('art' in logo) return LOGO_ART ? <LogoPlate width={width} radius={radius} /> : null;
   return (
     <View
       testID="brand-logo"

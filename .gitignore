@@ -48,3 +48,7 @@ __pycache__/
 
 # HawkScan output, if a scan is ever run by hand from here
 *.sarif
+
+# Store credentials (kept on EAS only, never in this public repository)
+credentials.json
+*service-account*.json

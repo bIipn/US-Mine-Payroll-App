@@ -6,6 +6,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { DecimalChart } from '../../components/DecimalChart';
 import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
+import { WebPageLinks } from '../../components/WebPageLinks';
 import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
 import { keepsTime } from '../../domain/company';
 import { notTakenWords } from '../../domain/receive';
@@ -221,6 +222,8 @@ export function MoreScreen() {
             />
           </Panel>
         ) : null}
+
+        <WebPageLinks testID="more-pages" />
 
         {canClear ? (
           <Panel title={DEMO_MODE ? 'Preview' : 'This phone'} flush>
