@@ -192,7 +192,7 @@ describe('the company', () => {
 describe('sending records', () => {
   const batch = [change('shift:s1', 'r1'), change('employee:e1', 'r2'), change('leave:l1', 'deleted', null)];
 
-  it('sends the batch to the company and answers with what was taken and what will not be', async () => {
+  it('sends the batch to the company and answers with what was taken, and what is held for this sign-in', async () => {
     mockRpc.mockResolvedValueOnce({
       data: { accepted: [{ key: 'shift:s1', rev: 'r1' }, { key: 'leave:l1', rev: 'deleted' }], ignored: [{ key: 'employee:e1', rev: 'r2', reason: 'supervisor_only' }] },
       error: null,
@@ -201,7 +201,12 @@ describe('sending records', () => {
     expect(link.company).toBe('c-a');
     const took = await link.push(batch);
     expect(mockRpc).toHaveBeenCalledWith('push_records', { company_id: 'c-a', changes: batch });
-    expect(took).toEqual([{ key: 'shift:s1', rev: 'r1' }, { key: 'leave:l1', rev: 'deleted' }, { key: 'employee:e1', rev: 'r2' }]);
+    expect(took).toEqual({
+      took: [{ key: 'shift:s1', rev: 'r1' }, { key: 'leave:l1', rev: 'deleted' }],
+      stale: [],
+      floored: [],
+      held: [{ key: 'employee:e1', rev: 'r2', reason: 'supervisor_only' }],
+    });
   });
 
   it('hands the call a signal that can stop it', async () => {

@@ -1,5 +1,6 @@
 import { sha256 } from '../util/hash';
-import { SAMPLE_COMPANY } from './company';
+import { checkCompany, SAMPLE_COMPANY } from './company';
+import type { PersonName } from './roster';
 import { SAMPLE_SITE } from './site';
 import type {
   AreaExam,
@@ -7,10 +8,12 @@ import type {
   DeniedPunch,
   Employee,
   Equipment,
+  EquipmentStatus,
   Inspection,
   LeaveEntry,
   Mrf,
   OperatingLog,
+  Role,
   Settings,
   Shift,
 } from './types';
@@ -50,6 +53,42 @@ export const SYNC_KINDS = [
   'mrf',
 ] as const;
 export type SyncKind = (typeof SYNC_KINDS)[number];
+
+/**
+ * The kinds every phone works from, which a phone connected to its company
+ * also receives (src/domain/receive.ts): the settings, the roster, the fleet
+ * and the area sheets. The rest it only sends.
+ */
+export const REFERENCE_KINDS = ['settings', 'employee', 'equipment', 'areaSheet'] as const;
+export type ReferenceKind = (typeof REFERENCE_KINDS)[number];
+const isReference = (kind: string): kind is ReferenceKind => (REFERENCE_KINDS as readonly string[]).includes(kind);
+
+/** A row as read_shared_records hands it over: the server's version of the whole record. */
+export interface ReceivedRow {
+  kind: ReferenceKind;
+  id: string;
+  /** The server's version, or 'deleted'. */
+  rev: string;
+  seq: number;
+  deleted: boolean;
+  data: unknown;
+}
+
+/** Who a phone's company sign-in is to the company, from its own row of the sign-in roster. */
+export interface Standing {
+  role: Role;
+  name: PersonName;
+}
+
+/** The company's own row: what a phone starts from when the company has never sent its settings. */
+export interface CompanyRow {
+  name: string;
+  state: string;
+  pay: unknown;
+}
+
+/** Why the server would not take a change from this phone's sign-in. Such a change is held, not counted as sent. */
+export type HeldReason = 'supervisor_only' | 'not_yours' | 'signed' | 'malformed' | 'private' | 'too_large';
 
 /** The records a phone holds that the crew shares. */
 export interface SyncData {
@@ -142,7 +181,78 @@ function madeUpSettings(settings: Settings): boolean {
  * fleet first so a record never arrives ahead of what it points at.
  * `holdBack` names people whose records stay on the phone: the made-up sample crew.
  */
-export function changesToSend(data: SyncData, synced: Synced, holdBack: ReadonlySet<string>): Change[] {
+export function changesToSend(data: SyncData, synced: Synced, holdBack: ReadonlySet<string>, here?: SendHere): Change[] {
+  const sorted = sortedChanges(data, synced, holdBack, here);
+  return [...sorted.now, ...sorted.afterReceive];
+}
+
+/** What a phone connected to its company knows when it works out what to send. */
+export interface SendHere {
+  /** Connected to a company. A phone never connected sends as it always has. */
+  connected: boolean;
+  /** Who its company sign-in is to the company, as the last standing read found. */
+  role: Role | 'none' | null;
+  /** It has read the company's records to an empty page at least once. */
+  caughtUp: boolean;
+  /** Records of the company this version of the app could not read. */
+  unreadable: readonly string[];
+  /** Changes the server would not take from this sign-in, at the version it refused. */
+  held: Readonly<Record<string, { rev: string }>>;
+}
+
+export interface SortedChanges {
+  /** Sent first in a round: the seven kinds a phone makes, and ahead of them a unit or sheet this phone added. */
+  now: Change[];
+  /** Sent once the round has read the company's records: the rest of the settings, the fleet and the sheets. */
+  afterReceive: Change[];
+  /** Not sent: the server would not take them from this phone's sign-in. Counted apart from what waits. */
+  notTaken: Change[];
+}
+
+/**
+ * changesToSend's list, sorted for a phone connected to its company. On such a
+ * phone a person is never sent (people change on the dashboard); a crew
+ * sign-in sends no sheet, no settings, no new unit and no removal of a unit,
+ * which the server takes from a supervisor only, and those are counted as not
+ * taken; nothing of the four kinds the server never had goes before the phone
+ * has seen the company's; no settings go whose company is not whole; nothing
+ * the phone could not read from the company goes; and a change the server
+ * would not take is not sent again at the version it refused.
+ */
+export function sortedChanges(data: SyncData, synced: Synced, holdBack: ReadonlySet<string>, here?: SendHere): SortedChanges {
+  const all = everyChange(data, synced, holdBack);
+  if (!here?.connected) return { now: all, afterReceive: [], notTaken: [] };
+  const sorted: SortedChanges = { now: [], afterReceive: [], notTaken: [] };
+  const supervisor = here.role === 'supervisor';
+  const unreadable = new Set(here.unreadable);
+  const refused = (c: Change) => here.held[c.key]?.rev === c.rev;
+  for (const c of all) {
+    if (!isReference(c.kind)) {
+      (refused(c) ? sorted.notTaken : sorted.now).push(c);
+      continue;
+    }
+    if (c.kind === 'employee' || unreadable.has(c.key)) continue;
+    const isNew = synced[c.key] === undefined;
+    if (isNew && !here.caughtUp) continue;
+    if (c.kind === 'settings' && c.record && !wholeCompany((c.record as SharedSettings).company)) continue;
+    const onlyASupervisor = c.kind === 'areaSheet' || c.kind === 'settings' || (c.kind === 'equipment' && (isNew || c.rev === DELETED));
+    if ((onlyASupervisor && !supervisor) || refused(c)) sorted.notTaken.push(c);
+    else if (isNew && (c.kind === 'equipment' || c.kind === 'areaSheet')) sorted.now.push(c);
+    else sorted.afterReceive.push(c);
+  }
+  return sorted;
+}
+
+/** A company payroll can go by: the server would refuse settings with a blank one, and a phone must never send one. */
+function wholeCompany(company: Settings['company'] | undefined): boolean {
+  try {
+    return !!company && checkCompany(company) === undefined;
+  } catch {
+    return false;
+  }
+}
+
+function everyChange(data: SyncData, synced: Synced, holdBack: ReadonlySet<string>): Change[] {
   const out: Change[] = [];
   const here = new Set<string>();
   const add = (kind: SyncKind, id: string, record: object) => {
@@ -230,8 +340,9 @@ export function fitsServer(change: Change): boolean {
  * - `not_member`: the account is no longer on the company's roster. Sending waits for a supervisor.
  * - `refused`: the server would not take what was sent. The change at fault is found and held back.
  * - `server`: something else went wrong on the server. Tried again later.
+ * - `closed`: the company does not have MineMuster. Nothing more is read until a supervisor starts it again.
  */
-export type SendTrouble = 'unreachable' | 'signed_out' | 'not_member' | 'refused' | 'server';
+export type SendTrouble = 'unreachable' | 'signed_out' | 'not_member' | 'refused' | 'server' | 'closed';
 
 /** A failed send that says why, in plain words. */
 export type SendError = Error & { trouble: SendTrouble };
@@ -243,15 +354,35 @@ export function sendError(trouble: SendTrouble, message: string): SendError {
 /** Why an error from a send happened. Anything that does not say counts as not getting through. */
 export function troubleOf(error: unknown): SendTrouble {
   const trouble = error && typeof error === 'object' ? (error as { trouble?: unknown }).trouble : undefined;
-  return trouble === 'signed_out' || trouble === 'not_member' || trouble === 'refused' || trouble === 'server' ? trouble : 'unreachable';
+  return trouble === 'signed_out' || trouble === 'not_member' || trouble === 'refused' || trouble === 'server' || trouble === 'closed' ? trouble : 'unreachable';
 }
 
-/** The company's server, as the phone sees it: it takes records and answers with the versions it now has. */
+/**
+ * The server's answer to a send, by what the phone does with each change:
+ * - `took`: the server has it, or keeps what it had of one of the seven kinds a phone makes. Counted as sent.
+ * - `stale`: of the four kinds, made from a version the server no longer holds. Read the company's records again, then send.
+ * - `floored`: a unit's status better than the company's open requests on it; `floor` is the best it may be.
+ * - `held`: the server would not take it from this phone's sign-in. Not sent again until the record or the role changes.
+ */
+export interface PushAnswer {
+  took: Pick<Change, 'key' | 'rev'>[];
+  stale: Pick<Change, 'key' | 'rev'>[];
+  floored: (Pick<Change, 'key' | 'rev'> & { floor: EquipmentStatus })[];
+  held: (Pick<Change, 'key' | 'rev'> & { reason: HeldReason })[];
+}
+
+/** The company's server, as the phone sees it: it takes records, answers what it did with each, and hands over the company's. */
 export interface SyncTransport {
   /** The company the records go to. */
   readonly company?: string;
   /** `signal` is aborted when the phone stops waiting for the answer. */
-  push(changes: readonly Change[], signal?: AbortSignal): Promise<readonly Pick<Change, 'key' | 'rev'>[]>;
+  push(changes: readonly Change[], signal?: AbortSignal): Promise<PushAnswer>;
+  /** The four kinds after a cursor, at most `max` rows, in seq order. An empty page is the end. */
+  pull?(after: number, max: number, signal?: AbortSignal): Promise<ReceivedRow[]>;
+  /** This phone's sign-in's own row of the roster; null when it is not on the roster. */
+  standing?(signal?: AbortSignal): Promise<Standing | null>;
+  /** The company's own row, for a company that never sent its settings. */
+  companyRow?(signal?: AbortSignal): Promise<CompanyRow | null>;
 }
 
 export interface SendOptions {
@@ -288,7 +419,7 @@ function pushOnce(transport: SyncTransport, part: readonly Change[], timeoutMs: 
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
-  return new Promise<readonly Pick<Change, 'key' | 'rev'>[]>((resolve, reject) => {
+  return new Promise<PushAnswer>((resolve, reject) => {
     const giveUp = (why: string) => {
       controller?.abort();
       reject(sendError('unreachable', why));
@@ -316,7 +447,7 @@ function pushOnce(transport: SyncTransport, part: readonly Change[], timeoutMs: 
 export async function sendWaiting(
   changes: readonly Change[],
   transport: SyncTransport,
-  took: (accepted: readonly Pick<Change, 'key' | 'rev'>[]) => void,
+  took: (answer: PushAnswer) => void,
   { batch = BATCH, timeoutMs = SEND_TIMEOUT_MS, still = () => true, signal }: SendOptions = {},
 ): Promise<SendResult> {
   const result: SendResult = { sent: 0, failed: false, trouble: null, problem: null, stuck: [], stopped: false };
@@ -331,10 +462,10 @@ export async function sendWaiting(
   const send = async (part: readonly Change[]): Promise<boolean> => {
     if (!going()) return false;
     try {
-      const accepted = await pushOnce(transport, part, timeoutMs, signal);
+      const answer = await pushOnce(transport, part, timeoutMs, signal);
       if (!going()) return false;
-      took(accepted);
-      result.sent += accepted.length;
+      took(answer);
+      result.sent += answer.took.length;
       return true;
     } catch (error) {
       if (!going()) return false;
@@ -403,6 +534,9 @@ export function syncWords(status: SyncStatus, time: (ms: number) => string): { t
     const again = 'Sign in again on Company account to keep sending. Nothing is lost.';
     return count ? say(count, `Signed out of the company server. ${again}`, false, true) : say('Signed out of the company server', again, false, true);
   }
+  if (trouble === 'closed') {
+    return say(count ?? 'Not sending', 'MineMuster has stopped for this company. A supervisor can start it again on the dashboard’s Billing page. Nothing is lost.', false, true);
+  }
   if (trouble === 'not_member') {
     return say(count ?? 'Not sending', `${problem ?? 'This account is not on the company’s roster.'} See your supervisor. Nothing is lost.`, false, true);
   }
@@ -416,4 +550,44 @@ export function syncWords(status: SyncStatus, time: (ms: number) => string): { t
     return say(count!, trouble === 'server' && problem ? `${problem} The phone tries again by itself.` : 'The server could not be reached. The phone tries again by itself.');
   }
   return say(count!, 'They send in a few seconds.');
+}
+
+/** What the records row knows about the company's records on a connected phone. */
+export interface ReceiveView {
+  connected: boolean;
+  online: boolean;
+  role: Role | 'none' | null;
+  caughtUpAt: number | null;
+  /** The company does not have MineMuster. */
+  closed: boolean;
+  /** Records from the company this version could not read. */
+  unreadable: number;
+  /** Changes the company would not take from this phone's sign-in. */
+  notTaken: number;
+  company: string;
+  /** The phone's company sign-in. */
+  email: string | null;
+}
+
+/**
+ * The records row's second line about what comes from the company, or null on
+ * a phone never connected. `time` writes a clock time. `warn` marks something
+ * only a person can put right.
+ */
+export function receiveWords(v: ReceiveView, time: (ms: number) => string): { line: string; warn: boolean } | null {
+  if (!v.connected) return null;
+  const warn = (line: string) => ({ line, warn: true });
+  const plain = (line: string) => ({ line, warn: false });
+  if (v.role === 'none') {
+    return warn(
+      `This phone’s company sign-in${v.email ? `, ${v.email},` : ''} is not on ${v.company}’s roster any more, so nothing done here reaches the company. Records stay on this phone. See your supervisor.`,
+    );
+  }
+  if (v.closed) return warn(`MineMuster has stopped for ${v.company}. A supervisor can start it again on the dashboard’s Billing page.`);
+  if (v.unreadable) {
+    return warn(`${records(v.unreadable)} from the company could not be read on this phone. Update the app; if that does not fix it, tell the office.`);
+  }
+  if (v.caughtUpAt === null) return plain(v.online ? 'Getting your company’s roster, fleet and area sheets.' : 'No signal. They come when this phone is back in range.');
+  if (v.notTaken) return warn(`${v.notTaken} not taken by the company from this phone’s sign-in.`);
+  return plain(`The company’s roster, fleet and sheets last came at ${time(v.caughtUpAt)}.`);
 }

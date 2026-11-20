@@ -1,7 +1,10 @@
 import { checkCompany } from './company';
 import type { PersonName } from './roster';
-import { revOf, sharedSettings, stableJson, type SharedSettings, type Synced } from './sync';
+import { revOf, sharedSettings, stableJson, type HeldReason, type ReceivedRow, type ReferenceKind, type SharedSettings, type Standing, type Synced } from './sync';
 import type { AreaSheet, Employee, Equipment, EquipmentCategory, EquipmentStatus, Mrf, OperatingLog, Role, Settings } from './types';
+
+export { REFERENCE_KINDS } from './sync';
+export type { HeldReason, ReceivedRow, ReferenceKind, Standing } from './sync';
 
 /**
  * What a phone takes in from the company: the four kinds of record every phone
@@ -20,30 +23,6 @@ import type { AreaSheet, Employee, Equipment, EquipmentCategory, EquipmentStatus
  *
  * Pure: no store, no React Native. The store applies what these return.
  */
-
-/** The kinds every phone works from and receives from the company. */
-export const REFERENCE_KINDS = ['settings', 'employee', 'equipment', 'areaSheet'] as const;
-export type ReferenceKind = (typeof REFERENCE_KINDS)[number];
-
-/** A row as read_shared_records hands it over. */
-export interface ReceivedRow {
-  kind: ReferenceKind;
-  id: string;
-  /** The server's version of the whole record, or 'deleted'. */
-  rev: string;
-  seq: number;
-  deleted: boolean;
-  data: unknown;
-}
-
-/** Who a phone's company sign-in is to the company, from its own row of the sign-in roster. */
-export interface Standing {
-  role: Role;
-  name: PersonName;
-}
-
-/** Why the server would not take a change from this phone's sign-in. */
-export type HeldReason = 'supervisor_only' | 'not_yours' | 'signed' | 'malformed' | 'private' | 'too_large';
 
 export interface ReceiveNotice {
   id: string;

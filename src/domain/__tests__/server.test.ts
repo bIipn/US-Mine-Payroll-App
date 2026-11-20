@@ -12,8 +12,11 @@ import {
   pickCompany,
   pushTrouble,
   readCompanies,
+  readCompanyRow,
   readJoinAnswer,
   readPushAnswer,
+  readRows,
+  readStanding,
   readWaitingRequests,
   roleWords,
   serverWords,
@@ -207,24 +210,84 @@ describe('what push_records answered', () => {
   };
   const batch = [change('shift:s1', 'r1'), change('employee:e1', 'r2'), change('leave:l1', 'deleted')];
 
-  it('counts what the server took and what it will not take from this account, so neither is sent again', () => {
+  const nothing = { took: [], stale: [], floored: [], held: [] };
+
+  it('holds what the server will not take from this account instead of counting it as sent', () => {
     const answer = {
       accepted: [{ key: 'shift:s1', rev: 'r1', conflict: true }, { key: 'leave:l1', rev: 'deleted' }],
       ignored: [{ key: 'employee:e1', rev: 'r2', reason: 'supervisor_only' }],
     };
-    expect(readPushAnswer(answer, batch)).toEqual([
-      { key: 'shift:s1', rev: 'r1' },
-      { key: 'leave:l1', rev: 'deleted' },
-      { key: 'employee:e1', rev: 'r2' },
-    ]);
+    expect(readPushAnswer(answer, batch)).toEqual({
+      ...nothing,
+      took: [
+        { key: 'shift:s1', rev: 'r1' },
+        { key: 'leave:l1', rev: 'deleted' },
+      ],
+      held: [{ key: 'employee:e1', rev: 'r2', reason: 'supervisor_only' }],
+    });
+  });
+
+  it('reads each reason into its own list: stale for the four kinds, the floor of a unit, and what is held', () => {
+    const many = [
+      change('areaSheet:a1', 'r1'),
+      change('settings:company', 'r2'),
+      change('equipment:u1', 'r3'),
+      change('equipment:u2', 'r4'),
+      change('shift:s2', 'r5'),
+      change('shift:s3', 'r6'),
+      change('exam:x1', 'r7'),
+      change('equipment:u3', 'r8'),
+      change('mrf:m1', 'r9'),
+      change('inspection:i1', 'r10'),
+    ];
+    const answer = {
+      accepted: [],
+      ignored: [
+        { key: 'areaSheet:a1', rev: 'r1', reason: 'superseded' },
+        { key: 'settings:company', rev: 'r2', reason: 'copy' },
+        { key: 'equipment:u1', rev: 'r3', reason: 'deleted' },
+        { key: 'equipment:u2', rev: 'r4', reason: 'open_request', floor: 'out_of_service' },
+        { key: 'shift:s2', rev: 'r5', reason: 'superseded' },
+        { key: 'shift:s3', rev: 'r6', reason: 'signed' },
+        { key: 'exam:x1', rev: 'r7', reason: 'not_yours' },
+        { key: 'equipment:u3', rev: 'r8', reason: 'malformed', problem: 'Change 8 is a unit with no status the app has.' },
+        { key: 'mrf:m1', rev: 'r9', reason: 'malformed' },
+        { key: 'inspection:i1', rev: 'r10', reason: 'taken' },
+      ],
+    };
+    expect(readPushAnswer(answer, many)).toEqual({
+      // The other seven kinds keep what the server holds, as before: counted as sent.
+      took: [
+        { key: 'shift:s2', rev: 'r5' },
+        { key: 'mrf:m1', rev: 'r9' },
+        { key: 'inspection:i1', rev: 'r10' },
+      ],
+      stale: [
+        { key: 'areaSheet:a1', rev: 'r1' },
+        { key: 'settings:company', rev: 'r2' },
+        { key: 'equipment:u1', rev: 'r3' },
+      ],
+      floored: [{ key: 'equipment:u2', rev: 'r4', floor: 'out_of_service' }],
+      held: [
+        { key: 'shift:s3', rev: 'r6', reason: 'signed' },
+        { key: 'exam:x1', rev: 'r7', reason: 'not_yours' },
+        { key: 'equipment:u3', rev: 'r8', reason: 'malformed' },
+      ],
+    });
   });
 
   it('only counts what was in the batch, at the version that was sent', () => {
     const answer = {
       accepted: [{ key: 'shift:s1', rev: 'other' }, { key: 'shift:s9', rev: 'r9' }, { key: 'employee:e1', rev: 'r2' }, { key: 'employee:e1', rev: 'r2' }, 'junk', null],
     };
-    expect(readPushAnswer(answer, batch)).toEqual([{ key: 'employee:e1', rev: 'r2' }]);
-    expect(readPushAnswer({ accepted: [] }, batch)).toEqual([]);
+    expect(readPushAnswer(answer, batch)).toEqual({ ...nothing, took: [{ key: 'employee:e1', rev: 'r2' }] });
+    expect(readPushAnswer({ accepted: [] }, batch)).toEqual(nothing);
+    // A floor that is not a status is a floor of none: read as a change the server set aside, held.
+    const unit = [change('equipment:u1', 'r1')];
+    expect(readPushAnswer({ accepted: [], ignored: [{ key: 'equipment:u1', rev: 'r1', reason: 'open_request', floor: 'x' }] }, unit)).toEqual({
+      ...nothing,
+      held: [{ key: 'equipment:u1', rev: 'r1', reason: 'malformed' }],
+    });
   });
 
   it('treats an answer it cannot read as a round that did not get through', () => {
@@ -300,5 +363,46 @@ describe('when something goes wrong', () => {
     expect(authWords({ status: 429, message: 'slow down' })).toMatch(/Too many tries/);
     expect(authWords({ code: 'signup_disabled' })).toMatch(/turned off/);
     expect(authWords({ code: 'unexpected_failure', status: 500 })).toMatch(/Try again in a minute/);
+  });
+});
+
+describe('what read_shared_records and the roster answered', () => {
+  const row = { kind: 'equipment', id: 'eq_t14', rev: 'r1', seq: 7, deleted: false, data: { id: 'eq_t14' } };
+
+  it('reads a page of rows, a seq sent as text included, and leaves each row’s data for the merge to read', () => {
+    expect(readRows([row, { ...row, kind: 'settings', id: 'company', seq: '8', data: { anything: 1 } }])).toEqual([
+      row,
+      { ...row, kind: 'settings', id: 'company', seq: 8, data: { anything: 1 } },
+    ]);
+    expect(readRows([])).toEqual([]);
+  });
+
+  it('throws on a page it cannot read, so the round treats it as one that did not get through', () => {
+    for (const bad of [null, {}, [null], [{ ...row, kind: 'shift' }], [{ ...row, seq: 'x' }], [{ ...row, id: 3 }], [{ ...row, deleted: 'no' }], [{ ...row, rev: undefined }]]) {
+      expect(() => readRows(bad)).toThrow(/does not understand/);
+    }
+  });
+
+  it('reads the phone’s own row of the roster, and none as not on the roster', () => {
+    expect(readStanding({ first_name: 'Lee', last_name: 'Park', role: 'supervisor' })).toEqual({ role: 'supervisor', name: { firstName: 'Lee', lastName: 'Park' } });
+    expect(readStanding([{ first_name: 'Lee', last_name: 'Park', role: 'employee' }])).toEqual({ role: 'employee', name: { firstName: 'Lee', lastName: 'Park' } });
+    expect(readStanding(null)).toBeNull();
+    expect(readStanding([])).toBeNull();
+    expect(() => readStanding({ first_name: 'Lee', role: 'boss' })).toThrow(/does not understand/);
+  });
+
+  it('reads the company’s own row: its name, state and pay schedule', () => {
+    expect(readCompanyRow({ name: 'Test Pit A', state: 'NV', pay_period: null })).toEqual({ name: 'Test Pit A', state: 'NV', pay: null });
+    const pay = { frequency: 'weekly', firstDay: '2026-01-04', daysAfter: 5 };
+    expect(readCompanyRow([{ name: 'Test Pit A', state: 'NV', pay_period: pay }])).toEqual({ name: 'Test Pit A', state: 'NV', pay });
+    expect(readCompanyRow(null)).toBeNull();
+    expect(() => readCompanyRow({ name: 3 })).toThrow(/does not understand/);
+  });
+
+  it('says MineMuster has stopped for the company when the read is turned away for it', () => {
+    expect(pushTrouble({ code: 'PT402', message: 'MineMuster is not active for this company.', status: 402 })).toMatchObject({
+      trouble: 'closed',
+      message: 'MineMuster is not active for this company.',
+    });
   });
 });

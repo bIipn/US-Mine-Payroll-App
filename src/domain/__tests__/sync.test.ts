@@ -7,14 +7,19 @@ import {
   DELETED,
   fitsServer,
   markSent,
+  receiveWords,
   retryDelay,
   revOf,
   sendError,
   sendWaiting,
   SERVER_LIMITS,
+  sortedChanges,
   stableJson,
   syncWords,
   type Change,
+  type PushAnswer,
+  type ReceiveView,
+  type SendHere,
   type SyncData,
   type SyncStatus,
   type Synced,
@@ -34,6 +39,8 @@ const settings = {
 const data: SyncData = { ...seed, denied: [], settings };
 /** Nobody is held back: the sample crew counts as the company's own people here. */
 const none = new Set<string>();
+/** The server took every one of these. */
+const answer = (took: readonly Pick<Change, 'key' | 'rev'>[]): PushAnswer => ({ took: [...took], stale: [], floored: [], held: [] });
 
 describe('what a phone sends to the company’s server', () => {
   const all = changesToSend(data, {}, none);
@@ -135,7 +142,7 @@ describe('sending what is waiting', () => {
       push: async (sent: readonly Change[]) => {
         batches.push(sent.length);
         if (fail?.(batches.length)) throw new Error('No route to host');
-        return sent.filter((c) => !only || only(c)).map(({ key, rev }) => ({ key, rev }));
+        return answer(sent.filter((c) => !only || only(c)).map(({ key, rev }) => ({ key, rev })));
       },
     };
   };
@@ -143,7 +150,7 @@ describe('sending what is waiting', () => {
   it('sends in batches and notes each batch the server took', async () => {
     const server = taking();
     let synced: Synced = {};
-    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, { batch: 100 });
+    const result = await sendWaiting(changes, server, (a) => { synced = markSent(synced, a.took); }, { batch: 100 });
     expect(server.batches).toEqual([100, 100, 50]);
     expect(result).toMatchObject({ sent: 250, failed: false, stuck: [], stopped: false });
     expect(Object.keys(synced)).toHaveLength(250);
@@ -152,7 +159,7 @@ describe('sending what is waiting', () => {
   it('stops at a batch that does not get through, and keeps the ones that did', async () => {
     const server = taking((n) => n === 2);
     let synced: Synced = {};
-    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, { batch: 100 });
+    const result = await sendWaiting(changes, server, (a) => { synced = markSent(synced, a.took); }, { batch: 100 });
     expect(server.batches).toEqual([100, 100]);
     expect(result).toMatchObject({ sent: 100, failed: true, trouble: 'unreachable' });
     expect(changesToSend(data, synced, none).length).toBe(changesToSend(data, {}, none).length - 100);
@@ -161,7 +168,7 @@ describe('sending what is waiting', () => {
   it('leaves a record the server turned down waiting', async () => {
     const server = taking(undefined, (c) => c.kind !== 'settings');
     let synced: Synced = {};
-    await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); }, { batch: 100 });
+    await sendWaiting(changes, server, (a) => { synced = markSent(synced, a.took); }, { batch: 100 });
     expect(synced['settings:company']).toBeUndefined();
   });
 
@@ -275,8 +282,8 @@ describe('a round of sending that the phone stops', () => {
     const calls: { size: number; signal?: AbortSignal; answer: () => void }[] = [];
     const transport = {
       push: (sent: readonly Change[], signal?: AbortSignal) =>
-        new Promise<readonly Pick<Change, 'key' | 'rev'>[]>((resolve) => {
-          calls.push({ size: sent.length, signal, answer: () => resolve(sent.map(({ key, rev }) => ({ key, rev }))) });
+        new Promise<PushAnswer>((resolve) => {
+          calls.push({ size: sent.length, signal, answer: () => resolve(answer(sent.map(({ key, rev }) => ({ key, rev })))) });
         }),
     };
     return { calls, transport };
@@ -287,7 +294,7 @@ describe('a round of sending that the phone stops', () => {
     const { calls, transport } = held();
     let connected = true;
     const noted: string[] = [];
-    const round = sendWaiting(changes, transport, (accepted) => noted.push(...accepted.map((c) => c.key)), { still: () => connected });
+    const round = sendWaiting(changes, transport, (a) => noted.push(...a.took.map((c) => c.key)), { still: () => connected });
     await settle();
     expect(calls).toHaveLength(1);
     connected = false;
@@ -317,7 +324,7 @@ describe('what the server will take', () => {
   it('never puts more in a call than the server takes', async () => {
     expect(BATCH).toBeLessThanOrEqual(SERVER_LIMITS.changes);
     const sizes: number[] = [];
-    const server = { push: async (sent: readonly Change[]) => (sizes.push(sent.length), sent.map(({ key, rev }) => ({ key, rev }))) };
+    const server = { push: async (sent: readonly Change[]) => (sizes.push(sent.length), answer(sent.map(({ key, rev }) => ({ key, rev })))) };
     await sendWaiting(all.slice(0, 450), server, () => undefined, { batch: 500 });
     expect(Math.max(...sizes)).toBeLessThanOrEqual(SERVER_LIMITS.changes);
     expect(sizes.reduce((a, b) => a + b, 0)).toBe(450);
@@ -333,7 +340,7 @@ describe('what the server will take', () => {
     expect(fitsServer(big)).toBe(false);
     expect(fitsServer({ ...shift, rev: DELETED, record: null })).toBe(true);
     const sent: string[] = [];
-    const server = { push: async (part: readonly Change[]) => (sent.push(...part.map((c) => c.key)), part.map(({ key, rev }) => ({ key, rev }))) };
+    const server = { push: async (part: readonly Change[]) => (sent.push(...part.map((c) => c.key)), answer(part.map(({ key, rev }) => ({ key, rev })))) };
     const result = await sendWaiting([longId, shift, big], server, () => undefined);
     expect(sent).toEqual([shift.key]);
     expect(result.stuck.map((c) => c.key)).toEqual([longId.key, big.key]);
@@ -348,11 +355,11 @@ describe('what the server will take', () => {
       push: async (part: readonly Change[]) => {
         calls += 1;
         if (part.some((c) => c.key === bad.key)) throw sendError('refused', 'The server would not take a record as it is.');
-        return part.map(({ key, rev }) => ({ key, rev }));
+        return answer(part.map(({ key, rev }) => ({ key, rev })));
       },
     };
     let synced: Synced = {};
-    const result = await sendWaiting(changes, server, (accepted) => { synced = markSent(synced, accepted); });
+    const result = await sendWaiting(changes, server, (a) => { synced = markSent(synced, a.took); });
     expect(result.stuck.map((c) => c.key)).toEqual([bad.key]);
     expect(result.sent).toBe(119);
     expect(result.failed).toBe(false);
@@ -383,5 +390,125 @@ describe('what the server will take', () => {
     expect(changesToSend(moved, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(true);
     const named = { ...ownSite, settings: { ...ownSite.settings, site: { ...SAMPLE_SITE, name: 'Test Pit A' } } };
     expect(changesToSend(named, {}, SAMPLE_CREW_IDS).some((c) => c.kind === 'settings')).toBe(true);
+  });
+});
+
+// ---- A phone connected to its company, once phones receive the four kinds -------------------------------
+
+describe('what a connected phone sends', () => {
+  const boss: SendHere = { connected: true, role: 'supervisor', caughtUp: true, unreadable: [], held: {} };
+  const crew: SendHere = { ...boss, role: 'employee' };
+  /** The phone holds every record of the sample data as the server last had it. */
+  const inStep: Synced = Object.fromEntries(changesToSend(data, {}, none).map((c) => [c.key, c.rev]));
+  const unit = data.equipment[0];
+  const area = data.areaSheets[0];
+  const changed = (extra: Partial<SyncData>): SyncData => ({ ...data, ...extra });
+  const keys = (list: readonly Change[]) => list.map((c) => c.key);
+
+  it('sends no person, whatever it holds', () => {
+    const renamed = changed({ employees: data.employees.map((e, i) => (i === 0 ? { ...e, title: 'Changed here' } : e)) });
+    const sorted = sortedChanges(renamed, inStep, none, boss);
+    expect([...sorted.now, ...sorted.afterReceive, ...sorted.notTaken].filter((c) => c.kind === 'employee')).toEqual([]);
+  });
+
+  it('from a crew sign-in sends no sheet, no settings, no new unit and no removal of a unit, and counts each as not taken', () => {
+    const edits = changed({
+      areaSheets: data.areaSheets.map((s, i) => (i === 0 ? { ...s, title: `${s.title} north` } : s)),
+      settings: { ...settings, workweekStartsOn: 3 },
+      equipment: [...data.equipment.slice(1), { ...unit, id: 'eq_new' }],
+    });
+    const sorted = sortedChanges(edits, inStep, none, crew);
+    expect(keys(sorted.notTaken).sort()).toEqual([`areaSheet:${area.id}`, 'equipment:eq_new', `equipment:${unit.id}`, 'settings:company'].sort());
+    expect([...sorted.now, ...sorted.afterReceive].filter((c) => ['areaSheet', 'settings'].includes(c.kind) || c.key === 'equipment:eq_new' || c.rev === DELETED)).toEqual([]);
+    // A unit's status and reading still go: the server takes those from anyone.
+    const checked = changed({ equipment: data.equipment.map((e, i) => (i === 0 ? { ...e, status: 'defect', meter: e.meter + 5 } : e)) });
+    expect(keys(sortedChanges(checked, inStep, none, crew).afterReceive)).toEqual([`equipment:${unit.id}`]);
+  });
+
+  it('sends nothing of the four kinds the server never had before it first caught up', () => {
+    const fresh = sortedChanges(data, {}, none, { ...boss, caughtUp: false });
+    expect([...fresh.now, ...fresh.afterReceive, ...fresh.notTaken].filter((c) => ['settings', 'employee', 'equipment', 'areaSheet'].includes(c.kind))).toEqual([]);
+    expect(fresh.now.length).toBeGreaterThan(0);
+  });
+
+  it('sends no settings whose company is not whole', () => {
+    const blank = changed({ settings: { ...settings, company: { ...settings.company, name: ' ' } } });
+    const sorted = sortedChanges(blank, inStep, none, boss);
+    expect([...sorted.now, ...sorted.afterReceive, ...sorted.notTaken].some((c) => c.kind === 'settings')).toBe(false);
+  });
+
+  it('sends nothing it could not read from the company', () => {
+    const edited = changed({ areaSheets: data.areaSheets.map((s, i) => (i === 0 ? { ...s, active: !s.active } : s)) });
+    const sorted = sortedChanges(edited, inStep, none, { ...boss, unreadable: [`areaSheet:${area.id}`] });
+    expect([...sorted.now, ...sorted.afterReceive, ...sorted.notTaken]).toEqual([]);
+  });
+
+  it('holds a change the server would not take at that version, and sends the record again once it changes', () => {
+    const shift = data.shifts[0];
+    const corrected = changed({ shifts: data.shifts.map((s, i) => (i === 0 ? { ...s, clockOut: { at: now } } : s)) });
+    const first = sortedChanges(corrected, inStep, none, boss).now.find((c) => c.kind === 'shift')!;
+    const held = { [first.key]: { rev: first.rev, reason: 'supervisor_only' as const } };
+    const holding = sortedChanges(corrected, inStep, none, { ...boss, held });
+    expect(keys(holding.notTaken)).toEqual([`shift:${shift.id}`]);
+    expect(holding.now.some((c) => c.kind === 'shift')).toBe(false);
+    const again = changed({ shifts: data.shifts.map((s, i) => (i === 0 ? { ...s, clockOut: { at: now + 60_000 } } : s)) });
+    expect(keys(sortedChanges(again, inStep, none, { ...boss, held }).now)).toEqual([`shift:${shift.id}`]);
+  });
+
+  it('sends a supervisor’s new unit and sheet ahead of the records that name them, and the rest of the four kinds after the receive', () => {
+    const added = changed({
+      equipment: [...data.equipment, { ...unit, id: 'eq_new', unit: 'T-99' }],
+      areaSheets: [...data.areaSheets.map((s, i) => (i === 0 ? { ...s, active: !s.active } : s)), { ...area, id: 'new-sheet', title: 'New sheet' }],
+      settings: { ...settings, workweekStartsOn: 3 },
+      inspections: [...data.inspections.slice(1), { ...data.inspections[0], id: 'insp_new', equipmentId: 'eq_new' }],
+    });
+    const sorted = sortedChanges(added, inStep, none, boss);
+    expect(keys(sorted.now)).toEqual(['equipment:eq_new', 'areaSheet:new-sheet', 'inspection:insp_new', `inspection:${data.inspections[0].id}`]);
+    expect(keys(sorted.afterReceive)).toEqual(['settings:company', `areaSheet:${area.id}`]);
+    expect(sorted.notTaken).toEqual([]);
+  });
+
+  it('sends as before on a phone never connected', () => {
+    const before = changesToSend(data, {}, none);
+    expect(changesToSend(data, {}, none, { ...boss, connected: false })).toEqual(before);
+    expect(sortedChanges(data, {}, none).now).toEqual(before);
+  });
+});
+
+describe('what the records row says about the company’s records', () => {
+  const at = (ms: number) => String(ms);
+  const base: ReceiveView = { connected: true, online: true, role: 'employee', caughtUpAt: 5, closed: false, unreadable: 0, notTaken: 0, company: 'Test Pit A', email: 'lee@example.test' };
+
+  it('says nothing on a phone never connected', () => {
+    expect(receiveWords({ ...base, connected: false }, at)).toBeNull();
+  });
+
+  it('says the sign-in is not on the roster, first of all', () => {
+    expect(receiveWords({ ...base, role: 'none', closed: true }, at)).toEqual({
+      line: 'This phone’s company sign-in, lee@example.test, is not on Test Pit A’s roster any more, so nothing done here reaches the company. Records stay on this phone. See your supervisor.',
+      warn: true,
+    });
+  });
+
+  it('says MineMuster stopped for the company', () => {
+    expect(receiveWords({ ...base, closed: true }, at)).toEqual({ line: 'MineMuster has stopped for Test Pit A. A supervisor can start it again on the dashboard’s Billing page.', warn: true });
+  });
+
+  it('says how many records could not be read', () => {
+    expect(receiveWords({ ...base, unreadable: 2 }, at)).toEqual({ line: '2 records from the company could not be read on this phone. Update the app; if that does not fix it, tell the office.', warn: true });
+    expect(receiveWords({ ...base, unreadable: 1 }, at)?.line).toMatch(/^1 record from the company could not be read/);
+  });
+
+  it('says the roster is on its way, or waits for signal', () => {
+    expect(receiveWords({ ...base, caughtUpAt: null }, at)).toEqual({ line: 'Getting your company’s roster, fleet and area sheets.', warn: false });
+    expect(receiveWords({ ...base, caughtUpAt: null, online: false }, at)).toEqual({ line: 'No signal. They come when this phone is back in range.', warn: false });
+  });
+
+  it('says what the company did not take, apart from what waits', () => {
+    expect(receiveWords({ ...base, notTaken: 3 }, at)).toEqual({ line: '3 not taken by the company from this phone’s sign-in.', warn: true });
+  });
+
+  it('says when the company’s records last came', () => {
+    expect(receiveWords(base, at)).toEqual({ line: 'The company’s roster, fleet and sheets last came at 5.', warn: false });
   });
 });

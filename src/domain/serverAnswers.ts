@@ -1,7 +1,7 @@
 import { isNotFound } from './refusals';
 import { cleanText } from './roster';
 import type { ConnectedCompany } from './server';
-import { sendError, type Change, type SendError } from './sync';
+import { REFERENCE_KINDS, sendError, type Change, type CompanyRow, type HeldReason, type PushAnswer, type ReceivedRow, type SendError, type Standing } from './sync';
 import type { Role } from './types';
 
 /**
@@ -203,23 +203,78 @@ export function readWaitingRequests(raw: unknown): WaitingRequest[] {
  * stops sending what the server will not take, and sends it again only once it
  * changes. Only what was in the batch, at the version that was sent, counts.
  */
-export function readPushAnswer(raw: unknown, batch: readonly Change[]): Pick<Change, 'key' | 'rev'>[] {
+const NOT_UNDERSTOOD = 'The server answered in a way this phone does not understand.';
+const STATUS_WORDS: readonly unknown[] = ['ready', 'defect', 'out_of_service'];
+const isShared = (kind: string) => (REFERENCE_KINDS as readonly string[]).includes(kind);
+
+/**
+ * push_records' answer, read against the batch that was sent: only a change
+ * that was in it, at the version that was sent, counts. Each is sorted by what
+ * the phone does with it (PushAnswer): taken; stale, of the four kinds every
+ * phone reads, made from a version the server no longer has; a unit held to
+ * the company's open requests; or held, because the server would not take it
+ * from this phone's sign-in. Anything else the server set aside, it keeps what
+ * it had, and the phone counts it as sent, as it always has.
+ */
+export function readPushAnswer(raw: unknown, batch: readonly Change[]): PushAnswer {
   const answer = Array.isArray(raw) ? raw[0] : raw;
   const { accepted, ignored } = (answer && typeof answer === 'object' ? answer : {}) as { accepted?: unknown; ignored?: unknown };
-  if (!Array.isArray(accepted) || (ignored != null && !Array.isArray(ignored))) {
-    throw new Error('The server answered in a way this phone does not understand.');
-  }
+  if (!Array.isArray(accepted) || (ignored != null && !Array.isArray(ignored))) throw new Error(NOT_UNDERSTOOD);
   const sent = new Map(batch.map((c) => [c.key, c.rev]));
-  const out: Pick<Change, 'key' | 'rev'>[] = [];
+  const out: PushAnswer = { took: [], stale: [], floored: [], held: [] };
   const seen = new Set<string>();
-  for (const entry of [...accepted, ...((ignored as unknown[] | null) ?? [])]) {
-    if (!entry || typeof entry !== 'object') continue;
-    const { key, rev } = entry as { key?: unknown; rev?: unknown };
-    if (typeof key !== 'string' || typeof rev !== 'string' || sent.get(key) !== rev || seen.has(key)) continue;
+  const read = (entry: unknown, taken: boolean) => {
+    if (!entry || typeof entry !== 'object') return;
+    const { key, rev, reason, floor } = entry as { key?: unknown; rev?: unknown; reason?: unknown; floor?: unknown };
+    if (typeof key !== 'string' || typeof rev !== 'string' || sent.get(key) !== rev || seen.has(key)) return;
     seen.add(key);
-    out.push({ key, rev });
-  }
+    const kind = key.slice(0, key.indexOf(':'));
+    if (taken) out.took.push({ key, rev });
+    else if (reason === 'open_request' && kind === 'equipment') {
+      if (STATUS_WORDS.includes(floor)) out.floored.push({ key, rev, floor: floor as PushAnswer['floored'][number]['floor'] });
+      else out.held.push({ key, rev, reason: 'malformed' });
+    } else if (isShared(kind) && (reason === 'superseded' || reason === 'copy' || reason === 'deleted')) out.stale.push({ key, rev });
+    else if (reason === 'supervisor_only' || reason === 'not_yours' || reason === 'signed') out.held.push({ key, rev, reason });
+    else if (isShared(kind) && (reason === 'malformed' || reason === 'private' || reason === 'too_large')) out.held.push({ key, rev, reason: reason as HeldReason });
+    else out.took.push({ key, rev });
+  };
+  for (const entry of accepted) read(entry, true);
+  for (const entry of (ignored as unknown[] | null) ?? []) read(entry, false);
   return out;
+}
+
+/** One answer of a read: the first row when the server sent a list. */
+const one = (raw: unknown) => (Array.isArray(raw) ? (raw.length ? raw[0] : null) : raw);
+
+/** A page of read_shared_records. Each row's data is left for the merge to read; a page that is not rows throws. */
+export function readRows(raw: unknown): ReceivedRow[] {
+  if (!Array.isArray(raw)) throw new Error(NOT_UNDERSTOOD);
+  return raw.map((entry) => {
+    if (!entry || typeof entry !== 'object') throw new Error(NOT_UNDERSTOOD);
+    const { kind, id, rev, seq, deleted, data } = entry as Record<string, unknown>;
+    const n = typeof seq === 'string' && /^\d+$/.test(seq) ? Number(seq) : seq;
+    if (typeof kind !== 'string' || !isShared(kind) || typeof id !== 'string' || typeof rev !== 'string' || typeof deleted !== 'boolean') throw new Error(NOT_UNDERSTOOD);
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 1) throw new Error(NOT_UNDERSTOOD);
+    return { kind: kind as ReceivedRow['kind'], id, rev, seq: n, deleted, data };
+  });
+}
+
+/** This phone's sign-in's own row of the roster, or null when it is not on the roster. */
+export function readStanding(raw: unknown): Standing | null {
+  const row = one(raw);
+  if (row === null || row === undefined) return null;
+  const { first_name, last_name, role } = (typeof row === 'object' ? row : {}) as Record<string, unknown>;
+  if (typeof first_name !== 'string' || typeof last_name !== 'string' || !isRole(role)) throw new Error(NOT_UNDERSTOOD);
+  return { role, name: { firstName: first_name, lastName: last_name } };
+}
+
+/** The company's own row: its name, state and pay schedule. */
+export function readCompanyRow(raw: unknown): CompanyRow | null {
+  const row = one(raw);
+  if (row === null || row === undefined) return null;
+  const { name, state, pay_period } = (typeof row === 'object' ? row : {}) as Record<string, unknown>;
+  if (typeof name !== 'string' || typeof state !== 'string') throw new Error(NOT_UNDERSTOOD);
+  return { name, state, pay: pay_period ?? null };
 }
 
 // ---- When something goes wrong -------------------------------------------------------------
@@ -271,6 +326,8 @@ export function pushTrouble(e: ServerProblem | null | undefined): SendError {
   if (!e || unreachable(e)) return sendError('unreachable', UNREACHABLE);
   // Turned down for want of rights, or "No such company" (refusals.ts).
   if (e.code === '42501' || isNotFound(e.code)) return sendError('not_member', 'This account is not on the company’s roster any more.');
+  // read_shared_records, to a supervisor of a company that does not have MineMuster.
+  if (e.code === 'PT402') return sendError('closed', 'MineMuster is not active for this company.');
   switch (e.code) {
     case 'PGRST301':
     case 'PGRST303':

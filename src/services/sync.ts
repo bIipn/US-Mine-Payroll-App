@@ -3,7 +3,7 @@ import { AppState } from 'react-native';
 import { create } from 'zustand';
 
 import { CAN_SEND } from '../config';
-import { changesToSend, retryDelay, sendWaiting, type Change, type SendTrouble, type SyncStatus, type SyncTransport } from '../domain/sync';
+import { changesToSend, retryDelay, sendWaiting, type Change, type PushAnswer, type SendTrouble, type SyncStatus, type SyncTransport } from '../domain/sync';
 import { SAMPLE_CREW_IDS } from '../store/seed';
 import { useStore, type Store } from '../store/useStore';
 
@@ -142,7 +142,9 @@ async function round(): Promise<void> {
   let problem: string | null = null;
   let sent = 0;
   try {
-    const result = await sendWaiting(changes, target, (accepted) => useStore.getState().markSynced(accepted, company), {
+    // Until the round reads the company's records (the office-changes work), every answer is noted as sent, as it always was.
+    const noted = (answer: PushAnswer) => [...answer.took, ...answer.stale, ...answer.floored, ...answer.held].map(({ key, rev }) => ({ key, rev }));
+    const result = await sendWaiting(changes, target, (answer) => useStore.getState().markSynced(noted(answer), company), {
       still: current,
       signal: abort?.signal,
     });
