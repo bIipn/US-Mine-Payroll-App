@@ -225,7 +225,8 @@ export const tabPanelProps = (panelId: string, value: string) => ({ id: panelId,
  */
 export function Seg<T extends string>({ label, value, onChange, options, showLabel }: {
   label: string;
-  value: T;
+  /** Undefined until one is chosen: a question nobody has answered yet. */
+  value: T | undefined;
   onChange: (value: T) => void;
   options: { value: T; label: string }[];
   showLabel?: boolean;
@@ -288,12 +289,14 @@ export function Plate({ unit, large }: { unit: string; large?: boolean }) {
 }
 
 /** A button that asks once more before it does something that cannot be taken back. */
-export function Confirm({ label, question, name, yes, kind = 'line', onYes, before, small, roomy }: {
+export function Confirm({ label, question, name, yes, no = 'Keep it as it is', kind = 'line', onYes, before, small, roomy }: {
   label: string;
   question: string;
   /** A short name for the question, read out before it: "Take unit L-2 out of the fleet". Without one, the button's own words. */
   name?: string;
   yes: string;
+  /** The answer that changes nothing. */
+  no?: string;
   kind?: Kind;
   small?: boolean;
   /** The two answers at full height, 44 px, for a page worked on a phone as well. */
@@ -354,7 +357,7 @@ export function Confirm({ label, question, name, yes, kind = 'line', onYes, befo
         {yes}
       </Button>
       {/* The answer that changes nothing has the focus, so a second press of Enter cannot do the one-way thing. */}
-      <Button kind="quiet" small={!roomy} autoFocus onClick={() => setAsking(false)}>Keep it as it is</Button>
+      <Button kind="quiet" small={!roomy} autoFocus onClick={() => setAsking(false)}>{no}</Button>
     </span>
   );
 }

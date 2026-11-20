@@ -220,8 +220,9 @@ export interface Approval {
   replaceClaim?: boolean;
 }
 
-export async function approveRequest(requestId: string, how: Approval): Promise<void> {
-  const { error } = await supabase.rpc('approve_join_request', {
+/** Let a request in; the answer is the id of the row they are let in on, a new one included. */
+export async function approveRequest(requestId: string, how: Approval): Promise<string> {
+  const { data, error } = await supabase.rpc('approve_join_request', {
     request_id: requestId,
     roster_id: how.rosterId ?? null,
     role: how.role ?? 'employee',
@@ -229,6 +230,7 @@ export async function approveRequest(requestId: string, how: Approval): Promise<
     replace_claim: !!how.replaceClaim,
   });
   if (error) throw dataProblem(error, 'Letting them in');
+  return typeof data === 'string' ? data : how.rosterId ?? '';
 }
 
 export async function denyRequest(requestId: string, bar: boolean): Promise<void> {

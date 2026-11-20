@@ -42,9 +42,10 @@ export interface PayrollTable {
    */
   offRoster: EmployeePayroll[];
   /**
-   * People with hours and no employee record from the phones yet. They are in
-   * the table and the workbook, but the hours file, which a payroll system
-   * imports, leaves them out rather than send a name the phones never gave.
+   * People with hours and no employee record yet. They are in the table and
+   * the workbook, but the hours file, which a payroll system imports, leaves
+   * them out rather than send a name the app's roster does not have. Added on
+   * the Roster page, they keep these hours.
    */
   heldBack: EmployeePayroll[];
 }
@@ -70,7 +71,7 @@ export function payrollFor(
   };
 }
 
-/** The records the hours file is made from: everyone the phones sent an employee record for. */
+/** The records the hours file is made from: everyone with an employee record in the app’s roster. */
 export function hoursFileData(shaped: Pick<Shaped, 'data' | 'placeholders'>): Shaped['data'] {
   return { ...shaped.data, employees: shaped.data.employees.filter((e) => !shaped.placeholders.has(e.id)) };
 }

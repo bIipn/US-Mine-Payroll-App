@@ -12,7 +12,7 @@ import { useCompany } from '../lib/company';
 import { messageOf } from '../lib/errors';
 import { writtenOver } from '../lib/history';
 import { SaidNotice, saidOf, useFormFields, useFormSaver, useSaid } from '../lib/save';
-import { companyProblems, companyRowPatch, ON_PHONES, readSite, SAVED_HERE_ONLY, sharedSettings, SIGN_IN_DETAILS, WEEKDAYS, type CompanyProblems, type PayField } from '../lib/setup';
+import { companyProblems, companyRowPatch, ON_PHONES, readSite, SAVED_FOR_PHONES, sharedSettings, SIGN_IN_DETAILS, WEEKDAYS, type CompanyProblems, type PayField } from '../lib/setup';
 import { browserZone } from '../lib/timezone';
 import { useVersions } from '../lib/versions';
 import { zoneChoices, zoneLabel } from '../lib/zones';
@@ -23,7 +23,7 @@ import { PageHead } from './Shell';
 
 const STATE_OPTIONS = [{ value: '', label: 'Choose the state' }, ...Object.entries(STATES).sort((a, b) => a[1].localeCompare(b[1])).map(([value, label]) => ({ value, label }))];
 const WEEK_OPTIONS = WEEKDAYS.map((label, day) => ({ value: String(day), label }));
-const PHONES_KEEP = 'The crew’s phones keep their own setting until the app is updated to receive.';
+const PHONES_TAKE = 'Phones take this the next time they are open with signal.';
 const cap = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** Everything the form holds: the company as typed, the day the workweek starts, the "Rest are OK" switch and the time zone. */
@@ -34,8 +34,8 @@ interface Fields extends CompanyDraft {
 }
 
 /**
- * The shared settings this dashboard goes by, and every phone once the app
- * receives from the office: the company's name, state, place and mine ID,
+ * The shared settings this dashboard and every phone go by, which each phone
+ * takes the next time it is open with signal: the company's name, state, place and mine ID,
  * whether the crew keeps time, the pay schedule, the earning codes, the day
  * the workweek starts and the "Rest are OK" switch. The form is the app's own
  * (`companyForm`), checked by the app's own rules. The clock-in site is shown
@@ -135,7 +135,7 @@ export function CompanyPage() {
       say(
         rowTrouble
           ? { tone: 'warn', text: `The company details are saved to the company’s records. ${cap(SIGN_IN_DETAILS)} could not be changed: ${rowTrouble} Save again to try that part once more.` }
-          : saidOf(result, 'The company details are saved. Phones keep their own until the app is updated to receive.'),
+          : saidOf(result, 'The company details are saved. Phones take them the next time they are open with signal.'),
       );
     } finally {
       setBusy(false);
@@ -150,7 +150,7 @@ export function CompanyPage() {
 
   return (
     <>
-      <PageHead title="Company" lede="The company’s details as this dashboard goes by them, and every phone once the app receives from the office: the name on the files, the state whose hours rules apply, the pay periods and the earning codes. Every figure they lead to is before taxes." />
+      <PageHead title="Company" lede="The company’s details as this dashboard and every phone go by them: the name on the files, the state whose hours rules apply, the pay periods and the earning codes. Every figure they lead to is before taxes." />
       {/* One column, the width of the form: the notices and the panels end at one edge. */}
       <div className="setup-page">
         <PhonesNotice lines={ON_PHONES.company} />
@@ -158,7 +158,7 @@ export function CompanyPage() {
           found={versions ? writtenOver('settings', versions) : null}
           id="settings:company"
           what="the settings saved here"
-          then="Payroll, the hours file and the exports here go by the settings below, which are what the server has now. Set them again here if the office’s were right, and make the same change on that phone, or it sends its own again."
+          then="Payroll, the hours file and the exports here go by the settings below, which are what the server has now. Set them again here if the office’s were right: phones take what is saved here the next time they are open with signal, and the server no longer takes an older copy over it."
         />
         {shaped.settingsFrom === 'server' ? (
           shaped.skipped.some((s) => s.kind === 'settings') ? (
@@ -167,7 +167,7 @@ export function CompanyPage() {
             </Notice>
           ) : (
             <Notice tone="info" title="No settings have arrived from a phone yet">
-              The form starts from the company as it was made here. Saving it makes the company’s shared settings on the server; a phone that connects later keeps its own until the app is updated to receive.
+              The form starts from the company as it was made here. Saving it makes the company’s shared settings on the server, and phones take them the next time they are open with signal.
             </Notice>
           )
         ) : null}
@@ -230,15 +230,15 @@ export function CompanyPage() {
               label="Time clock and hours"
               hint={
                 draft.timeClock
-                  ? `This dashboard shows hours and payroll. Turned off, it shows the safety forms only. ${PHONES_KEEP}`
-                  : `Safety forms only on this dashboard: equipment checklists, pre shift exams and maintenance requests, with no hours or payroll. ${PHONES_KEEP}`
+                  ? `This dashboard and the app show hours and payroll. Turned off, they show the safety forms only. ${PHONES_TAKE}`
+                  : `Safety forms only, here and in the app: equipment checklists, pre shift exams and maintenance requests, with no hours or payroll. ${PHONES_TAKE}`
               }
               checked={draft.timeClock}
               onChange={(timeClock) => change({ timeClock })}
             />
             <Check
               label="Allow “Rest are OK”"
-              hint={`Lets a person mark the unanswered lines of a checklist or an exam OK with one tap. Turn off to make them answer every line. ${PHONES_KEEP}`}
+              hint={`Lets a person mark the unanswered lines of a checklist or an exam OK with one tap. Turn off to make them answer every line. ${PHONES_TAKE}`}
               checked={allOk}
               onChange={(on) => change({ allOk: on })}
             />
@@ -286,7 +286,7 @@ export function CompanyPage() {
                 value={week}
                 onChange={(day) => change({ week: day })}
                 options={WEEK_OPTIONS}
-                hint="Overtime is figured over whole workweeks. The app has no screen for this day: phones count their weeks from Sunday until the app is updated to receive it from the office."
+                hint="Overtime is figured over whole workweeks. The app has no screen for this day: it is set here, and phones take it the next time they are open with signal."
                 className="field-short"
               />
             </section>
@@ -317,7 +317,7 @@ export function CompanyPage() {
             </section>
           ) : null}
 
-          <p className="small muted">{SAVED_HERE_ONLY}</p>
+          <p className="small muted">{SAVED_FOR_PHONES}</p>
           {/* Always in reach: the form is long, and Enter in any field saves it. */}
           <div className="save-bar">
             <SaidNotice said={said} />

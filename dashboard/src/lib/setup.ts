@@ -1,11 +1,12 @@
-import { listed } from '@app/domain/receive';
+import { listed, statusFromRequests, worseStatus } from '@app/domain/receive';
 import { openFindings } from '@app/domain/areaExam';
 import { checkCompany, type Company } from '@app/domain/company';
 import { codesOf, sameCodes, scheduleOf, type CompanyDraft } from '@app/domain/companyForm';
 import { checkPaySchedule, type PaySchedule } from '@app/domain/payPeriod';
 import { DEFAULT_PAY_CODES } from '@app/domain/payrollCsv';
 import { stableJson } from '@app/domain/sync';
-import type { AreaExam, AreaSheet, Equipment, Inspection, Mrf, OperatingLog } from '@app/domain/types';
+import type { AreaExam, AreaSheet, Employee, Equipment, Inspection, Mrf, OperatingLog } from '@app/domain/types';
+import { fmtDateTime } from '@app/util/format';
 
 import { openBadOrders, unitsDown, type OpenBadOrder } from './overview';
 import type { CompanyRow } from './server';
@@ -18,45 +19,45 @@ import type { CompanyRow } from './server';
  */
 
 /**
- * Said at the head of each page that saves a record, so nobody takes the
- * office for the phones. Phones send and do not receive: what is saved here is
- * the company's record on the server and on this dashboard, and no phone has it.
+ * Said at the head of each page that saves a record. Phones receive the
+ * company's roster, fleet, sheets and settings: what is saved here reaches each
+ * phone the next time the app is open there with signal, and the server keeps
+ * it over an older copy a phone still has.
  */
-export const PHONES_DO_NOT_RECEIVE = 'Phones do not receive changes from the office yet';
+export const HOW_PHONES_GET_IT = 'How the crew’s phones get what is saved here';
 
-/** What that means on each page, and what to do about it today. */
+/** What that means on each page. */
 export const ON_PHONES = {
   fleet: [
-    'A unit added, changed or taken out here is saved to the company and shows on this dashboard. The crew’s phones keep the fleet they have until the app is updated to receive.',
-    'To put a unit on the crew’s checklist today, add it on a supervisor’s phone, on Crew → Fleet. It arrives here with its checklists. Added here as well, the same unit shows twice, as each copy gets an id of its own.',
-    'A unit taken out here is put back when a supervisor’s phone that still has it sends it again. Take it out on the supervisors’ phones too.',
+    'A unit added, changed or taken out here is saved to the company. Each phone gets it the next time the app is open with signal.',
+    'A phone that has not caught up cannot put its older copy of a unit back: the server keeps what is saved here.',
+    'Add each unit once, here or on a supervisor’s phone: added in both places, the same unit shows twice, because each copy gets an id of its own.',
   ],
   sheets: [
-    'A sheet added, changed or stopped here is saved to the company and shows on this dashboard. The crew’s phones keep the sheets they have until the app is updated to receive.',
-    'To have the crew fill a sheet in today, type it in on a supervisor’s phone as well, on Crew → Area sheets, under the same name: it is then the same record as the one here.',
-    'A supervisor’s phone that changes a sheet sends its own copy, which replaces what is saved here, a sheet stopped here included.',
+    'A sheet added, changed or stopped here is saved to the company. Each phone gets it the next time the app is open with signal; a person in the middle of an exam on it finishes on the sheet as they saw it.',
+    'A phone that has not caught up cannot put its older copy of a sheet back.',
   ],
   company: [
-    'What is saved here is what this dashboard goes by: its payroll, its hours file and its exports. Each phone keeps its own settings until the app is updated to receive.',
-    'A supervisor’s phone that changes a shared setting, the clock-in pin included, sends its own copy of them all, and that replaces what is saved here. Make the same change on the supervisors’ phones first, on More → Company, then save it here. This page says so when a phone’s copy has replaced the office’s.',
+    'What is saved here is what this dashboard and every phone go by: payroll, the hours file, the exports, the clock-in site and the time clock. Each phone takes a change the next time the app is open with signal.',
+    'The clock-in pin is set on a supervisor’s phone, standing at the mine. Saving here never takes a pin off a phone.',
   ],
 } as const;
 
 /** Said under a form that saves, in one quiet line. */
-export const SAVED_HERE_ONLY = 'Saved to the company and shown on this dashboard. Phones do not receive it yet.';
+export const SAVED_FOR_PHONES = 'Saved to the company. Phones get it the next time they are open with signal.';
 
 // ---- The fleet -------------------------------------------------------------------------------------
 
-type FleetData = { equipment: Equipment[]; inspections: Inspection[]; opLogs: OperatingLog[]; mrfs: Mrf[] };
+type FleetData = { equipment: Equipment[]; inspections: Inspection[]; opLogs: OperatingLog[]; mrfs: Mrf[]; /** Who the uses of a unit are named for. */ employees?: Employee[] };
 
 export type Standing = 'ready' | 'defect' | 'red_tagged';
 
 /**
- * Each unit's standing, worked out from the records that do arrive. The unit's
- * own record is the least reliable there is: each phone keeps its own copy,
- * and the server sets a crew phone's status for a unit aside whenever someone
- * else wrote the unit last, which is every time once the office has changed
- * it. The checklists and the requests still arrive. So a unit is red tagged
+ * Each unit's standing, worked out from the records that arrive. The unit's
+ * own record can lag behind them: the server takes a phone's change to a unit
+ * only on top of the company's latest version of it, so the status a phone
+ * that had not caught up gave it is set aside, while its checklists and
+ * requests, records of their own, still arrive. So a unit is red tagged
  * when its record says so, when an open red-tag request names it, or when a
  * Bad Order on a safety item of one of its checklists is not corrected; it has
  * a defect reported when its record says so, or anything else is open on it;
@@ -71,6 +72,17 @@ export function standings(data: Pick<FleetData, 'equipment' | 'mrfs' | 'inspecti
   return new Map(data.equipment.map((e) => [e.id, tagged.has(e.id) ? 'red_tagged' : defect.has(e.id) ? 'defect' : 'ready']));
 }
 
+/**
+ * A unit as the office saves it: never marked better than the maintenance
+ * requests still open on it, by the app's own rule (`statusFromRequests`).
+ * The server turns down a unit saved better than that ('open_request'), and a
+ * unit's own record can still say ready from before it did.
+ */
+export function withRequestFloor(unit: Equipment, mrfs: readonly Mrf[]): Equipment {
+  const status = worseStatus(unit.status, statusFromRequests(unit.id, mrfs));
+  return status === unit.status ? unit : { ...unit, status };
+}
+
 export interface Reading {
   value: number;
   /** When it was read, when a checklist or an end of use gave it. */
@@ -80,9 +92,9 @@ export interface Reading {
 }
 
 /**
- * A unit's last reading. Every phone keeps its own copy of the fleet, so the
- * reading on the unit's own record is only as new as the phone that sent it
- * last. The newest checklist on the unit, or the newest end of use, says more.
+ * A unit's last reading. The reading on the unit's own record is only as new
+ * as the last change to it the server took. The newest checklist on the unit,
+ * or the newest end of use, says more.
  */
 export function lastReading(unit: Equipment, data: Pick<FleetData, 'inspections' | 'opLogs'>): Reading {
   let best: Reading = { value: unit.meter, from: 'unit' };
@@ -95,20 +107,34 @@ export function lastReading(unit: Equipment, data: Pick<FleetData, 'inspections'
   return best;
 }
 
+export interface CheckedOut {
+  /** The person the use is for, first name first, or "Someone" when the records do not name them. */
+  name: string;
+  /** When the use began. */
+  since: number;
+}
+
 export interface OpenOnUnit {
   redTagged: boolean;
   /** Maintenance requests for the unit that are not completed. */
   requests: Mrf[];
   /** Bad Orders on its equipment checklists that are not corrected yet. */
   badOrders: OpenBadOrder[];
+  /** Uses of the unit with no end, as the phones have sent them, newest first. */
+  checkedOut: CheckedOut[];
 }
 
 /** What is open on a unit: what a supervisor is told before it is taken out of the fleet. */
 export function openOnUnit(unit: Equipment, data: FleetData): OpenOnUnit {
+  const named = new Map((data.employees ?? []).map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
   return {
     redTagged: standings(data).get(unit.id) === 'red_tagged',
     requests: data.mrfs.filter((m) => m.equipmentId === unit.id && m.status !== 'completed'),
     badOrders: openBadOrders(data).filter((b) => b.inspection.equipmentId === unit.id),
+    checkedOut: data.opLogs
+      .filter((l) => l.equipmentId === unit.id && l.endAt == null)
+      .sort((a, b) => b.startAt - a.startAt)
+      .map((l) => ({ name: named.get(l.employeeId) ?? 'Someone', since: l.startAt })),
   };
 }
 
@@ -117,17 +143,21 @@ const n = (count: number, one: string, many = `${one}s`) => `${count} ${count ==
 /** Whether anything is open on a unit. */
 export const anythingOpen = (open: OpenOnUnit) => open.redTagged || open.requests.length > 0 || open.badOrders.length > 0;
 
-/** Said in every question before a unit is taken out: what a phone that still has it does. */
-export const PHONE_PUTS_BACK = 'A supervisor’s phone that still has this unit puts it back when it next sends it: take it out on the supervisors’ phones too.';
+/** Said in every question before a unit is taken out: when the phones have it. */
+export const PHONES_TAKE_IT_OFF = 'Phones take this unit off the next time they are open with signal.';
+
+/** Said of a use of the unit that has no end yet: the phone that has it checked out keeps it for that use. */
+export const checkedOutWords = (name: string, since: number) =>
+  `${name} has it checked out since ${fmtDateTime(since)}, as far as their phone has sent; their phone keeps it until they end the use.`;
 
 /**
  * What is asked before a unit is taken out of the fleet. The app takes a unit
  * out whatever is open on it, and its past checklists and requests stay on
- * record; here the question says what is open first, and that phones do not
- * hear of it.
+ * record; here the question says what is open first, when the phones take the
+ * unit off, and who has it checked out.
  */
 export function removalQuestion(unit: Equipment, open: OpenOnUnit): string {
-  const kept = `Its past checklists and requests stay on record. ${PHONE_PUTS_BACK}`;
+  const kept = [`Its past checklists and requests stay on record.`, PHONES_TAKE_IT_OFF, ...open.checkedOut.map((c) => checkedOutWords(c.name, c.since))].join(' ');
   const still: string[] = [];
   if (open.redTagged) still.push('is red tagged');
   if (open.requests.length) still.push(`has ${n(open.requests.length, 'open maintenance request')}`);
@@ -177,13 +207,14 @@ export function sheetUse(sheet: AreaSheet, exams: AreaExam[]): SheetUse {
   return { exams: exams.filter((x) => x.sheetId === sheet.id).length, open: open.length, dangers: open.filter((f) => f.danger).length };
 }
 
-/** Said in the question before a sheet is stopped: what a phone that still has it does. */
-export const PHONE_STARTS_AGAIN = 'A supervisor’s phone that changes this sheet sends its own copy, in use: stop using it on the supervisors’ phones too.';
+/** Said in the question before a sheet is stopped: what the phones do with it, and with what is open in its area. */
+export const PHONES_STOP_OFFERING =
+  'It moves to Not in use here, and the crew’s phones stop offering it the next time each is open with signal. While a condition found in it is still open, the area stays on the list of the phone that found it, not in use, so a danger is still shown there. A person in the middle of an exam on it finishes it.';
 
 /** What is asked before a sheet is taken off the list the crew picks from. */
 export function stopQuestion(sheet: AreaSheet, use: SheetUse): string {
-  const moves = 'It moves to Not in use here, and the crew stops seeing the area once their phones have the change.';
-  const kept = `Its exams stay on record, and it can be put back. ${PHONE_STARTS_AGAIN}`;
+  const moves = PHONES_STOP_OFFERING;
+  const kept = 'Its exams stay on record, and it can be put back.';
   if (use.open === 0) return `Stop using the ${sheet.title} sheet? ${moves} ${kept}`;
   const what = use.open === 1 ? 'One condition is' : `${use.open} conditions are`;
   const stays = use.open === 1 ? 'it stays open until its date fixed is recorded' : 'they stay open until each has its date fixed recorded';

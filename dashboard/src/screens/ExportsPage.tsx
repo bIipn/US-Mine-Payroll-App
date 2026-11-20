@@ -12,7 +12,7 @@ import { CSV_TYPE, PDF_TYPE, saveFile, XLSX_TYPE } from '../lib/download';
 import { messageOf } from '../lib/errors';
 import { currentSpan, hoursFileData, payrollViews, reportRange, safetyFileData } from '../lib/payroll';
 import { presetRange, PRESETS, typedRange, type DayRange, type Preset } from '../lib/ranges';
-import { Button, count, Notice, Seg, TextField } from '../ui/kit';
+import { A, Button, count, Notice, Seg, TextField } from '../ui/kit';
 import { SpanBar } from './PayrollPage';
 import { SettingsNotices } from './settingsNotices';
 import { PageHead } from './Shell';
@@ -101,7 +101,7 @@ export function ExportsPage() {
         {result('safety')}
         <p className="small muted">
           The safety log has a sheet for each paper form: equipment checklists with the 21 lines as columns, Bad Order items, equipment use, pre shift exams, the conditions found, every line of every exam, maintenance requests, and time on site from the time clock{timeKept ? '' : ', for any time the crew kept with it'}.
-          {company.mineId ? ` The PDF prints MSHA mine ID ${company.mineId}.` : ' A supervisor can add the MSHA mine ID on the app’s More → Company to print it at the top of the PDF.'}
+          {company.mineId ? ` The PDF prints MSHA mine ID ${company.mineId}.` : <> A supervisor can add the MSHA mine ID on the <A href="/company">Company page</A> to print it at the top of the PDF.</>}
         </p>
       </section>
 
@@ -127,7 +127,7 @@ export function ExportsPage() {
             <Button kind="line" onClick={() => make('pay', 'The payroll hours file', () => payrollHoursFile(hoursFileData(ctx.shaped), reportRange(span), layout, Date.now()), CSV_TYPE)}>Download the hours file</Button>
           </div>
           {result('pay')}
-          <p className="small muted">The earning codes are the company’s own, set on the app’s More → Company. Each person’s payroll ID is set on the app’s Roster. Someone with no employee record from the phones yet is left out of the hours file; Time and payroll lists them.</p>
+          <p className="small muted">The earning codes are the company’s own, set on the Company page. Each person’s payroll ID is set on the Roster page. Someone with no employee record yet is left out of the hours file; Time and payroll lists them.</p>
         </section>
       ) : (
         <Notice tone="info" title="No payroll files">This company uses MineMuster for the safety forms only, so there are no hours to export.</Notice>

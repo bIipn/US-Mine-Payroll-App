@@ -16,11 +16,11 @@ import {
   notKeptWords,
   readAnswer,
   refusalWords,
+  repeatWords,
   removeChange,
   rowAfter,
   saveChange,
   saveRecord,
-  sentAgain,
   sinceWords,
   whatChanged,
   type SaveDeps,
@@ -102,10 +102,14 @@ describe('a change as the dashboard sends it', () => {
     expect(change).toEqual(fromPhone({ areaSheets: [made.sheet] }).find((c) => c.kind === 'areaSheet'));
   });
 
-  it('brings back a sheet taken off the server from the deleted version, so the server takes it as an edit', () => {
+  it('brings back a sheet taken off the server with no base, as a phone that took the deletion does: the server takes that from a supervisor', () => {
     const made = newSheet([], 'Wash bay', 'Hose reel');
     if (!made.ok) throw new Error(made.error);
-    expect(saveChange('areaSheet', 'wash_bay', made.sheet, gone('areaSheet', 'wash_bay')).base).toBe('deleted');
+    // The server refuses a change of the roster, fleet, sheets or settings made from a copy that was taken off
+    // ('deleted'), and a base of "deleted" names one. A phone that took the deletion has no base for the record.
+    const change = saveChange('areaSheet', 'wash_bay', made.sheet, gone('areaSheet', 'wash_bay'));
+    expect('base' in change).toBe(false);
+    expect(change).toEqual(fromPhone({ areaSheets: [made.sheet] }).find((c) => c.kind === 'areaSheet'));
   });
 
   it('sends the shared settings under the one id the server keeps them by, with only the four fields a company shares', () => {
@@ -264,6 +268,8 @@ describe('what the server said about a change', () => {
     expect(said('superseded')).toMatchObject({ words: 'Someone else changed unit L-2 since this page loaded it. Nothing was saved. Load new records and look again.' });
     expect(said('deleted')).toMatchObject({ words: 'Unit L-2 was taken off on the server, and only a supervisor puts it back. Nothing was saved. Sign out and back in if your role changed.' });
     expect(said('too_large')).toMatchObject({ words: 'Unit L-2 is too large for the server to keep (256 KB at most). Nothing was saved. Shorten it and save again.' });
+    // The server never keeps a unit better than the company's open maintenance requests on it.
+    expect(said('open_request')).toMatchObject({ words: 'The server keeps unit L-2 marked for a maintenance request still open on it, and this save would have marked it better. Nothing was saved. Load new records, then save again.' });
     expect(said('malformed', 'Change 1 has a key that is not its kind and id.')).toMatchObject({
       words: 'The server could not take unit L-2 (it said: Change 1 has a key that is not its kind and id). Nothing was saved. Reload the page and try again. If it keeps happening, tell whoever runs MineMuster for your company.',
     });
@@ -413,11 +419,12 @@ describe('saving one record', () => {
     expect(s.pushed).toEqual([]);
   });
 
-  it('puts back a record that was taken off, from the deleted version', async () => {
+  it('puts back a record that was taken off, with no base, once it has read that the server still has it taken off', async () => {
     const loaded = gone('areaSheet', wash.id);
     const s = server([loaded]);
     const saved = await saveRecord(s.deps, { kind: 'areaSheet', id: wash.id, record: wash, loaded, what: 'the Wash bay sheet' });
-    expect(s.pushed[0]).toMatchObject({ base: 'deleted', rev: revOf(wash) });
+    expect(s.pushed[0]).toMatchObject({ rev: revOf(wash) });
+    expect('base' in s.pushed[0]).toBe(false);
     expect(saved).toMatchObject({ ok: true, conflict: false });
   });
 
@@ -459,43 +466,36 @@ describe('saving one record', () => {
     expect([...s.pushed, ...off.pushed]).toEqual([]);
   });
 
-  it('sends a change the server took for one sent already once more, in a form it writes', async () => {
+  it('says plainly when the server took a change for this account’s own earlier one, put back since by someone else, and does not send it again', async () => {
+    // One supervisor stopped the sheet (A to B), another started it again (B back to A), and the first stops it once more: B made from A.
     const loaded = row('areaSheet', wash.id, wash);
-    // The server answers "accepted" and writes nothing while the change has its sender's own version as... anything but its base.
-    const s = server([loaded]);
-    const write = s.deps.push;
-    s.deps.push = async (changes) => {
-      const [change] = changes;
-      if (change.base !== change.rev) {
-        s.pushed.push(change);
-        return { accepted: [{ key: change.key, rev: change.rev }], ignored: [] };
-      }
-      return write(changes);
-    };
     const stopped = sheetInUse(wash, false);
+    // The server as 20261120000100 has it: the caller's own latest change, sent again, is "accepted" and writes nothing;
+    // any other base than the version it holds is "superseded".
+    const s = server([loaded], (change) =>
+      change.base === loaded.rev
+        ? { accepted: [{ key: change.key, rev: change.rev }], ignored: [] }
+        : { accepted: [], ignored: [{ key: change.key, rev: change.rev, reason: 'superseded' }] },
+    );
     const saved = await saveRecord(s.deps, { kind: 'areaSheet', id: wash.id, record: stopped, loaded, what: 'the Wash bay sheet' });
-    expect(s.pushed).toHaveLength(2);
-    expect(s.pushed[0]).toMatchObject({ rev: revOf(stopped), base: loaded.rev });
-    expect(s.pushed[1]).toEqual(sentAgain(s.pushed[0]));
-    expect(s.pushed[1]).toMatchObject({ rev: revOf(stopped), base: revOf(stopped), record: stopped });
-    // Saved for real: the row is the server's, and the page says nothing of a conflict, for there was none.
-    expect(saved).toMatchObject({ ok: true, conflict: false, same: false });
-    expect(saved.ok && saved.row).toBe(s.store.get('areaSheet:wash_bay'));
-    expect(s.store.get('areaSheet:wash_bay')?.data).toMatchObject({ active: false });
+    expect(s.pushed).toEqual([{ key: 'areaSheet:wash_bay', kind: 'areaSheet', id: 'wash_bay', rev: revOf(stopped), base: loaded.rev, record: stopped }]);
+    // Not "someone else changed the Wash bay sheet": nobody did since this page loaded it.
+    expect(saved).toEqual({ ok: false, why: 'repeat', words: repeatWords('the Wash bay sheet') });
+    expect(repeatWords('the Wash bay sheet')).toBe(
+      'The server took this for the change this account made to the Wash bay sheet before, which someone else has since put back, and kept the version it holds. Nothing was saved. Another supervisor can make the change from their own account.',
+    );
   });
 
-  it('never calls a change saved that the server does not hold: it says so, and hands the page the server’s row', async () => {
+  it('never calls a change saved that the server does not hold: it says so', async () => {
     const loaded = row('areaSheet', wash.id, wash);
     // A server that answers "accepted" to everything and writes nothing.
     const s = server([loaded], (change) => ({ accepted: [{ key: change.key, rev: change.rev }], ignored: [] }));
     const saved = await saveRecord(s.deps, { kind: 'areaSheet', id: wash.id, record: sheetInUse(wash, false), loaded, what: 'the Wash bay sheet' });
-    expect(s.pushed).toHaveLength(2);
-    expect(saved).toEqual({
-      ok: false,
-      why: 'not_kept',
-      fresh: loaded,
-      words: 'The server did not keep the change to the Wash bay sheet: it still has the version it had before. Nothing was saved. The page shows what the server has. Look at it again, then save if the change is still wanted.',
-    });
+    expect(s.pushed).toHaveLength(1);
+    expect(saved).toMatchObject({ ok: false, why: 'repeat' });
+    expect(notKeptWords('the Wash bay sheet', true)).toBe(
+      'The server did not keep the change to the Wash bay sheet: it still has the version it had before. Nothing was saved. The page shows what the server has. Look at it again, then save if the change is still wanted.',
+    );
   });
 
   it('says so when another version is on the server once it has answered, and does not send over it', async () => {

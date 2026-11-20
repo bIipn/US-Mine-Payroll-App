@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { checkCompany, SAMPLE_COMPANY } from '@app/domain/company';
 import { draftOf } from '@app/domain/companyForm';
 import { SAMPLE_SITE } from '@app/domain/site';
-import type { AreaExam, AreaSheet, Equipment, Inspection, Mrf, OperatingLog } from '@app/domain/types';
+import type { AreaExam, AreaSheet, Employee, Equipment, Inspection, Mrf, OperatingLog } from '@app/domain/types';
 import { buildDemoData } from '@app/store/seed';
 
 import { shapeRecords } from '../src/lib/records';
@@ -18,19 +18,21 @@ import {
   lastReading,
   lineCount,
   linesText,
+  checkedOutWords,
+  HOW_PHONES_GET_IT,
   ON_PHONES,
   openOnUnit,
   payFieldAtFault,
-  PHONE_PUTS_BACK,
-  PHONE_STARTS_AGAIN,
-  PHONES_DO_NOT_RECEIVE,
+  PHONES_STOP_OFFERING,
+  PHONES_TAKE_IT_OFF,
   readSite,
   removalQuestion,
   sameNumbers,
   savedAs,
-  SAVED_HERE_ONLY,
+  SAVED_FOR_PHONES,
   sharedSettings,
   sheetUse,
+  withRequestFloor,
   SIGN_IN_DETAILS,
   standings,
   stopQuestion,
@@ -97,13 +99,14 @@ describe('a unit’s standing and last reading, as the records give them', () =>
 
 describe('taking a unit out of the fleet', () => {
   const bad = check({ id: 'i9', result: 'defect', answers: [{ itemId: 'lights', answer: 'bo', note: 'Lamp out' }] });
+  const shut = { redTagged: false, requests: [], badOrders: [], checkedOut: [] };
 
-  it('asks once more with nothing open on it', () => {
-    const open = openOnUnit(unit(), { equipment: [unit()], inspections: [check({})], opLogs: [], mrfs: [] });
-    expect(open).toEqual({ redTagged: false, requests: [], badOrders: [] });
-    expect(removalQuestion(unit(), open)).toBe(`Take unit L-2 out of the fleet? Its past checklists and requests stay on record. ${PHONE_PUTS_BACK}`);
-    // Every way of asking says what a phone that still has the unit does, where the unit is taken out.
-    expect(PHONE_PUTS_BACK).toBe('A supervisor’s phone that still has this unit puts it back when it next sends it: take it out on the supervisors’ phones too.');
+  it('asks once more with nothing open on it, and says when phones take it off', () => {
+    const open = openOnUnit(unit(), { equipment: [unit()], inspections: [check({})], opLogs: [log({ endAt: NOW - DAY + 3_600_000, endMeter: 121 })], mrfs: [] });
+    expect(open).toEqual(shut);
+    expect(removalQuestion(unit(), open)).toBe(`Take unit L-2 out of the fleet? Its past checklists and requests stay on record. ${PHONES_TAKE_IT_OFF}`);
+    // Every way of asking says what the phones do, where the unit is taken out: no phone puts it back.
+    expect(PHONES_TAKE_IT_OFF).toBe('Phones take this unit off the next time they are open with signal.');
   });
 
   it('says what is open first: a red tag, open requests, Bad Orders not corrected', () => {
@@ -113,7 +116,7 @@ describe('taking a unit out of the fleet', () => {
     expect(open.requests.map((m) => m.id)).toEqual(['m1', 'm2']);
     expect(open.badOrders).toHaveLength(1);
     expect(removalQuestion(unit(), open)).toBe(
-      `Unit L-2 is red tagged, has 2 open maintenance requests and has 1 Bad Order not corrected. Taking it out of the fleet corrects none of that. What is open stays open on the other pages, under a unit removed from the fleet. Its past checklists and requests stay on record. ${PHONE_PUTS_BACK}`,
+      `Unit L-2 is red tagged, has 2 open maintenance requests and has 1 Bad Order not corrected. Taking it out of the fleet corrects none of that. What is open stays open on the other pages, under a unit removed from the fleet. Its past checklists and requests stay on record. ${PHONES_TAKE_IT_OFF}`,
     );
   });
 
@@ -121,12 +124,48 @@ describe('taking a unit out of the fleet', () => {
     const open = openOnUnit(unit(), { equipment: [unit()], inspections: [], opLogs: [], mrfs: [mrf({})] });
     expect(removalQuestion(unit(), open)).toContain('Unit L-2 has 1 open maintenance request. Taking it out of the fleet corrects none of that. What is open stays open on the other pages');
     // A red tag with no request or Bad Order behind it is on the unit's own record, and goes with the unit.
-    expect(removalQuestion(unit(), { redTagged: true, requests: [], badOrders: [] })).toBe(`Unit L-2 is red tagged. Taking it out of the fleet corrects none of that. Its past checklists and requests stay on record. ${PHONE_PUTS_BACK}`);
+    expect(removalQuestion(unit(), { ...shut, redTagged: true })).toBe(`Unit L-2 is red tagged. Taking it out of the fleet corrects none of that. Its past checklists and requests stay on record. ${PHONES_TAKE_IT_OFF}`);
+  });
+
+  it('says who has the unit checked out, as far as their phone has sent, and that their phone keeps it until they end the use', () => {
+    const crew: Employee[] = [
+      { id: 'e1', firstName: 'Sam', lastName: 'Ortiz', role: 'employee', active: true },
+      { id: 'e2', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true },
+    ];
+    const since = new Date(2026, 10, 13, 6, 5).getTime();
+    const opLogs = [
+      log({ id: 'o1', employeeId: 'e2', startAt: NOW - 2 * DAY, endAt: NOW - 2 * DAY + 3_600_000, endMeter: 118 }),
+      log({ id: 'o2', employeeId: 'e1', startAt: since }),
+      // Another unit's use is not this one's.
+      log({ id: 'o3', employeeId: 'e2', equipmentId: 'eq_other', startAt: since }),
+    ];
+    const open = openOnUnit(unit(), { equipment: [unit()], inspections: [], opLogs, mrfs: [], employees: crew });
+    expect(open.checkedOut).toEqual([{ name: 'Sam Ortiz', since }]);
+    // Checked out is not open work: nothing is said under the unit for it.
+    expect(anythingOpen(open)).toBe(false);
+    expect(checkedOutWords('Sam Ortiz', since)).toBe('Sam Ortiz has it checked out since Nov 13, 6:05 AM, as far as their phone has sent; their phone keeps it until they end the use.');
+    expect(removalQuestion(unit(), open)).toBe(`Take unit L-2 out of the fleet? Its past checklists and requests stay on record. ${PHONES_TAKE_IT_OFF} ${checkedOutWords('Sam Ortiz', since)}`);
+    // Someone the records do not name is still said.
+    expect(openOnUnit(unit(), { equipment: [unit()], inspections: [], opLogs: [log({ employeeId: 'e9', startAt: since })], mrfs: [] }).checkedOut).toEqual([{ name: 'Someone', since }]);
   });
 
   it('leaves another unit’s open work out of it', () => {
     const other = unit({ id: 'eq_b', unit: 'T-1' });
-    expect(openOnUnit(other, { equipment: [unit(), other], inspections: [bad], opLogs: [], mrfs: [mrf({ taggedOut: true })] })).toEqual({ redTagged: false, requests: [], badOrders: [] });
+    expect(openOnUnit(other, { equipment: [unit(), other], inspections: [bad], opLogs: [], mrfs: [mrf({ taggedOut: true })] })).toEqual(shut);
+  });
+});
+
+describe('a unit the office saves', () => {
+  it('is never marked better than the company’s open maintenance requests on it, which the server would turn down', () => {
+    // A crew phone's status for a unit could be set aside, so a unit's own record may still say ready with a request open on it.
+    const mrfs = [mrf({ id: 'm1' }), mrf({ id: 'm2', equipmentId: 'eq_b', taggedOut: true }), mrf({ id: 'm3', equipmentId: 'eq_c', taggedOut: true, status: 'completed' })];
+    expect(withRequestFloor(unit(), mrfs)).toEqual(unit({ status: 'defect' }));
+    expect(withRequestFloor(unit({ id: 'eq_b' }), mrfs).status).toBe('out_of_service');
+    // A completed request keeps nothing; a status already worse than the requests stays as it is.
+    expect(withRequestFloor(unit({ id: 'eq_c' }), mrfs).status).toBe('ready');
+    expect(withRequestFloor(unit({ status: 'out_of_service' }), mrfs).status).toBe('out_of_service');
+    const same = unit();
+    expect(withRequestFloor(same, [])).toBe(same);
   });
 });
 
@@ -164,10 +203,12 @@ describe('an area sheet in use', () => {
     expect(sheetUse(sheet, [])).toEqual({ exams: 0, open: 0, dangers: 0 });
   });
 
-  it('asks before it is stopped, and says what is still open in the area and what a phone does', () => {
+  it('asks before it is stopped, and says what is still open in the area and what the phones do', () => {
     const wash: AreaSheet = { id: 'wash_bay', title: 'Wash bay', rows: [], active: true };
-    const tail = `It moves to Not in use here, and the crew stops seeing the area once their phones have the change. Its exams stay on record, and it can be put back. ${PHONE_STARTS_AGAIN}`;
-    expect(PHONE_STARTS_AGAIN).toBe('A supervisor’s phone that changes this sheet sends its own copy, in use: stop using it on the supervisors’ phones too.');
+    const tail = `${PHONES_STOP_OFFERING} Its exams stay on record, and it can be put back.`;
+    expect(PHONES_STOP_OFFERING).toBe(
+      'It moves to Not in use here, and the crew’s phones stop offering it the next time each is open with signal. While a condition found in it is still open, the area stays on the list of the phone that found it, not in use, so a danger is still shown there. A person in the middle of an exam on it finishes it.',
+    );
     expect(stopQuestion(wash, { exams: 4, open: 0, dangers: 0 })).toBe(`Stop using the Wash bay sheet? ${tail}`);
     expect(stopQuestion(wash, { exams: 4, open: 1, dangers: 0 })).toBe(`One condition is still open in Wash bay. Stopping the sheet closes nothing: it stays open until its date fixed is recorded. ${tail}`);
     // More than one condition is spoken of as more than one.
@@ -298,20 +339,28 @@ describe('the company form, field by field', () => {
 });
 
 describe('what is said about the phones on every page that saves', () => {
-  it('is that phones do not receive what is saved here, in so many words, with nothing that reads as "at the next sync"', () => {
-    expect(PHONES_DO_NOT_RECEIVE).toBe('Phones do not receive changes from the office yet');
-    expect(SAVED_HERE_ONLY).toBe('Saved to the company and shown on this dashboard. Phones do not receive it yet.');
-    const all = [PHONES_DO_NOT_RECEIVE, SAVED_HERE_ONLY, ...ON_PHONES.fleet, ...ON_PHONES.sheets, ...ON_PHONES.company].join(' ');
-    expect(all).not.toMatch(/pick up|once the app receives from the office/i);
+  it('is how the crew’s phones get what is saved here: the next time each is open with signal', () => {
+    expect(HOW_PHONES_GET_IT).toBe('How the crew’s phones get what is saved here');
+    expect(SAVED_FOR_PHONES).toBe('Saved to the company. Phones get it the next time they are open with signal.');
+    const all = [HOW_PHONES_GET_IT, SAVED_FOR_PHONES, ...ON_PHONES.fleet, ...ON_PHONES.sheets, ...ON_PHONES.company].join(' ');
+    // Nothing still says the phones do not receive, or that a phone puts the office's change back.
+    expect(all).not.toMatch(/do not receive|updated to receive|keep their own|own copy|puts it back|on the supervisors’ phones/i);
   });
 
-  it('says on each page what to do today, and what a supervisor’s phone undoes', () => {
-    expect(ON_PHONES.fleet.join(' ')).toContain('add it on a supervisor’s phone, on Crew → Fleet');
-    expect(ON_PHONES.fleet.join(' ')).toContain('A unit taken out here is put back when a supervisor’s phone that still has it sends it again.');
-    expect(ON_PHONES.sheets.join(' ')).toContain('on Crew → Area sheets, under the same name');
-    expect(ON_PHONES.sheets.join(' ')).toContain('sends its own copy, which replaces what is saved here, a sheet stopped here included');
-    expect(ON_PHONES.company.join(' ')).toContain('A supervisor’s phone that changes a shared setting, the clock-in pin included, sends its own copy of them all, and that replaces what is saved here.');
-    expect(ON_PHONES.company.join(' ')).toContain('Make the same change on the supervisors’ phones first');
+  it('says on each page what the phones do with a change, and what the server keeps', () => {
+    expect(ON_PHONES.fleet).toEqual([
+      'A unit added, changed or taken out here is saved to the company. Each phone gets it the next time the app is open with signal.',
+      'A phone that has not caught up cannot put its older copy of a unit back: the server keeps what is saved here.',
+      'Add each unit once, here or on a supervisor’s phone: added in both places, the same unit shows twice, because each copy gets an id of its own.',
+    ]);
+    expect(ON_PHONES.sheets).toEqual([
+      'A sheet added, changed or stopped here is saved to the company. Each phone gets it the next time the app is open with signal; a person in the middle of an exam on it finishes on the sheet as they saw it.',
+      'A phone that has not caught up cannot put its older copy of a sheet back.',
+    ]);
+    expect(ON_PHONES.company).toEqual([
+      'What is saved here is what this dashboard and every phone go by: payroll, the hours file, the exports, the clock-in site and the time clock. Each phone takes a change the next time the app is open with signal.',
+      'The clock-in pin is set on a supervisor’s phone, standing at the mine. Saving here never takes a pin off a phone.',
+    ]);
   });
 
   it('calls the company’s row on the server by what it holds', () => {

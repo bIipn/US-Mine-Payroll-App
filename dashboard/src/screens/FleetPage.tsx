@@ -10,7 +10,7 @@ import { useCompany } from '../lib/company';
 import { messageOf } from '../lib/errors';
 import { putBackUnits } from '../lib/history';
 import { SaidNotice, saidOf, useFormFields, useFormSaver, useSaid, useSaver, type Said } from '../lib/save';
-import { anythingOpen, checklistsByUnit, lastReading, ON_PHONES, openOnUnit, PHONE_PUTS_BACK, removalQuestion, sameNumbers, SAVED_HERE_ONLY, standings, type Standing } from '../lib/setup';
+import { anythingOpen, checklistsByUnit, lastReading, ON_PHONES, openOnUnit, PHONES_TAKE_IT_OFF, removalQuestion, sameNumbers, SAVED_FOR_PHONES, standings, withRequestFloor, type Standing } from '../lib/setup';
 import { useDeletions } from '../lib/versions';
 import { A, Button, Confirm, count, Ledger, Notice, Plate, SelectField, TextField } from '../ui/kit';
 import { PhonesNotice } from './setupNotices';
@@ -29,9 +29,9 @@ const STANDING: Record<Standing, { label: string; tag: string }> = {
 const changeButtonId = (unitId: string) => `unit-change-${unitId}`;
 
 /**
- * The company's equipment, as the office has it: add a unit, change what it
- * is, take it out of the fleet. Each unit's status and last reading are shown
- * as the records give them and are never changed here.
+ * The company's equipment, the fleet every phone receives: add a unit, change
+ * what it is, take it out of the fleet. Each unit's status and last reading
+ * are shown as the records give them and are never changed here.
  */
 export function FleetPage() {
   const ctx = useCompany();
@@ -46,7 +46,7 @@ export function FleetPage() {
 
   return (
     <>
-      <PageHead title="Fleet" lede="The company’s equipment as the office has it. A unit added here is saved to the company; the crew can fill in its checklist once it is on their phones." />
+      <PageHead title="Fleet" lede="The company’s equipment. A unit added here is saved to the company, and the crew can fill in its checklist once their phones have it: the next time each is open with signal." />
       <PhonesNotice lines={ON_PHONES.fleet} />
       <div className="pair">
         <AddUnit fleet={data.equipment} />
@@ -76,7 +76,7 @@ export function FleetPage() {
       {back.length ? (
         <Notice tone="warn" title={back.length === 1 ? 'A unit taken out of the fleet is back' : 'Units taken out of the fleet are back'}>
           <p>
-            {back.map((b) => `${b.unit.unit} (taken out ${fmtDate(b.takenOutAt)})`).join(', ')}. A supervisor’s phone that still had {back.length === 1 ? 'the unit' : 'them'} sent {back.length === 1 ? 'it' : 'them'} again, which puts a unit back. Take {back.length === 1 ? 'it' : 'each'} out on the supervisors’ phones, on Crew → Fleet, then here.
+            {back.map((b) => `${b.unit.unit} (taken out ${fmtDate(b.takenOutAt)})`).join(', ')}. A supervisor’s phone sent {back.length === 1 ? 'the unit' : 'them'} again after {back.length === 1 ? 'it was' : 'they were'} taken out. If {back.length === 1 ? 'it' : 'they'} should be out of the fleet, take {back.length === 1 ? 'it' : 'each'} out here once more: phones take a unit off the next time they are open with signal.
           </p>
         </Notice>
       ) : null}
@@ -139,7 +139,7 @@ function AddUnit({ fleet }: { fleet: Equipment[] }) {
     setBusy(true);
     try {
       const result = await save({ kind: 'equipment', id: made.unit.id, record: made.unit, what: `unit ${made.unit.unit}` });
-      if (tell(result, `Unit ${made.unit.unit} is added to the company’s fleet. It is not on the crew’s phones yet.`)) {
+      if (tell(result, `Unit ${made.unit.unit} is added to the company’s fleet. Phones get it the next time they are open with signal.`)) {
         idFor.current = null;
         setUnit('');
         setMake('');
@@ -198,7 +198,7 @@ function AddUnit({ fleet }: { fleet: Equipment[] }) {
         <Button kind="main" type="submit" busy={busy}>{busy ? 'Adding' : 'Add to the fleet'}</Button>
       </div>
       <SaidNotice said={said} />
-      <p className="small muted">{SAVED_HERE_ONLY}</p>
+      <p className="small muted">{SAVED_FOR_PHONES}</p>
     </form>
   );
 }
@@ -343,7 +343,8 @@ function UnitChanges({ unit, onDone, onUnsaved }: { unit: Equipment; /** Saved, 
     clear();
     setBusy(true);
     try {
-      const result = await saver.save(made.unit, what);
+      // Never marked better than the requests open on it: the server would turn that down.
+      const result = await saver.save(withRequestFloor(made.unit, data.mrfs), what);
       if (result.ok) onDone(saidOf(result, `Unit ${unit.unit} is saved.`));
       else say(saidOf(result, ''));
     } finally {
@@ -369,7 +370,7 @@ function UnitChanges({ unit, onDone, onUnsaved }: { unit: Equipment; /** Saved, 
 
   const remove = async () => {
     const result = await saver.save(null, what);
-    if (result.ok) onDone(saidOf(result, `Unit ${unit.unit} is out of the fleet. Its past checklists and requests stay on record. ${PHONE_PUTS_BACK}`));
+    if (result.ok) onDone(saidOf(result, `Unit ${unit.unit} is out of the fleet. Its past checklists and requests stay on record. ${PHONES_TAKE_IT_OFF}`));
     else say(saidOf(result, ''));
   };
 
@@ -408,7 +409,7 @@ function UnitChanges({ unit, onDone, onUnsaved }: { unit: Equipment; /** Saved, 
           {open.requests.length ? <>, or <A href={`/requests/${encodeURIComponent(open.requests[0].id)}`}>request #{open.requests[0].number}</A></> : null}.
         </p>
       ) : null}
-      <p className="small muted">The unit number, the status and the readings are not changed here. A change saved here is the office’s: phones do not receive it yet.</p>
+      <p className="small muted">The unit number, the status and the readings are not changed here: they come from the phones’ checklists and requests. Phones get a change saved here the next time they are open with signal.</p>
     </div>
   );
 }

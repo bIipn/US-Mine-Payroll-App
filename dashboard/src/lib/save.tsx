@@ -74,6 +74,8 @@ export function useSaver() {
         ctx.applyRecords([saved.fresh]);
         return { ok: false, changed: true, words: saved.words, row: saved.fresh };
       }
+      // Taken for this account's own earlier change: the server holds the version the page does, and its words say why.
+      if (saved.why === 'repeat') return { ok: false, changed: false, words: saved.words };
       if (saved.reason === 'supervisor_only') void ctx.recheckRole();
       return { ok: false, changed: false, words: saved.words };
     } catch (e) {

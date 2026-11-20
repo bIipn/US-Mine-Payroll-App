@@ -65,7 +65,7 @@ export interface Shaped {
   areaSheets: AreaSheet[];
   denied: DeniedPunch[];
   /**
-   * People whose records arrived with no employee record from the phones yet. They are
+   * People whose records arrived with no employee record yet. They are
    * named from the sign-in roster when the account that sent their records is on it.
    */
   placeholders: Set<string>;

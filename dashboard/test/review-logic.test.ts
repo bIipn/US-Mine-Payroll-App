@@ -4,7 +4,7 @@ import { sheetInUse } from '@app/domain/areaExam';
 import { revOf } from '@app/domain/sync';
 import type { AreaSheet, Equipment, Inspection } from '@app/domain/types';
 
-import { rowAfter, saveRecord, type SaveDeps } from '../src/lib/changes';
+import { repeatWords, rowAfter, saveRecord, type SaveDeps } from '../src/lib/changes';
 import type { RecordRow } from '../src/lib/server';
 import { openOnUnit, standings } from '../src/lib/setup';
 
@@ -20,15 +20,17 @@ const DAY = 86_400_000;
 const wash: AreaSheet = { id: 'wash_bay', title: 'Wash bay', rows: [{ id: 'hose_reel', label: 'Hose reel' }], active: true };
 
 /**
- * A stand-in for `push_records` as a supervisor meets it, with rule 7 of
- * supabase/migrations/20261117000300_push_records.sql kept word for word:
+ * A stand-in for `push_records` as a supervisor meets it for the four kinds
+ * phones receive, with rule 7 of
+ * supabase/migrations/20261120000100_office_changes_reach_phones.sql:
  *
  *  - the server has this version already: accepted, nothing written;
  *  - "this is the caller's own latest change to it sent again (same rev and
  *    base: a batch retried after its answer was lost): accepted, nothing
  *    written". The server looks only at the CALLER's latest change, not at
  *    whether anyone else has written the record since;
- *  - otherwise written, with `conflict` when the base is not the version held.
+ *  - a change made from any version but the one it holds: superseded;
+ *  - otherwise written.
  */
 function server(first: RecordRow) {
   let stored = first;
@@ -41,11 +43,11 @@ function server(first: RecordRow) {
       if (stored.rev === change.rev) return taken;
       const mine = [...history].reverse().find((h) => h.by === who);
       if (mine && mine.rev === change.rev && mine.base === change.base) return taken;
-      const conflict = change.base !== stored.rev;
+      if (change.base !== stored.rev) return { accepted: [], ignored: [{ key: change.key, rev: change.rev, reason: 'superseded' }] };
       at += 60_000;
       stored = rowAfter(change, stored, who, at);
       history.push({ by: who, rev: change.rev, base: change.base });
-      return { accepted: [{ key: change.key, rev: change.rev, ...(conflict ? { conflict: true } : null) }], ignored: [] };
+      return taken;
     },
     me: who,
     now: () => at,
@@ -61,8 +63,9 @@ const rowOf = (sheet: AreaSheet): RecordRow => ({
 describe('review: a save the server answered "accepted" for without writing it', () => {
   // Two supervisors, each on the dashboard. The first stops using a sheet, the second starts using it
   // again, the first stops it once more. The third change is, to the server, the first one "sent again"
-  // (the same version from the same base), so it answers accepted and writes nothing.
-  it('is sent once more in a form the server writes, so that what the page calls saved is what the server holds', async () => {
+  // (the same version from the same base), so it answers accepted and writes nothing. No other base is
+  // written for the four kinds since 20261120000100, so the page says what happened and calls nothing saved.
+  it('is never called saved, nor said to be someone else’s change: the page says what the server did, and another supervisor can make it', async () => {
     const s = server(rowOf(wash));
     const what = 'the Wash bay sheet';
     const stop = (loaded: RecordRow) => saveRecord(s.as('user-office-a'), { kind: 'areaSheet', id: wash.id, record: sheetInUse(wash, false), loaded, what });
@@ -79,19 +82,19 @@ describe('review: a save the server answered "accepted" for without writing it',
 
     // The first supervisor loads the sheet as it is now, in use, and stops using it again.
     const again = await stop(s.stored());
-    // The server holds the sheet stopped, and the row handed to the page is the server's own.
-    expect(s.writes()).toBe(3);
-    expect(s.stored().data).toMatchObject({ active: false });
-    expect(again).toMatchObject({ ok: true, same: false, conflict: false });
-    if (again.ok) expect(again.row).toBe(s.stored());
-
-    // And so on, whoever flips it next: every change ends up on the server.
-    expect(await start(s.stored())).toMatchObject({ ok: true });
+    // Nothing is written, and the page does not say it was.
+    expect(s.writes()).toBe(2);
     expect(s.stored().data).toMatchObject({ active: true });
-    expect(await stop(s.stored())).toMatchObject({ ok: true });
+    expect(again).toEqual({ ok: false, why: 'repeat', words: repeatWords(what) });
+
+    // The other supervisor can make it, as the words say.
+    const other = (loaded: RecordRow) => saveRecord(s.as('user-office-b'), { kind: 'areaSheet', id: wash.id, record: sheetInUse(wash, false), loaded, what });
+    expect(await other(s.stored())).toMatchObject({ ok: true, same: false });
     expect(s.stored().data).toMatchObject({ active: false });
+    expect(s.writes()).toBe(3);
+    // Stopped now, a press of the first supervisor's is the save it is: the server has it already.
     expect(await stop(s.stored())).toMatchObject({ ok: true, same: true });
-    expect(s.writes()).toBe(5);
+    expect(s.writes()).toBe(3);
   });
 });
 

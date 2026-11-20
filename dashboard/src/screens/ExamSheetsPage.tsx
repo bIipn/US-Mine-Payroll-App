@@ -8,7 +8,7 @@ import { useCompany } from '../lib/company';
 import { writtenOver } from '../lib/history';
 import { go } from '../lib/router';
 import { carryWord, SAID_TITLE, SaidNotice, saidOf, useCarriedWord, useFormFields, useFormSaver, useSaid, useSaver, type FormSaveHow, type FormSaver, type SaveResult } from '../lib/save';
-import { dangerFirst, lineCount, linesText, ON_PHONES, savedAs, SAVED_HERE_ONLY, sheetUse, stopQuestion, type SheetUse } from '../lib/setup';
+import { dangerFirst, lineCount, linesText, ON_PHONES, savedAs, SAVED_FOR_PHONES, sheetUse, stopQuestion, type SheetUse } from '../lib/setup';
 import { useVersions } from '../lib/versions';
 import { A, Announce, AreaField, Button, Check, Confirm, count, Ledger, LinkButton, Notice, TextField } from '../ui/kit';
 import { DangerBand } from '../ui/danger';
@@ -51,14 +51,14 @@ export function ExamSheetsPage() {
   const cardLines = checklistFor('loader').items.length;
 
   const start = async (sheet: AreaSheet) => {
-    tell(await save({ kind: 'areaSheet', id: sheet.id, record: sheetInUse(sheet, true), what: sheetName(sheet) }), `The ${sheet.title} sheet is in use again here. Start using it on the supervisors’ phones too.`);
+    tell(await save({ kind: 'areaSheet', id: sheet.id, record: sheetInUse(sheet, true), what: sheetName(sheet) }), `The ${sheet.title} sheet is in use again. Phones offer it the next time they are open with signal.`);
   };
 
   return (
     <>
       <PageHead
         title="Pre shift exam sheets"
-        lede={`The sheet for each work area a pre shift exam is made on, as the office has it. Each area has its own lines; the ${AREA_CONDITIONS.length} conditions on the second page are the same for every area.`}
+        lede={`The sheet for each work area a pre shift exam is made on. Each area has its own lines; the ${AREA_CONDITIONS.length} conditions on the second page are the same for every area.`}
       />
       {/* A danger is shown as a danger wherever its area is, ahead of anything else. */}
       <DangerBand dangers={ctx.board.dangers} nameOf={people.name} />
@@ -195,7 +195,7 @@ function SheetWrittenOver({ sheet }: { sheet: AreaSheet }) {
       found={versions ? writtenOver('areaSheet', versions) : null}
       id={`areaSheet:${sheet.id}`}
       what="this sheet as it was saved here"
-      then="The sheet below is what the server has now. Set it again here if the office’s was right, and make the same change on that phone, or it sends its own again."
+      then="The sheet below is what the server has now. Set it again here if the office’s was right: phones take what is saved here the next time they are open with signal, and the server no longer takes an older copy over it."
     />
   );
 }
@@ -254,7 +254,7 @@ function SheetForm({ sheet, saveSheet, shows }: { sheet?: AreaSheet; saveSheet: 
           restart(typedOf(next.sheet));
         }
       } else if (result.ok) {
-        carryWord(saidOf(result, `The ${next.sheet.title} sheet is added, with ${count(next.sheet.rows.length, 'line')} of its own. It is not on the crew’s phones yet.`));
+        carryWord(saidOf(result, `The ${next.sheet.title} sheet is added, with ${count(next.sheet.rows.length, 'line')} of its own. Phones get it the next time they are open with signal.`));
         go('/sheets');
       } else {
         tell(result, '');
@@ -274,8 +274,8 @@ function SheetForm({ sheet, saveSheet, shows }: { sheet?: AreaSheet; saveSheet: 
   const setInUse = async (active: boolean) => {
     if (!sheet) return;
     const done = active
-      ? `The ${sheet.title} sheet is in use again here. Start using it on the supervisors’ phones too.`
-      : `The ${sheet.title} sheet is stopped here. Its exams stay on record. Stop using it on the supervisors’ phones too.`;
+      ? `The ${sheet.title} sheet is in use again. Phones offer it the next time they are open with signal.`
+      : `The ${sheet.title} sheet is stopped. Its exams stay on record. Phones stop offering it the next time they are open with signal.`;
     // The button is beside the sheet as the page draws it now: the change goes from that version.
     use.tell(await saveSheet(sheetInUse(sheet, active), { drawn: true }), done);
   };
@@ -319,7 +319,7 @@ function SheetForm({ sheet, saveSheet, shows }: { sheet?: AreaSheet; saveSheet: 
         {sheet && dirty ? <Button kind="quiet" onClick={reset}>Put back what is saved</Button> : null}
       </div>
       <SaidNotice said={said} />
-      <p className="small muted">{SAVED_HERE_ONLY}</p>
+      <p className="small muted">{SAVED_FOR_PHONES}</p>
     </form>
   );
 
@@ -330,7 +330,7 @@ function SheetForm({ sheet, saveSheet, shows }: { sheet?: AreaSheet; saveSheet: 
         crumb={<A href="/sheets">Exam sheets</A>}
         lede={
           sheet
-            ? `The pre shift exam sheet for this work area, as the office has it${sheet.active ? '' : '. It is not in use now'}. Change it in the form.`
+            ? `The pre shift exam sheet for this work area${sheet.active ? '' : '. It is not in use now'}. Change it in the form.`
             : 'Type the sheet in from the paper: the name of the work area at its top, then each of its lines.'
         }
       />

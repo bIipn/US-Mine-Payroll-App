@@ -5,13 +5,17 @@ import { whatChanged } from './changes';
 /**
  * What the versions of a record say about who wrote over whom.
  *
- * Phones send and do not receive. A phone makes each change from the last
- * version the server confirmed to it, which may be older than the one the
- * office saved since; a supervisor's phone is taken at its word, so its copy
- * goes over the office's and nothing says so at the time. The server keeps
- * every version it took, with the version each was made from (`base`), and a
- * supervisor may read them. From those this works out when a version was
- * written over one its sender had not seen, and what that put back.
+ * Before phones received the company's records, a phone made each change from
+ * the last version the server had confirmed to it, which could be older than
+ * the one the office saved since, and the server took a supervisor's phone at
+ * its word: its copy went over the office's and nothing said so at the time.
+ * Since 20261120000100_office_changes_reach_phones the server writes a change
+ * of the roster, fleet, sheets or settings only on top of the version it was
+ * made from, so a copy can no longer go over a version its sender had not seen;
+ * the versions written before then still tell. The server keeps every version
+ * it took, with the version each was made from (`base`), and a supervisor may
+ * read them. From those this works out when a version was written over one its
+ * sender had not seen, and what that put back.
  */
 
 /** One row of `record_history`: a version the server took. */
@@ -41,7 +45,7 @@ export interface WrittenOver {
 
 const byVersion = (a: VersionRow, b: VersionRow) => a.version - b.version;
 
-/** A version made from the one before it, or sent again on purpose by this dashboard (`sentAgain`): its sender had seen what it went over. */
+/** A version made from the one before it, or one this dashboard once sent again with its own version as its base (it no longer does): its sender had seen what it went over. */
 const seen = (version: VersionRow, before: VersionRow) => version.base === before.rev || version.base === version.rev;
 
 /**

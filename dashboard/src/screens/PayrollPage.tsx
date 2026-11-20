@@ -104,12 +104,12 @@ export function PayrollPage({ view, at }: { view: string | null; at: string | nu
       ) : null}
       {table.offRoster.length ? (
         <Notice tone="warn" title={`${count(table.offRoster.length, 'person', 'people')} off the app’s roster with hours in this ${SPAN_NAME[span.kind].toLowerCase()}`}>
-          {table.offRoster.map((r) => `${people.name(r.employee.id)}, ${fmtHrs(r.total)} hours`).join('; ')}. Like the phones, the table and the files leave out someone taken off the roster. Pay these hours by hand, or put the person back on the roster in the app for this payroll.
+          {table.offRoster.map((r) => `${people.name(r.employee.id)}, ${fmtHrs(r.total)} hours`).join('; ')}. Like the phones, the table and the files leave out someone taken off the roster. Pay these hours by hand, or put the person back on the roster on the <A href="/roster">Roster page</A> for this payroll.
         </Notice>
       ) : null}
       {table.heldBack.length ? (
-        <Notice tone="warn" title={`${count(table.heldBack.length, 'person', 'people')} with hours and no employee record from the phones yet`}>
-          {table.heldBack.map((r) => `${people.name(r.employee.id)}, ${fmtHrs(r.total)} hours`).join('; ')}. They are in this table and the workbook, but not in the hours file: a payroll system cannot match them without the payroll ID their employee record carries. They arrive once a supervisor’s phone sends the roster.
+        <Notice tone="warn" title={`${count(table.heldBack.length, 'person', 'people')} with hours and no employee record yet`}>
+          {table.heldBack.map((r) => `${people.name(r.employee.id)}, ${fmtHrs(r.total)} hours`).join('; ')}. They are in this table and the workbook, but not in the hours file: a payroll system cannot match them without the payroll ID their employee record carries. Someone the sign-in roster names is on the <A href="/roster">Roster page</A>, under On the sign-in roster, not in the app: added to the app’s roster there, they keep these hours.
         </Notice>
       ) : null}
       <Ledger>
@@ -136,7 +136,7 @@ export function PayrollPage({ view, at }: { view: string | null; at: string | nu
                   <span className="nowrap"><A className="rowlink" href={`/payroll/${encodeURIComponent(r.employee.id)}?view=${span.kind}&at=${ymd(span.start)}`}>{people.name(r.employee.id)}</A></span>
                   {r.employee.title ? <span className="under">{r.employee.title}</span> : null}
                   {r.days.some((d) => d.open) ? <span className="under"><span className="tag tag-ok">On the clock</span></span> : null}
-                  {people.placeholders.has(r.employee.id) ? <span className="under">No employee record from the phones yet</span> : null}
+                  {people.placeholders.has(r.employee.id) ? <span className="under">No employee record yet: add them on the <A href="/roster">Roster page</A></span> : null}
                 </th>
                 <td className="r num">{r.daysWorked}</td>
                 <td className="hrs">{h(r.reg)}</td>
@@ -184,7 +184,11 @@ export function PayrollPage({ view, at }: { view: string | null; at: string | nu
         <h2 className="h2" id="pay-files">Files for payroll</h2>
         <p className="section-note">
           Made from these same figures, so they agree to the hundredth. Hours only: no hourly rate is ever on the server, in this page or in a file.
-          {table.missingPayrollIds ? ` ${table.missingPayrollIds === 1 ? '1 person with hours has' : `${table.missingPayrollIds} people with hours have`} no payroll ID. Set it on the app’s Roster before importing the hours file.` : ''}
+          {table.missingPayrollIds ? (
+            <>
+              {' '}{table.missingPayrollIds === 1 ? '1 person with hours has' : `${table.missingPayrollIds} people with hours have`} no payroll ID yet. <A href="/roster#payroll-ids">Set {table.missingPayrollIds === 1 ? 'it' : 'them'} on the Roster page</A> before importing the hours file.
+            </>
+          ) : null}
         </p>
         <div className="row">
           {/* Made at the same moment as the table above, so a shift still running counts the same in both. */}

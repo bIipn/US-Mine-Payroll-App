@@ -5,11 +5,13 @@ import { accessOpens, type BillingView } from './billing';
 import type { RecordRow } from './server';
 
 /**
- * What the dashboard writes to the company's records: a unit in the fleet, an
- * area sheet and the shared company settings. It writes them the way a
- * supervisor's phone sends them, through the server's `push_records`: the same
- * record, the same version (`revOf`, a hash of the record) and, as `base`, the
- * version this page loaded, so the server can tell an edit from a copy.
+ * What the dashboard writes to the company's records: a person in the app's
+ * roster, a unit in the fleet, an area sheet and the shared company settings,
+ * the four kinds every phone receives. It writes them the way a supervisor's
+ * phone sends them, through the server's `push_records`: the same record, the
+ * same version (`revOf`, a hash of the record) and, as `base`, the version
+ * this page loaded. The server writes a change of these four kinds only on top
+ * of the version it was made from (20261120000100_office_changes_reach_phones).
  *
  * Before a record that is already on the server is changed, it is read again.
  * If a phone has sent a newer version since the page loaded, nothing is
@@ -17,8 +19,8 @@ import type { RecordRow } from './server';
  * supervisor to look at again.
  */
 
-/** The kinds of record the dashboard writes. */
-export type WrittenKind = Extract<SyncKind, 'equipment' | 'areaSheet' | 'settings'>;
+/** The kinds of record the dashboard writes: the four every phone receives. */
+export type WrittenKind = Extract<SyncKind, 'employee' | 'equipment' | 'areaSheet' | 'settings'>;
 
 export const keyOf = (kind: string, id: string) => `${kind}:${id}`;
 
@@ -32,9 +34,15 @@ export function loadedRow(rows: readonly RecordRow[], kind: string, id: string):
   return found;
 }
 
-/** A record as it is sent: its version worked out as the app does, from the version this page loaded. */
+/**
+ * A record as it is sent: its version worked out as the app does, from the
+ * version this page loaded. A record put back over one that was taken off goes
+ * with no base, as from a phone that took the deletion: the server turns down
+ * a change made from a copy that was taken off, and takes this one from a
+ * supervisor.
+ */
 export function saveChange(kind: WrittenKind, id: string, record: object, loaded?: RecordRow): Change {
-  return { key: keyOf(kind, id), kind, id, rev: revOf(record), ...(loaded ? { base: loaded.rev } : null), record };
+  return { key: keyOf(kind, id), kind, id, rev: revOf(record), ...(loaded && !loaded.deleted ? { base: loaded.rev } : null), record };
 }
 
 /** A record taken off: the server keeps its row, marked deleted, and every version it ever had. */
@@ -131,6 +139,16 @@ export function notKeptWords(what: string, kept: boolean, say?: Saying): string 
 }
 
 /**
+ * Said when the server took a change for this account's own earlier one, sent
+ * again, and wrote nothing: the same change, from the same version, that
+ * someone else has since put back. Saving again from this account does the
+ * same; another supervisor's account can make it.
+ */
+export function repeatWords(what: string): string {
+  return `The server took this for the change this account made to ${what} before, which someone else has since put back, and kept the version it holds. Nothing was saved. Another supervisor can make the change from their own account.`;
+}
+
+/**
  * What a form holds once the record under it has a newer version. A field
  * nobody touched takes the newer value, so a save after looking again does not
  * put the old one back; a field that was typed in stays as typed. `opened` is
@@ -182,6 +200,8 @@ export function refusalWords(reason: string, what: string, problem?: string, say
       return `${cap(what)} ${w.was} taken off on the server, and only a supervisor puts ${w.it} back. ${NOTHING} Sign out and back in if your role changed.`;
     case 'too_large':
       return `${cap(what)} ${w.is} too large for the server to keep (256 KB at most). ${NOTHING} Shorten ${w.it} and save again.`;
+    case 'open_request':
+      return `The server keeps ${what} marked for a maintenance request still open on ${w.it}, and this save would have marked ${w.it} better. ${NOTHING} Load new records, then save again.`;
     case 'daily_limit':
       return `This account has sent as much as the server takes from one account in a day. ${NOTHING} Save again tomorrow.`;
     case 'call_size':
@@ -255,6 +275,8 @@ export type Saved =
   | { ok: false; why: 'changed'; how: (Since & { changed: true })['how']; fresh: RecordRow | null; words: string }
   /** The server answered that it took the change, and holds another version: `fresh` is what it has. */
   | { ok: false; why: 'not_kept'; fresh: RecordRow; words: string }
+  /** The server took the change for this account's own earlier one, sent again, and wrote nothing (`repeatWords`). */
+  | { ok: false; why: 'repeat'; words: string }
   | { ok: false; why: 'refused' | 'later' | 'unknown' | 'too_large'; reason: string; words: string };
 
 /** The row the page holds once the server has taken a change, until the next load reads the server's own. */
@@ -274,20 +296,6 @@ export function rowAfter(change: Change, loaded: RecordRow | undefined, by: stri
 }
 
 /**
- * The same change, sent so that the server cannot take it for one it was sent
- * already. The server writes nothing when a change has the version and the
- * base of the caller's own latest change to the record: its rule for a batch
- * sent again after a lost answer. Versions are hashes of the record, so a real
- * second change matches too once someone else has put the record back in
- * between (stopped, started again by another supervisor, stopped again). This
- * one names its own version as its base: the last version of the record the
- * server confirmed to this account with these very contents.
- */
-export function sentAgain(change: Change): Change {
-  return { ...change, base: change.rev };
-}
-
-/**
  * Save one record, or take one off.
  *
  *  1. The record is read again. A version this page has not seen stops the
@@ -295,10 +303,16 @@ export function sentAgain(change: Change): Change {
  *     press whose answer was lost) is the save, done.
  *  2. The change goes to `push_records`, and a refusal is put into words.
  *  3. The record is read once more, because "accepted" does not always mean
- *     written (`sentAgain`). When the server still holds the version it held
- *     before, the change is sent once more in a form it will write. Only a
- *     version the server shows is handed back as saved; anything else is said
- *     as it is, with the server's row for the page.
+ *     written. The server writes nothing when a change has the version and the
+ *     base of this account's own latest change to the record, its rule for a
+ *     batch sent again after a lost answer; versions are hashes of the record,
+ *     so a real second change matches too once someone else has put the record
+ *     back in between (stopped, started again by another supervisor, stopped
+ *     again). The four kinds are written only on top of the version the server
+ *     holds (20261120000100), so no other base gets such a change written from
+ *     this account: it is said as it is (`repeatWords`), and not sent again.
+ *     Only a version the server shows is handed back as saved; anything else
+ *     is said as it is, with the server's row for the page.
  *
  * Errors from the server itself (no connection, signed out) are thrown by
  * `read` and `push`. Should only the last read fail, the save went through as
@@ -325,8 +339,10 @@ export async function saveRecord(deps: SaveDeps, want: Want): Promise<Saved> {
   const refused = (outcome: Outcome & { ok: false }): Saved => ({
     ok: false, why: outcome.reason === 'unknown' ? 'unknown' : outcome.later ? 'later' : 'refused', reason: outcome.reason, words: outcome.words,
   });
-  const outcome = readAnswer(await deps.push([change]), change, what, say);
-  if (!outcome.ok) return refused(outcome);
+  const answered = readAnswer(await deps.push([change]), change, what, say);
+  if (!answered.ok) return refused(answered);
+  // Put back over a deletion with no base, which the server counts as a conflict with the deletion it has: the read above saw it.
+  const outcome = !!loaded?.deleted && answered.conflict ? { ...answered, conflict: false } : answered;
 
   // What the page shows when the server cannot be read after it answered: what was sent.
   const asSent = (conflict: boolean): Saved => ({ ok: true, row: rowAfter(change, loaded, deps.me, deps.now()), conflict, same: false });
@@ -338,20 +354,8 @@ export async function saveRecord(deps: SaveDeps, want: Want): Promise<Saved> {
   }
   if (stored && stored.rev === change.rev) return { ok: true, row: stored, conflict: outcome.conflict, same: false };
 
-  // Accepted, and the server holds the version it held before: it took the change for one sent already.
-  const kept = !!stored && !!fresh && stored.rev === fresh.rev && !outcome.conflict;
-  if (kept) {
-    const again = sentAgain(change);
-    const second = readAnswer(await deps.push([again]), again, what, say);
-    if (!second.ok) return refused(second);
-    try {
-      stored = await deps.read(kind, id);
-    } catch {
-      return asSent(false);
-    }
-    // Written this time. The server calls it a conflict because of the base it was sent with; it is not one.
-    if (stored && stored.rev === change.rev) return { ok: true, row: stored, conflict: false, same: false };
-  }
+  // Accepted, and the server holds the version it held before: it took the change for this account's own earlier one.
+  if (stored && fresh && stored.rev === fresh.rev && !outcome.conflict) return { ok: false, why: 'repeat', words: repeatWords(what) };
   if (!stored) return { ok: false, why: 'unknown', reason: 'unknown', words: refusalWords('unknown', what, undefined, say) };
   return { ok: false, why: 'not_kept', fresh: stored, words: notKeptWords(what, !!fresh && stored.rev === fresh.rev, say) };
 }

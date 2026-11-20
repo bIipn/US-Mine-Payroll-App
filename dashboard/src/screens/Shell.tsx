@@ -91,7 +91,10 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
     if (toHeading.current) {
       toHeading.current = false;
       toMenu.current = false;
-      mainRef.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
+      // A link to a part of a page (`/roster#payroll-ids`) lands on that part when it can take the focus; else on the heading.
+      const part = window.location.hash.length > 1 ? document.getElementById(window.location.hash.slice(1)) : null;
+      if (part && part.getAttribute('tabindex') === '-1') part.focus();
+      else mainRef.current?.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
     } else if (toMenu.current) {
       toMenu.current = false;
       menuRef.current?.focus();
@@ -320,7 +323,7 @@ function NotFound({ timeKept, path }: { timeKept: boolean; path: string }) {
       <PageHead title={payroll ? 'The company does not keep time' : 'There is no page here'} />
       <Notice tone="info">
         {payroll
-          ? 'This company uses MineMuster for the safety forms only, so there are no hours or payroll. A supervisor can turn the time clock on in the app, on More → Company.'
+          ? <>This company uses MineMuster for the safety forms only, so there are no hours or payroll. A supervisor can turn the time clock on, on the <a href="/company" onClick={onLink}>Company page</a>.</>
           : 'The address may be old, or the record may have been taken off a phone.'}{' '}
         <a href="/" onClick={onLink}>Go to the overview</a>.
       </Notice>

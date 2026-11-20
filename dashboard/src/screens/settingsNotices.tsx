@@ -4,7 +4,7 @@ import { rulesFor } from '@app/domain/stateRules';
 import { overtimeSummary } from '@app/domain/time';
 
 import { useCompany } from '../lib/company';
-import { Notice } from '../ui/kit';
+import { A, Notice } from '../ui/kit';
 
 const CODES = Object.values(DEFAULT_PAY_CODES);
 const listed = `${CODES.slice(0, -1).join(', ')} and ${CODES[CODES.length - 1]}`;
@@ -28,7 +28,7 @@ export function SettingsNotices() {
   if (STATES[shaped.company.state]) return null;
   return (
     <Notice tone="warn" title="The phones have no state set">
-      So the hours are figured under the federal rules, the same as on the phones. {overtimeSummary(rulesFor(''))} Set the state in the app, on More → Company, and the phones and these pages follow that state’s rules.
+      So the hours are figured under the federal rules, the same as on the phones. {overtimeSummary(rulesFor(''))} Set the state on the <A href="/company">Company page</A>, and the phones and these pages follow that state’s rules.
     </Notice>
   );
 }
