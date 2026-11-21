@@ -8,7 +8,7 @@ import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
-import { turnDownOf, type TurnDown } from '../domain/geofence';
+import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
 import { addedPerson, cleanText, findOnRoster, parsePersonName, payrollIdProblem, sameName, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
@@ -216,9 +216,10 @@ interface Actions {
   signOut: () => void;
 
   /**
-   * Where the phone was, or why it gave no location. A position outside the
-   * boundary, or a simulated one, is turned down and logged; with no location
-   * the clock-in goes through, flagged for a supervisor to review.
+   * Where the phone was, or why it gave no location. With no boundary set it is
+   * turned down. A position outside the boundary, simulated or too vague to
+   * trust is turned down and logged; with no location the clock-in goes
+   * through, flagged for a supervisor to review.
    */
   clockIn: (where: GeoStamp | NoLocation) => Result<{ shift: Shift }>;
   /** Never blocked by location. Left out when no location was read at all. */
@@ -324,8 +325,9 @@ export type Store = Data & Actions;
 const clean = cleanText;
 const hashPassword = (password: string, salt: string) => sha256(`${salt}:${password}`);
 
-/** What a clock-in turned down for where the phone was says. The Clock screen shows its own sheet before it gets here. */
-const TURNED_DOWN: Record<TurnDown, string> = {
+/** What a clock-in that is turned down says. The Clock screen shows its own sheet before it gets here. */
+const TURNED_DOWN: Record<ClockInTurnDown, string> = {
+  no_site: 'The mine boundary is not set, so no one can clock in yet. Ask a supervisor to set it on More, Mine boundary.',
   outside: 'You are outside the clock-in boundary. Clock in once you are on site.',
   weak_gps: 'Your phone cannot place you closely enough to check. Step out into the open and try again.',
   mocked: 'The phone reported a simulated location. Turn off any mock-location app and try again.',
@@ -620,7 +622,7 @@ export const useStore = create<Store>()(
 
         // ---- Time clock ----------------------------------------------------------------
         clockIn: (where) => {
-          const { session, shifts, employees, connectedCompany, receiving } = get();
+          const { session, shifts, employees, connectedCompany, receiving, settings } = get();
           if (!session) return { ok: false, error: 'You are signed out.' };
           if (!employees.find((e) => e.id === session.employeeId)?.active) {
             return { ok: false, error: 'You are no longer on the active roster. See your supervisor.' };
@@ -633,11 +635,12 @@ export const useStore = create<Store>()(
           }
           const now = Date.now();
           if (openShiftOf(shifts, session.employeeId, now)) return { ok: false, error: 'You are already clocked in.' };
-          // A position has to be inside the boundary and not simulated. With none at all the clock-in
-          // goes through, and its flag puts it in front of a supervisor.
-          const turnedDown = typeof where === 'string' ? undefined : turnDownOf(where);
-          if (turnedDown && typeof where !== 'string') {
-            get().logDenied('clock_in', turnedDown, where);
+          // No one clocks in until a boundary is set. Then a position has to be inside it and not simulated;
+          // with none at all the clock-in goes through, and its flag puts it in front of a supervisor.
+          const turnedDown = clockInTurnDown(settings.site, where);
+          if (turnedDown) {
+            // A position turned down is logged. With no boundary set there is nothing to check it against, so nothing is.
+            if (turnedDown !== 'no_site' && typeof where !== 'string') get().logDenied('clock_in', turnedDown, where);
             return { ok: false, error: TURNED_DOWN[turnedDown] };
           }
           const shift: Shift = {

@@ -20,7 +20,8 @@ const commas = (n: number) => Math.round(n).toLocaleString('en-US');
 function noPosition(reason: NoLocation, forPin: boolean): string {
   switch (reason) {
     case 'off':
-      return 'Location is turned off for this app. Turn it on in your phone settings.';
+      // Off for the app, or for the whole phone: either way it is turned on in the phone's settings.
+      return `Location is off on this phone or for ${APP_NAME}. Turn it on in your phone settings.`;
     case 'approximate':
       return forPin
         ? `Your phone shares only an approximate location with ${APP_NAME}. Putting the pin needs your precise location: turn on Precise Location for ${APP_NAME} in your phone settings.`
@@ -126,7 +127,8 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
       ) : null}
       {failed ? <Notice tone="warn" title="No position" body={failed} /> : null}
 
-      <Button testID="check-location" label="Check where I am" icon={LocateFixed} kind="ink" loading={busy} onPress={find} />
+      {/* A supervisor checks the boundary against where they stand. The crew's location is read only when they punch. */}
+      {supervisor ? <Button testID="check-location" label="Check where I am" icon={LocateFixed} kind="ink" loading={busy} onPress={find} /> : null}
 
       <Panel title="The clock-in boundary" flush>
         <View style={styles.fact}>
@@ -141,7 +143,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
             <View style={styles.fact} testID="site-town">
               <Txt v="strong">{away.name} is outside it</Txt>
               <Txt v="body" c={color.inkSoft}>
-                {away.name} is {fmtDistance(away.distanceM)} from the pin, {fmtDistance(away.gapM)} beyond the boundary. A clock-in from there is turned down.
+                {away.name} is {fmtDistance(away.distanceM)} from the pin, {fmtDistance(away.gapM)} beyond the boundary. A clock-in made from there with a location is turned down.
               </Txt>
             </View>
           </>

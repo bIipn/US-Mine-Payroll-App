@@ -403,6 +403,19 @@ describe('a punch with no location', () => {
     expect(s().clockIn('off')).toEqual({ ok: false, error: 'You are already clocked in.' });
     expect(s().clockIn(onSite)).toEqual({ ok: false, error: 'You are already clocked in.' });
   });
+
+  it('turns down every clock-in while no boundary is set, as the Clock screen does, and logs none', () => {
+    useStore.setState({ settings: { ...s().settings, site: null } });
+    const shifts = s().shifts.length;
+    const denied = s().denied.length;
+    const noSite = { ok: false, error: 'The mine boundary is not set, so no one can clock in yet. Ask a supervisor to set it on More, Mine boundary.' };
+    for (const where of ['off', 'approximate', 'no_fix', onSite] as const) expect(s().clockIn(where)).toEqual(noSite);
+    expect(s().shifts).toHaveLength(shifts);
+    expect(s().denied).toHaveLength(denied);
+    // Once a supervisor sets it, the same clock-in goes through.
+    useStore.setState({ settings: { ...s().settings, site: SAMPLE_SITE } });
+    expect(s().clockIn('off')).toMatchObject({ ok: true });
+  });
 });
 
 describe('equipment', () => {

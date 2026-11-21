@@ -1,6 +1,7 @@
 import {
   checkFix,
   circleAcres,
+  clockInTurnDown,
   clockInVerdict,
   destination,
   haversineM,
@@ -135,6 +136,24 @@ describe('turnDownOf', () => {
 
   it('turns down a simulated position even when it says it is inside', () => {
     expect(turnDownOf({ ...stamp({ ...north(100), accuracyM: 5 }), mocked: true })).toBe('mocked');
+  });
+});
+
+describe('clockInTurnDown', () => {
+  const stamp = (fix: RawFix) => toGeoStamp(DEFAULT_SITE, fix, 'gps');
+  const inside = stamp({ ...north(300), accuracyM: 6 });
+
+  it('turns down every clock-in while no boundary is set, with a location or without', () => {
+    for (const where of [inside, 'off', 'approximate', 'no_fix'] as const) expect(clockInTurnDown(null, where)).toBe('no_site');
+  });
+
+  it('lets a clock-in with no location through once a boundary is set, and judges a position the way turnDownOf does', () => {
+    for (const none of ['off', 'approximate', 'no_fix'] as const) expect(clockInTurnDown(DEFAULT_SITE, none)).toBeUndefined();
+    expect(clockInTurnDown(DEFAULT_SITE, inside)).toBeUndefined();
+    const town = stamp({ ...SAMPLE_SITE.town!.center, accuracyM: 5 });
+    expect(clockInTurnDown(DEFAULT_SITE, town)).toBe('outside');
+    expect(clockInTurnDown(DEFAULT_SITE, { ...inside, mocked: true })).toBe('mocked');
+    expect(clockInTurnDown(DEFAULT_SITE, stamp({ ...north(100), accuracyM: MAX_ACCURACY_M + 50 }))).toBe('weak_gps');
   });
 });
 

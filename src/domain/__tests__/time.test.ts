@@ -237,6 +237,18 @@ describe('a clock-in with no location', () => {
     expect(shiftFlags(shift({ clockIn: { at: at(6), noLocation: 'approximate' } }), at(9))).toEqual(['no_location']);
   });
 
+  it('stays flagged once the shift is missing its clock-out, until a supervisor sets the end and after', () => {
+    const late = at(6) + 16 * HOUR + MIN;
+    const open = shift({ clockIn: { at: at(6), noLocation: 'off' } });
+    expect(shiftFlags(open, late)).toEqual(['missing_out', 'no_location']);
+    // So is a simulated position on one of its punches: neither needs the clock-out to be known.
+    const mocked = shift({ lunches: [{ start: { at: at(10), geo: geo(true, { mocked: true }) }, end: { at: at(10, 30), auto: true } }] });
+    expect(shiftFlags(mocked, late)).toEqual(['missing_out', 'mock_gps']);
+    const corrected = { ...open, edits: [{ at: late, byEmployeeId: 'sup', field: 'clockOut' as const, reason: 'Forgot to clock out' }] };
+    expect(shiftFlags(corrected, late)).toEqual(['missing_out', 'edited', 'no_location']);
+    expect(shiftFlags({ ...corrected, clockOut: { at: at(14, 30) }, lunches: lunch }, late)).toEqual(['edited', 'no_location']);
+  });
+
   it('is said the same way under every state’s rules, with none of their numbers in it', () => {
     expect(FLAG_LABEL.no_location).toBe('No location');
     const help = flagHelp('no_location', CA_RULES);

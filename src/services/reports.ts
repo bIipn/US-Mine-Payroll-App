@@ -505,7 +505,8 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
     subtitle: `When each person arrived, took lunch and left. ${stamp}`,
     columns: [
       { header: 'Employee', width: 26 }, { header: 'Date', width: 12 }, { header: 'Arrived', width: 11 }, { header: 'Lunch out', width: 11 },
-      { header: 'Lunch in', width: 11 }, { header: 'Left', width: 13 }, { header: 'Hours on site', width: 13 }, { header: 'Left from the mine', width: 16 },
+      { header: 'Lunch in', width: 11 }, { header: 'Left', width: 13 }, { header: 'Hours on site', width: 13 },
+      { header: 'Arrived at the mine', width: 18 }, { header: 'Left from the mine', width: 16 },
     ],
     rows: data.shifts
       .filter((s) => within(s.clockIn.at))
@@ -517,6 +518,8 @@ export function safetyReport(data: ReportData, from: number, to: number, now: nu
           nameOf(employeeOf.get(s.employeeId)), date(s.clockIn.at), time(s.clockIn.at), time(lunch?.start.at), time(backFromLunchAt(lunch, now)),
           s.clockOut ? time(s.clockOut.at) : missing ? { v: 'MISSING', s: 'bad' } : { v: 'On site now', s: 'ok' },
           missing ? null : hrs(shiftTotals(s, now).gross),
+          // A clock-in made with no location went through without being checked against the boundary.
+          s.clockIn.geo ? (s.clockIn.geo.inside ? 'Yes' : { v: 'No', s: 'warn' }) : s.clockIn.noLocation ? { v: 'Not checked', s: 'warn' } : '',
           s.clockOut?.geo ? (s.clockOut.geo.inside ? 'Yes' : { v: 'No', s: 'warn' }) : '',
         ];
       }),

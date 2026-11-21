@@ -5,6 +5,7 @@ import { locate } from '../location';
 
 jest.mock('expo-location', () => ({
   Accuracy: { High: 4 },
+  PermissionStatus: { GRANTED: 'granted', DENIED: 'denied', UNDETERMINED: 'undetermined' },
   requestForegroundPermissionsAsync: jest.fn(),
   hasServicesEnabledAsync: jest.fn(),
   getCurrentPositionAsync: jest.fn(),
@@ -56,19 +57,37 @@ describe('one reading at the moment of a punch', () => {
     readsNothing();
   });
 
-  it('says location is off when the person turned it down, or Location Services are off', async () => {
+  it('says location is off when the person turned it down, and reads nothing', async () => {
     phone.requestForegroundPermissionsAsync.mockResolvedValue(answer(false));
-    expect(await locate(SAMPLE_SITE, 'gps')).toEqual({ ok: false, reason: 'off' });
-    readsNothing();
-    phone.requestForegroundPermissionsAsync.mockResolvedValue(answer(true, { android: { accuracy: 'fine' } }));
-    phone.hasServicesEnabledAsync.mockResolvedValue(false);
     expect(await locate(SAMPLE_SITE, 'gps')).toEqual({ ok: false, reason: 'off' });
     readsNothing();
   });
 
-  it('still reads a position when the phone cannot say whether Location Services are on', async () => {
+  it('still asks for a reading with location off for the whole phone, so the phone can offer its own switch', async () => {
+    // Android: the reading itself shows the phone's "turn on location" prompt. Turned down, the reading fails.
+    phone.requestForegroundPermissionsAsync.mockResolvedValue(answer(true, { android: { accuracy: 'fine' } }));
+    phone.hasServicesEnabledAsync.mockResolvedValue(false);
+    phone.getCurrentPositionAsync.mockRejectedValue(new Error('Location settings are not satisfied'));
+    expect(await locate(SAMPLE_SITE, 'gps')).toEqual({ ok: false, reason: 'off' });
+    expect(phone.getCurrentPositionAsync).toHaveBeenCalledTimes(1);
+    // Turned on from that prompt, the position is read as usual.
+    phone.getCurrentPositionAsync.mockResolvedValue(position(7));
+    expect(await locate(SAMPLE_SITE, 'gps')).toMatchObject({ ok: true, fix: { accuracyM: 7 } });
+  });
+
+  it('says the phone found no position when it cannot say whether Location Services are on', async () => {
     phone.hasServicesEnabledAsync.mockRejectedValue(new Error('not supported'));
     expect(await locate(SAMPLE_SITE, 'gps')).toMatchObject({ ok: true, fix: { accuracyM: 6 } });
+    phone.getCurrentPositionAsync.mockRejectedValue(new Error('Location request failed'));
+    expect(await locate(SAMPLE_SITE, 'gps')).toEqual({ ok: false, reason: 'no_fix' });
+  });
+
+  it('says a browser that was allowed but found no position on its first try found none, not that location is off', async () => {
+    // The browser asks while it reads: allowed, but no position, it answers "granted" and granted: false.
+    phone.requestForegroundPermissionsAsync.mockResolvedValue({ ...answer(false), status: 'granted' } as Location.LocationPermissionResponse);
+    expect(await locate(SAMPLE_SITE, 'gps')).toEqual({ ok: false, reason: 'no_fix' });
+    phone.requestForegroundPermissionsAsync.mockResolvedValue({ ...answer(false), status: 'undetermined' } as Location.LocationPermissionResponse);
+    expect(await locate(SAMPLE_SITE, 'gps')).toEqual({ ok: false, reason: 'off' });
   });
 
   it('takes a position from the last minute when no reading comes in 15 seconds', async () => {

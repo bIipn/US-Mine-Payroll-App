@@ -253,6 +253,22 @@ describe('safety report', () => {
     // Nothing shows a raw line id.
     expect(table(bytes, 2).some((r) => r.Line === 'fn_brakes')).toBe(false);
   });
+
+  it('says on the time on site sheet whether each arrival was checked at the mine, and that one with no location was not', () => {
+    expect(headers(report.bytes, 8).slice(-2)).toEqual(['Arrived at the mine', 'Left from the mine']);
+    const person = data.employees.find((e) => e.id === 'e03')!;
+    const shift: Shift = {
+      id: 'sh_no_location', employeeId: person.id, clockIn: { at: startOfDay(now) - 18 * HOUR, noLocation: 'off' },
+      clockOut: { at: startOfDay(now) - 9 * HOUR }, lunches: [], breaks: [],
+    };
+    const book = safetyReport({ ...data, shifts: [...data.shifts, shift] }, addDays(to, -30), to, now);
+    const arrived = (bytes: Uint8Array) => table(bytes, 8).map((r) => r['Arrived at the mine']);
+    // The sample crew clocked in on site, so every other arrival was checked.
+    expect(new Set(arrived(report.bytes))).toEqual(new Set(['Yes']));
+    const unchecked = table(book.bytes, 8).filter((r) => r['Arrived at the mine'] === 'Not checked');
+    expect(unchecked).toEqual([expect.objectContaining({ Employee: `${person.lastName}, ${person.firstName}` })]);
+    expect(arrived(book.bytes).filter((v) => v === 'Yes')).toHaveLength(arrived(report.bytes).length);
+  });
 });
 
 describe('the payroll hours file', () => {

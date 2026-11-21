@@ -120,7 +120,7 @@ export function MoreScreen() {
         <Panel flush>
           {time ? (
             <>
-              <Row testID="more-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary and GPS" sub="Where you can clock in from" chevron onPress={() => navigation.navigate('Site')} />
+              <Row testID="more-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary and GPS" sub="Where a clock-in is checked" chevron onPress={() => navigation.navigate('Site')} />
               <Divider inset={space.lg} />
             </>
           ) : null}

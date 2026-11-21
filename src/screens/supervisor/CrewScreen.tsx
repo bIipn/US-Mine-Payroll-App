@@ -178,7 +178,7 @@ export function CrewScreen() {
           <Row testID="go-sheets" left={<ListChecks color={color.ink} size={24} />} title="Area sheets" sub={`${areas.length} work ${areas.length === 1 ? 'area' : 'areas'} with a pre shift exam sheet`} chevron onPress={() => navigation.navigate('AreaSheets')} />
           {time ? <Divider inset={space.lg} /> : null}
           {time ? (
-            <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub={noSite ? 'Not set: no one can clock in yet' : 'The area people can clock in from'} chevron onPress={() => navigation.navigate('Site')} />
+            <Row testID="go-site" left={<MapPin color={color.ink} size={24} />} title="Mine boundary" sub={noSite ? 'Not set: no one can clock in yet' : 'The area a clock-in is checked against'} chevron onPress={() => navigation.navigate('Site')} />
           ) : null}
         </Panel>
       </ScrollView>

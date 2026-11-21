@@ -194,6 +194,15 @@ describe('a clock-in with no location', () => {
     expect(flagged.days.map((d) => [d.paid, d.reg, d.ot, d.dt])).toEqual(plain.days.map((d) => [d.paid, d.reg, d.ot, d.dt]));
     expect(flagged.days.filter((d) => d.flags.includes('no_location')).map((d) => ymd(d.dayStart))).toEqual(['2026-11-10']);
   });
+
+  it('is still listed for review on a shift that is missing its clock-out, which counts no hours until it is fixed', () => {
+    const open: Shift = { id: 'open', employeeId: 'e1', clockIn: { at: at(10, 6), noLocation: 'no_fix' }, lunches: [], breaks: [] };
+    const range = computeRange([worked(9, 8), open], NO_LEAVE, NOV_1, NOV_16, NOW);
+    expect(range.paid).toBe(800);
+    expect(range.needsFix).toBe(1);
+    expect(range.flagCounts).toEqual({ missing_out: 1, no_location: 1 });
+    expect(range.days.find((d) => ymd(d.dayStart) === '2026-11-10')!.flags).toEqual(['missing_out', 'no_location']);
+  });
 });
 
 describe('computePayroll', () => {

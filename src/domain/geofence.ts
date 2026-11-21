@@ -109,6 +109,20 @@ export function turnDownOf(geo: GeoStamp): TurnDown | undefined {
   return geo.accuracyM != null && geo.accuracyM > MAX_ACCURACY_M ? 'weak_gps' : 'outside';
 }
 
+/** Why a clock-in is turned down: no boundary set yet, or where the phone was (`TurnDown`). */
+export type ClockInTurnDown = 'no_site' | TurnDown;
+
+/**
+ * Why the clock-in the store is asked to make is turned down, or nothing when
+ * it goes through. With no boundary set, none goes through, with a location or
+ * without. Once one is set, a position has to be inside it (`turnDownOf`),
+ * and a clock-in with no location at all goes through, flagged for review.
+ */
+export function clockInTurnDown(site: SiteConfig | null, where: GeoStamp | NoLocation): ClockInTurnDown | undefined {
+  if (!site) return 'no_site';
+  return typeof where === 'string' ? undefined : turnDownOf(where);
+}
+
 /** What the phone gave for a punch: a position, or why it has none. */
 export type Reading = { fix: RawFix; source: GeoStamp['source'] } | { none: NoLocation };
 

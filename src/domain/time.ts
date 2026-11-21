@@ -261,9 +261,8 @@ export function shiftFlags(shift: Shift, now: number, rules: TimeRules = CA_RULE
   const first = shift.lunches[0];
 
   if (!shift.clockOut && now - shift.clockIn.at > rules.missingOutAfterMs) {
-    flags.push('missing_out');
-    if (shift.edits?.length) flags.push('edited');
-    return flags;
+    // No meal rule can be judged until a supervisor sets the end, but what the punches say still stands.
+    return ['missing_out', ...punchFlags(shift)];
   }
 
   const meal = rules.meal;
@@ -284,13 +283,17 @@ export function shiftFlags(shift: Shift, now: number, rules: TimeRules = CA_RULE
     }
   }
   if (shift.clockOut?.geo && !shift.clockOut.geo.inside) flags.push('offsite_out');
-  if (shift.edits?.length) flags.push('edited');
+  return [...flags, ...punchFlags(shift)];
+}
 
+/** What a shift's punches say, whether or not it was ever clocked out: corrected, simulated, or clocked in with no location. */
+function punchFlags(shift: Shift): ShiftFlag[] {
+  const flags: ShiftFlag[] = [];
+  if (shift.edits?.length) flags.push('edited');
   const punches = [shift.clockIn, shift.clockOut, ...shift.lunches.flatMap((l) => [l.start, l.end])];
   if (punches.some((p) => p?.geo?.mocked)) flags.push('mock_gps');
   // Only a clock-in is checked against the boundary, so only a clock-in with no location is one to review.
   if (shift.clockIn.noLocation) flags.push('no_location');
-
   return flags;
 }
 

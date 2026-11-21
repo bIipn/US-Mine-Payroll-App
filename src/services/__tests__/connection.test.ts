@@ -101,6 +101,10 @@ function answered(useStore: Loaded['store']['useStore']) {
   const receiving = state.ensureReceiving()!;
   state.applyStanding({ company: PIT_A.id, account: AVERY.id, epoch: receiving.epoch }, { role: 'supervisor', name: { firstName: 'Avery', lastName: 'Quill' } });
 }
+/** A boundary on the made-up pit, so its crew can clock in: with none set, nobody can. */
+function setSite(useStore: Loaded['store']['useStore']) {
+  useStore.setState((state) => ({ settings: { ...state.settings, site: { name: 'Test Pit A', center: { lat: 1, lng: 1 }, radiusM: 1000 } } }));
+}
 const settle = async () => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 };
@@ -177,6 +181,7 @@ describe('which builds connect', () => {
     const pushes = fakeServer();
     const { useStore } = app.store;
     useStore.getState().ensureSeeded();
+    setSite(useStore);
     // What the preview controls make up: opened as the owner with no account, "at the mine", the clock-in moved back.
     expect(useStore.getState().openAsOwner()).toEqual({ ok: true });
     const fake = { lat: 1, lng: 1, accuracyM: 6, distanceM: 10, inside: true, source: 'demo' as const };
@@ -218,6 +223,7 @@ describe('a build that connects', () => {
     const app = build(CONNECTS);
     const { useStore } = app.store;
     useStore.getState().ensureSeeded();
+    setSite(useStore);
     expect(useStore.getState().openAsOwner({ firstName: 'Avery', lastName: 'Quill' })).toMatchObject({ ok: false });
     expect(useStore.getState().signInWithProvider('google', 'Blake', 'Rook')).toMatchObject({ ok: false, error: 'Sign in with your email and password.' });
     expect(useStore.getState().signInWithProvider('apple', 'Avery', 'Quill')).toMatchObject({ ok: false });
@@ -290,6 +296,7 @@ describe('a build that connects', () => {
     fakeServer();
     const { useStore } = app.store;
     useStore.getState().ensureSeeded();
+    setSite(useStore);
     useStore.getState().connectCompany(PIT_A, AVERY);
     const stopSync = app.sync.startSync();
     const stop = app.connection.watchConnection();
@@ -309,6 +316,7 @@ describe('a build that connects', () => {
     const pushes = fakeServer();
     const { useStore } = app.store;
     useStore.getState().ensureSeeded();
+    setSite(useStore);
     useStore.getState().connectCompany(PIT_A, AVERY);
     const stopSync = app.sync.startSync();
     const stop = app.connection.watchConnection();

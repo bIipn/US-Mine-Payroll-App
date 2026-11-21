@@ -12,12 +12,16 @@ export type LocateResult =
 
 const GPS_TIMEOUT_MS = 15_000;
 
-/** Whether Location Services are on for the whole phone. A phone that cannot say is taken to have them on. */
-async function servicesOn(): Promise<boolean> {
+/**
+ * Why a reading the app was allowed to take gave no position: location is off
+ * for the whole phone, or it is on and found none. A phone that cannot say
+ * whether it is on is taken to have found none.
+ */
+async function whyNoPosition(): Promise<NoLocation> {
   try {
-    return await Location.hasServicesEnabledAsync();
+    return (await Location.hasServicesEnabledAsync()) ? 'no_fix' : 'off';
   } catch {
-    return true;
+    return 'no_fix';
   }
 }
 
@@ -28,7 +32,10 @@ async function servicesOn(): Promise<boolean> {
  * anyone in the background: a position is read when a button is pressed,
  * stamped on that punch, and that is all. When the person allows only an
  * approximate location, no position is read at all: one that vague cannot be
- * checked against the boundary.
+ * checked against the boundary. With location off for the whole phone the
+ * reading is still asked for, so the phone can offer its own one-tap switch
+ * (Android does, as part of the reading); only once it fails does the answer
+ * say location is off.
  */
 export async function locate(site: SiteConfig | null, setting: DemoLocation): Promise<LocateResult> {
   // Simulated GPS is for a preview only. A build that keeps real records reads the phone's own,
@@ -46,12 +53,14 @@ export async function locate(site: SiteConfig | null, setting: DemoLocation): Pr
 
   try {
     const permission = await Location.requestForegroundPermissionsAsync();
-    if (!permission.granted) return { ok: false, reason: 'off' };
+    // Turned down for the app (an iPhone with Location Services off says the same).
+    if (permission.status !== Location.PermissionStatus.GRANTED) return { ok: false, reason: 'off' };
+    // A browser asks as it reads: allowed, but with no position on that first try, it says granted: false.
+    if (!permission.granted) return { ok: false, reason: 'no_fix' };
     // iPhone: Precise Location turned off. Android: approximate location only.
     if (permission.ios?.accuracy === 'reduced' || permission.android?.accuracy === 'coarse') {
       return { ok: false, reason: 'approximate' };
     }
-    if (!(await servicesOn())) return { ok: false, reason: 'off' };
 
     const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), GPS_TIMEOUT_MS));
     const reading = await Promise.race([
@@ -59,7 +68,7 @@ export async function locate(site: SiteConfig | null, setting: DemoLocation): Pr
       timeout,
     ]);
     const position = reading ?? (await Location.getLastKnownPositionAsync({ maxAge: 60_000 }));
-    if (!position) return { ok: false, reason: 'no_fix' };
+    if (!position) return { ok: false, reason: await whyNoPosition() };
 
     return {
       ok: true,
@@ -72,6 +81,6 @@ export async function locate(site: SiteConfig | null, setting: DemoLocation): Pr
       },
     };
   } catch {
-    return { ok: false, reason: 'no_fix' };
+    return { ok: false, reason: await whyNoPosition() };
   }
 }
