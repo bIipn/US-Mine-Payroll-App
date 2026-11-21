@@ -385,15 +385,17 @@ describe('deleting the company sign-in', () => {
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
-  it('reads what the server answered, and a call that never reached it', async () => {
+  const gone = { data: { user: null }, error: { name: 'AuthApiError', code: 'user_not_found', status: 403, message: 'User from sub claim in JWT does not exist' } };
+  const there = { data: { user: AVERY }, error: null };
+  const fetchFailed = { data: null, error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' } };
+
+  it('reads what the server answered', async () => {
     const cases: [unknown, unknown][] = [
       [httpError(409, { error: 'last_supervisor', companies: [{ id: 'c-a', name: 'Test Pit A', successors: [] }] }), { kind: 'last_supervisor', companies: ['Test Pit A'] }],
       [httpError(403, { error: 'password_needed' }), { kind: 'password_needed' }],
-      [httpError(401, { error: 'signed_out' }), { kind: 'already_deleted' }],
+      [httpError(410, { error: 'already_deleted' }), { kind: 'already_deleted' }],
       [httpError(500, { error: 'try_again', closed: [] }), { kind: 'try_again', closed: [] }],
       [httpError(404, { code: 'NOT_FOUND' }), { kind: 'not_ready' }],
-      [{ data: null, error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' } }, { kind: 'unreachable' }],
-      [{ data: null, error: { name: 'FunctionsRelayError', message: 'Relay Error invoking the Edge Function' } }, { kind: 'unreachable' }],
       [{ data: { deleted: false }, error: null }, { kind: 'try_again', closed: [] }],
     ];
     for (const [reply, answer] of cases) {
@@ -401,14 +403,71 @@ describe('deleting the company sign-in', () => {
       mockInvoke.mockResolvedValueOnce(reply);
       expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer });
     }
+    expect(mockAuth.getUser).not.toHaveBeenCalled();
+  });
+
+  it('asks Supabase Auth before it says a plain 401 means deleted: never a deletion on its word alone', async () => {
+    // The function turned the session down before deleting anything. Still there: nothing was deleted.
+    signedIn();
+    mockInvoke.mockResolvedValueOnce(httpError(401, { error: 'signed_out' }));
+    mockAuth.getUser.mockResolvedValueOnce(there);
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toEqual({
+      ok: false,
+      answer: { kind: 'try_again', closed: [] },
+      error: 'MineMuster’s server could not delete your account just now. Nothing was deleted. Try again in a few minutes.',
+    });
+    // Nobody can tell: still nothing was deleted by this request.
+    signedIn();
+    mockInvoke.mockResolvedValueOnce(httpError(401, { message: 'Invalid JWT' }));
+    mockAuth.getUser.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer: { kind: 'try_again' } });
+    // Gone: deleted from somewhere else.
+    signedIn();
+    mockInvoke.mockResolvedValueOnce(httpError(401, { error: 'signed_out' }));
+    mockAuth.getUser.mockResolvedValueOnce(gone);
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer: { kind: 'already_deleted' } });
+  });
+
+  it('when the request may have gone with no answer, says deleted only once Supabase Auth has no such account, and never that nothing was deleted', async () => {
+    const unanswered: unknown[] = [
+      fetchFailed,
+      { data: null, error: { name: 'FunctionsRelayError', message: 'Relay Error invoking the Edge Function' } },
+      httpError(504, { error: 'not_known', closed: [] }),
+    ];
+    for (const reply of unanswered) {
+      signedIn();
+      mockInvoke.mockResolvedValueOnce(reply);
+      mockAuth.getUser.mockResolvedValueOnce(gone);
+      expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toEqual({ ok: true, closed: [] });
+
+      signedIn();
+      mockInvoke.mockResolvedValueOnce(reply);
+      mockAuth.getUser.mockResolvedValueOnce(there);
+      const still = await server.deleteAccount('avery@example.com', 'haulroad88');
+      expect(still).toMatchObject({ ok: false, answer: { kind: 'not_known', closed: [] } });
+      expect(still.ok ? '' : still.error).not.toMatch(/Nothing was deleted/);
+    }
+    // The phone gave up waiting (its own timeout aborts the call), and Auth cannot be asked either.
     signedIn();
     mockInvoke.mockRejectedValueOnce(new Error('The operation was aborted.'));
-    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer: { kind: 'unreachable' } });
+    mockAuth.getUser.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, answer: { kind: 'not_known' } });
+    // The companies closed before the answer was lost are still said.
+    signedIn();
+    mockInvoke.mockResolvedValueOnce(httpError(504, { error: 'not_known', closed: ['c-a'] }));
+    mockAuth.getUser.mockResolvedValueOnce(gone);
+    expect(await server.deleteAccount('avery@example.com', 'haulroad88')).toEqual({ ok: true, closed: ['c-a'] });
   });
 
   it('reads what deleting the account means in each company, with a session only', async () => {
-    mockRpc.mockResolvedValueOnce({ data: [{ id: 'c-a', name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [], running: 0 }], error: null });
-    expect(await server.deletionCheck()).toEqual({ ok: true, companies: [{ id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], running: 0 }] });
+    mockRpc.mockResolvedValueOnce({
+      data: [{ id: 'c-a', name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [], can_close: true, close_from: null, running: 0 }],
+      error: null,
+    });
+    expect(await server.deletionCheck()).toEqual({
+      ok: true,
+      companies: [{ id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], canClose: true, closeFrom: null, running: 0 }],
+    });
     expect(mockRpc).toHaveBeenCalledWith('account_deletion_check');
     mockRpc.mockResolvedValueOnce({ data: { not: 'a list' }, error: null });
     expect(await server.deletionCheck()).toMatchObject({ ok: false });

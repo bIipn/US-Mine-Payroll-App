@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { CloudUpload, Eye, EyeOff, OctagonAlert, TriangleAlert, UserX } from '../../components/icons';
+import { CloudUpload, Eye, EyeOff, OctagonAlert, RotateCcw, TriangleAlert, UserX } from '../../components/icons';
 import { Button, Field, IconButton, Notice, Page, Panel, Sheet, Txt } from '../../components/ui';
 import { ACCOUNT_PAGE, DELETED_TOAST, deletionPlan, LOCAL_CONFIRM, PASSWORD_HINT, whoseSignIn, type Blocker, type DeletionCheckCompany } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
@@ -20,12 +20,18 @@ import { fmtDate, fmtTime } from '../../util/format';
  * phone, before anything is deleted. The company sign-in is deleted on MineMuster's server first,
  * when it is the person's own, and then the account on the phone; if the server does not delete it,
  * nothing on the phone is touched. In every build: an account kept on the phone alone is deleted
- * here too. The server is reached only through `src/services/connection.ts`.
+ * here too. With `signInOnly` (from Company account) only the company sign-in is deleted, and nothing
+ * of whoever is signed in to the app. The server is reached only through `src/services/connection.ts`.
+ * Once the account on the phone is deleted the session ends, and the navigator takes this screen off
+ * with the rest of the signed-in view.
  */
-export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>) {
-  const me = useMe() ?? null;
+export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAccount'>) {
+  const signInOnly = !!route.params?.signInOnly;
+  const signedIn = useMe() ?? null;
+  const me = signInOnly ? null : signedIn;
   const session = useStore((s) => s.session);
-  const account = useStore((s) => s.accounts.find((a) => a.id === s.session?.accountId)) ?? null;
+  const signedInAccount = useStore((s) => s.accounts.find((a) => a.id === s.session?.accountId)) ?? null;
+  const account = signInOnly ? null : signedInAccount;
   const accounts = useStore((s) => s.accounts);
   const company = useStore((s) => s.settings.company);
   const shifts = useStore((s) => s.shifts);
@@ -36,7 +42,7 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
   const receiving = useStore((s) => s.receiving);
   const { known, account: serverAccount } = useServerAccount();
   const sync = useSyncStatus();
-  const [check, setCheck] = useState<DeletionCheckCompany[] | 'checking' | 'unknown'>('unknown');
+  const [check, setCheck] = useState<DeletionCheckCompany[] | 'checking' | 'unknown' | 'failed'>('unknown');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [asking, setAsking] = useState(false);
@@ -47,7 +53,7 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
   const now = Date.now();
   const standing = receiving ? { role: receiving.role, name: receiving.name } : null;
   const signedInServer = CAN_CONNECT ? (known ? serverAccount : undefined) : null;
-  const signIn = whoseSignIn({ canConnect: CAN_CONNECT, linked, standing, serverAccount: signedInServer, me });
+  const signIn = whoseSignIn({ canConnect: CAN_CONNECT, linked, standing, serverAccount: signedInServer, me, account });
 
   // What deleting the company sign-in means in each of its companies, asked of the server when it is theirs.
   const askFor = signIn.kind === 'theirs' && sync.online ? serverAccount?.id ?? null : null;
@@ -57,7 +63,7 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
     let live = true;
     setCheck('checking');
     void server.deletionCheck().then((result) => {
-      if (live) setCheck(result.ok ? result.companies : 'unknown');
+      if (live) setCheck(result.ok ? result.companies : 'failed');
     });
     return () => {
       live = false;
@@ -79,14 +85,15 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
     openShift: me ? openShiftOf(shifts, me.id, now) : undefined,
     staleShift: me ? staleShiftOf(shifts, me.id, now) : undefined,
     openUnit: myLog ? equipment.find((e) => e.id === myLog.equipmentId)?.unit ?? null : null,
-    hasRate: rate != null,
+    hasRate: !signInOnly && rate != null,
     canConnect: CAN_CONNECT,
     linked,
     standing,
     serverAccount: signedInServer,
     otherAccounts: session ? accounts.filter((a) => a.id !== session.accountId).length : accounts.length,
     othersOnClock,
-    sync: { online: sync.online, waiting: sync.waiting, notTaken: sync.notTaken, stuck: sync.stuck },
+    caughtUp: receiving?.caughtUpAt != null,
+    sync: { online: sync.online, waiting: sync.waiting, notTaken: sync.notTaken, stuck: sync.stuck, trouble: sync.trouble },
     check,
     fmtTime,
     fmtDay: fmtDate,
@@ -104,9 +111,15 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
         setProblem({ error: done.error });
         return;
       }
-    } else {
-      navigation.goBack();
+      haptic.success();
+      // Said to be cleared, and not: something reached this phone, or is waiting, since the screen said so.
+      store.showToast(
+        plan.clearsPhone && !done.cleared ? `${DELETED_TOAST} This phone was not cleared: it holds records that have not reached the company yet.` : DELETED_TOAST,
+        plan.clearsPhone && !done.cleared ? 'warn' : 'ok',
+      );
+      return;
     }
+    navigation.goBack();
     haptic.success();
     store.showToast(DELETED_TOAST);
   };
@@ -170,6 +183,9 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
       );
     }
     if (blocker.action === 'reset') return <Button testID="delete-back" label="Back to More" kind="outline" size="md" onPress={() => navigation.goBack()} style={styles.noticeButton} />;
+    if (blocker.action === 'retry') {
+      return <Button testID="delete-check-retry" label="Try again" icon={RotateCcw} kind="outline" size="md" onPress={() => setTries((n) => n + 1)} style={styles.noticeButton} />;
+    }
     return null;
   };
 
@@ -208,7 +224,7 @@ export function DeleteAccountScreen({ navigation }: ScreenProps<'DeleteAccount'>
         ) : null}
 
         {plan.keeps.length ? (
-          <Panel title={`What stays with ${company.name || linked?.name || 'your company'}`}>
+          <Panel title={plan.keepsTitle}>
             <View style={styles.lines} testID="delete-what-stays">
               {plan.keeps.map((line) => (
                 <Txt key={line} v="body">{line}</Txt>

@@ -35,8 +35,12 @@ export type RootStackParamList = {
   Company: undefined;
   /** Signing this phone in to the company's server, and connecting it. Only in a build that names a server. */
   CompanyAccount: undefined;
-  /** Delete my account: the account on this phone, and the person's own company sign-in with it. */
-  DeleteAccount: undefined;
+  /**
+   * Delete my account: the account on this phone, and the person's own company sign-in with it. With
+   * `signInOnly`, from Company account: the company sign-in alone, with its password, and nothing of
+   * whoever is signed in to the app.
+   */
+  DeleteAccount: { signInOnly?: true } | undefined;
 };
 
 export type TabParamList = {

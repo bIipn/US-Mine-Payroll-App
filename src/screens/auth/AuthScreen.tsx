@@ -9,6 +9,7 @@ import { Button, Divider, Field, IconButton, Notice, Row, Segmented, Sheet, Txt 
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
 import { DELETED_TOAST, offRosterWords } from '../../domain/accountDeletion';
+import { keepsTime } from '../../domain/company';
 import { findOnRoster } from '../../domain/roster';
 import { receiveWords } from '../../domain/sync';
 import type { AuthProvider, Role } from '../../domain/types';
@@ -55,7 +56,8 @@ export function AuthScreen() {
   const employees = useStore((s) => s.employees);
   const sync = useSyncStatus();
   const caughtUp = !!receiving?.caughtUpAt;
-  const joinedAs = caughtUp && receiving?.role !== 'none' ? receiving?.name ?? null : null;
+  // Only while the phone is joined: once its sign-in is gone, nothing here goes by that sign-in's name.
+  const joinedAs = linked && caughtUp && receiving?.role !== 'none' ? receiving?.name ?? null : null;
   /** A phone joined with a crew sign-in holds that person's account only: the name is theirs. */
   const nameFixed = !!joinedAs && receiving?.role === 'employee';
 
@@ -99,7 +101,17 @@ export function AuthScreen() {
     setPasswordText(text);
     setOffRoster(false);
   };
-  const offRosterSheet = offRosterWords(email.trim().toLowerCase(), company.name || linked?.name || '');
+  // The hourly rate of the account typed, when one is on this phone.
+  const typedHasRate = useStore((s) => {
+    const typed = s.accounts.find((a) => a.email === email.trim().toLowerCase());
+    return !!typed && s.payRates[typed.employeeId] != null;
+  });
+  const offRosterSheet = offRosterWords({
+    email: email.trim().toLowerCase(),
+    company: company.name || linked?.name || '',
+    keepsTime: keepsTime(company),
+    hasRate: typedHasRate,
+  });
 
   const [provider, setProvider] = useState<Provider | null>(null);
   const [providerFirst, setProviderFirst] = useState('');
@@ -413,6 +425,7 @@ export function AuthScreen() {
 
       <Sheet testID="auth-delete-sheet" visible={askingDelete} onClose={() => setAskingDelete(false)} title={offRosterSheet.title}>
         <Txt v="body" c={color.inkSoft}>{offRosterSheet.body}</Txt>
+        <Txt v="small" c={color.silica} testID="auth-delete-legal">{offRosterSheet.legal}</Txt>
         <Button
           testID="auth-delete-confirm"
           label={offRosterSheet.confirm}

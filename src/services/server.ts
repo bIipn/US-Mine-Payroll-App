@@ -384,13 +384,17 @@ export async function deletionCheck(): Promise<Done<{ companies: DeletionCheckCo
   }
 }
 
-/** Whether Supabase Auth no longer knows the account of the session this phone holds: it was deleted. */
-async function accountGone(): Promise<boolean> {
+/**
+ * Whether Supabase Auth still has the account of the session this phone holds: 'gone' once it was
+ * deleted, 'there' while it has it, and 'unknown' when it could not say.
+ */
+async function accountState(): Promise<'gone' | 'there' | 'unknown'> {
   try {
-    const { error } = await api().auth.getUser();
-    return problemOf(error).code === 'user_not_found';
+    const { data, error } = await api().auth.getUser();
+    if (!error && data.user) return 'there';
+    return problemOf(error).code === 'user_not_found' ? 'gone' : 'unknown';
   } catch {
-    return false;
+    return 'unknown';
   }
 }
 
@@ -411,26 +415,36 @@ export async function deleteAccount(email: string, password: string): Promise<{ 
       if (problem.name === 'AuthRetryableFetchError' || problem.status === 0) return fail({ kind: 'unreachable' });
       if (problem.status === 429 || problem.code === 'over_request_rate_limit') return fail({ kind: 'too_many' });
       // Supabase Auth answers a deleted account's password as it answers a wrong one.
-      return fail((await accountGone()) ? { kind: 'already_deleted' } : { kind: 'wrong_password' });
+      return fail((await accountState()) === 'gone' ? { kind: 'already_deleted' } : { kind: 'wrong_password' });
     }
   } catch {
     return fail({ kind: 'unreachable' });
   }
+  // What the person is told has to be true. An answer that does not say whether the account is still
+  // there is checked with Supabase Auth first: gone is deleted, and "Nothing was deleted" only when
+  // nothing can have been.
+  const settle = async (answer: DeletionAnswer) => {
+    if (answer.kind === 'deleted') return { ok: true as const, closed: answer.closed };
+    if (answer.kind === 'signed_out') {
+      // Turned down before anything was deleted: gone means it went from somewhere else.
+      return fail((await accountState()) === 'gone' ? { kind: 'already_deleted' } : { kind: 'try_again', closed: [] });
+    }
+    if (answer.kind === 'not_known') return (await accountState()) === 'gone' ? { ok: true as const, closed: answer.closed } : fail(answer);
+    return fail(answer);
+  };
   try {
     const { data, error } = await api().functions.invoke('delete-account', { body: {}, timeout: DELETE_TIMEOUT_MS });
-    if (!error) {
-      const answer = readDeletionAnswer(200, data);
-      return answer.kind === 'deleted' ? { ok: true, closed: answer.closed } : fail(answer);
-    }
+    if (!error) return settle(readDeletionAnswer(200, data));
     const reply = (error as { name?: unknown; context?: unknown }).context as { status?: unknown; json?: () => Promise<unknown> } | undefined;
     if ((error as { name?: unknown }).name === 'FunctionsHttpError' && reply && typeof reply.status === 'number') {
       const body = typeof reply.json === 'function' ? await reply.json().catch(() => null) : null;
-      return fail(readDeletionAnswer(reply.status, body));
+      return settle(readDeletionAnswer(reply.status, body));
     }
-    // FunctionsFetchError or FunctionsRelayError: the request did not reach the function, or got no answer.
-    return fail({ kind: 'unreachable' });
+    // FunctionsFetchError (no answer, or the phone gave up waiting) or FunctionsRelayError: the request
+    // may have reached the function, so whether the sign-in was deleted is not known yet.
+    return settle({ kind: 'not_known', closed: [] });
   } catch {
-    return fail({ kind: 'unreachable' });
+    return settle({ kind: 'not_known', closed: [] });
   }
 }
 

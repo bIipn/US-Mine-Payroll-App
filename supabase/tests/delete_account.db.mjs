@@ -3,8 +3,10 @@
 // /auth/v1/user and its admin delete, and PostgREST's /rest/v1/rpc/*, each passed to a local database.
 // Auth answers the way Supabase Auth v2.198.0 answered on the private local scan stack
 // (scripts/security-scan/stack), 20 November 2026: no token 401 no_authorization; a token it did not
-// sign 403 bad_jwt; a deleted account's token 403 user_not_found; the admin delete 200 {} when it goes
-// through, and 500 carrying the database's own code (23514) when the last-supervisor guard refuses it.
+// sign 403 bad_jwt; a deleted account's token 403 user_not_found; a signed-out session's token 403
+// session_not_found; the admin delete 200 {} when it goes through, and 500 carrying the database's own
+// code (23514) when the last-supervisor guard refuses it. Supabase's gateway, which refuses a key before
+// Auth sees the request, answers 401 with a message and no error_code.
 // Its access token's amr is [{ method: 'password', timestamp }], the sign-in's time, kept through every
 // refresh of that session.
 //
@@ -16,7 +18,7 @@ import { after, before, describe, it } from 'node:test';
 import { join, newMember, secondSupervisor, startCompany, startDatabase } from './harness.mjs';
 
 const FUNCTION = new URL('../functions/delete-account/', import.meta.url);
-const { ALLOWED_ORIGIN, MAX_CLOSE, PASSWORD_FRESH_SECONDS, makeHandler, passwordTypedAt } = await import(new URL('handler.ts', FUNCTION));
+const { ALLOWED_ORIGIN, MAX_BODY_BYTES, MAX_CLOSE, PASSWORD_FRESH_SECONDS, makeHandler, passwordTypedAt } = await import(new URL('handler.ts', FUNCTION));
 const { keyHeaders, publishableKeyFrom, serverFrom } = await import(new URL('../functions/_shared/server.ts', import.meta.url));
 
 const URL_ = 'https://project.example.test';
@@ -45,16 +47,22 @@ function supabase({ clock }) {
   const tokens = new Map();
   const calls = [];
   let adminAnswer = null;
+  let userAnswer = null;
   const fetch = async (url, init = {}) => {
     const { pathname } = new URL(url);
     const headers = new Headers(init.headers);
     calls.push({ method: init.method ?? 'GET', path: pathname, apikey: headers.get('apikey'), authorization: headers.get('authorization'), body: init.body ?? null });
     if (pathname === '/auth/v1/user') {
       assert.equal(headers.get('apikey'), PUBLISHABLE, 'Auth is asked with the publishable key');
+      if (userAnswer) {
+        const answer = await userAnswer();
+        if (answer) return answer;
+      }
       const token = bearer(headers);
       if (!token) return json(401, { code: 401, error_code: 'no_authorization', msg: 'This endpoint requires a valid Bearer token' });
       const held = tokens.get(token);
       if (!held) return json(403, { code: 403, error_code: 'bad_jwt', msg: 'invalid JWT: unable to parse or verify signature' });
+      if (held.signedOut) return json(403, { code: 403, error_code: 'session_not_found', msg: 'Session from session_id claim in JWT does not exist' });
       const [user] = await db.adminRows('select id, email from auth.users where id = $1', [held.sub]);
       if (!user) return json(403, { code: 403, error_code: 'user_not_found', msg: 'User from sub claim in JWT does not exist' });
       return json(200, { id: user.id, aud: 'authenticated', role: 'authenticated', email: user.email });
@@ -65,8 +73,14 @@ function supabase({ clock }) {
       const held = tokens.get(bearer(headers) ?? '');
       if (!held) return json(401, { code: 'PGRST301', message: 'JWT could not be decoded' });
       const name = pathname.slice('/rest/v1/rpc/'.length);
+      // The token's amr goes to the database as request.jwt.claims, as PostgREST hands it over. The
+      // database keeps real time and these tests a clock of their own, so each time is moved by the
+      // difference: the sign-in is as old to the database as it is to the function.
+      const shift = Math.floor(Date.now() / 1000) - Math.floor(clock.now / 1000);
+      const amr =
+        held.databaseAmr ?? (Array.isArray(held.amr) ? held.amr.map((e) => (e && typeof e.timestamp === 'number' ? { ...e, timestamp: e.timestamp + shift } : e)) : held.amr);
       try {
-        const result = await db.as(held.sub).call(name, JSON.parse(init.body || '{}'));
+        const result = await db.as(held.sub, amr === undefined ? {} : { amr }).call(name, JSON.parse(init.body || '{}'));
         return result === '' || result === null ? json(204) : json(200, result);
       } catch (error) {
         return json(statusOf(error.code), { code: error.code, message: error.message, details: null, hint: error.hint ?? null });
@@ -90,16 +104,27 @@ function supabase({ clock }) {
     }
     return json(404, { message: 'no such route' });
   };
-  /** An access token for an account, as Supabase Auth signs one at a password sign-in this many seconds ago. */
-  const tokenFor = (sub, { typedAgo = 5, amr, noAmr = false } = {}) => {
+  /**
+   * An access token for an account, as Supabase Auth signs one at a password sign-in this many seconds
+   * ago. `databaseAmr` is the amr the database is handed instead, on its own clock.
+   */
+  const tokenFor = (sub, { typedAgo = 5, amr, noAmr = false, databaseAmr } = {}) => {
     const at = Math.floor(clock.now / 1000) - typedAgo;
     const claims = { sub, aud: 'authenticated', role: 'authenticated', iat: at, exp: at + 3600, session_id: randomUUID(), aal: 'aal1' };
     if (!noAmr) claims.amr = amr ?? [{ method: 'password', timestamp: at }];
     const token = `${b64({ alg: 'ES256', typ: 'JWT', kid: 'test' })}.${b64(claims)}.${randomBytes(32).toString('base64url')}`;
-    tokens.set(token, { sub });
+    tokens.set(token, { sub, amr: claims.amr, databaseAmr });
     return token;
   };
-  return { fetch, calls, tokenFor, answerAdminWith: (f) => (adminAnswer = f) };
+  return {
+    fetch,
+    calls,
+    tokenFor,
+    /** The session is signed out: Auth turns its token down, and PostgREST still takes it until it expires. */
+    signOut: (token) => (tokens.get(token).signedOut = true),
+    answerAdminWith: (f) => (adminAnswer = f),
+    answerUserWith: (f) => (userAnswer = f),
+  };
 }
 
 const said = { logs: [], bodies: [] };
@@ -176,6 +201,71 @@ describe('the request', () => {
     assert.deepEqual(auth.calls.map((c) => c.path), ['/auth/v1/user']);
   });
 
+  it('answers 413, reading no further, for a body said to be or found larger than 16 KB', async () => {
+    assert.equal(MAX_BODY_BYTES, 16_384);
+    const { ask, auth } = handler();
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const riley = await newMember(db, company, 'Riley', 'Quinn');
+    const token = auth.tokenFor(riley);
+    // Said to be larger: none of it is read.
+    let pulled = 0;
+    // highWaterMark 0: a chunk is made only when someone reads.
+    const endless = () =>
+      new ReadableStream(
+        {
+          pull(controller) {
+            pulled += 1024;
+            controller.enqueue(new Uint8Array(1024).fill(32));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+    const big = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const declared = await ask(new Request(ENDPOINT, { method: 'POST', headers: { ...big, 'Content-Length': String(MAX_BODY_BYTES + 1) }, body: endless(), duplex: 'half' }));
+    assert.deepEqual([declared.status, declared.body.error, pulled], [413, 'too_large', 0]);
+    // Not said, and longer than it may be: read up to the limit and no further.
+    const streamed = await ask(new Request(ENDPOINT, { method: 'POST', headers: big, body: endless(), duplex: 'half' }));
+    assert.deepEqual([streamed.status, streamed.body.error], [413, 'too_large']);
+    assert.ok(pulled <= MAX_BODY_BYTES + 2 * 1024, `read ${pulled} bytes`);
+    const long = await ask(post(token, null, { raw: `{${' '.repeat(MAX_BODY_BYTES)}}` }));
+    assert.deepEqual([long.status, long.body.error], [413, 'too_large']);
+    const malformed = await ask(new Request(ENDPOINT, { method: 'POST', headers: { ...big, 'Content-Length': 'lots' }, body: '{}' }));
+    assert.deepEqual([malformed.status, malformed.body.error], [400, 'bad_request']);
+    assert.deepEqual(auth.calls, [], 'Auth is not asked about a body that is turned back');
+    // At the limit exactly, it is read: padded {} is a plain deletion.
+    const exact = await ask(post(token, null, { raw: `{${' '.repeat(MAX_BODY_BYTES - 2)}}` }));
+    assert.deepEqual([exact.status, exact.body], [200, { deleted: true, closed: [] }]);
+  });
+
+  it('answers by Supabase Auth’s own reason: 410 for an account it no longer has, 401 for a session signed out, 500 when the key is refused', async () => {
+    const { ask, auth, logged } = handler();
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const riley = await newMember(db, company, 'Riley', 'Quinn');
+    const signedOut = auth.tokenFor(riley);
+    auth.signOut(signedOut);
+    const out = await ask(post(signedOut, {}));
+    assert.deepEqual([out.status, out.body.error], [401, 'signed_out']);
+
+    // The gateway turns the key down before Auth sees the request: a setup problem, never a deletion.
+    auth.answerUserWith(() => json(401, { message: 'Invalid API key', hint: 'Double check your Supabase `anon` or `service_role` API key.' }));
+    const refused = await ask(post(auth.tokenFor(riley), {}));
+    assert.deepEqual([refused.status, refused.body.error], [500, 'not_set_up']);
+    assert.match(logged.at(-1), /no reason of its own \(401\)/);
+    auth.answerUserWith(() => json(503, { message: 'upstream connect error' }));
+    const down = await ask(post(auth.tokenFor(riley), {}));
+    assert.deepEqual([down.status, down.body.error], [500, 'try_again']);
+    auth.answerUserWith(null);
+    assert.deepEqual(adminDeletes(auth.calls), []);
+    assert.ok(await accountExists(riley));
+
+    // Deleted from somewhere else: the token's signature still checks out, and the account is gone.
+    const before = auth.tokenFor(riley);
+    await db.admin('delete from auth.users where id = $1', [riley]);
+    const gone = await ask(post(before, {}));
+    assert.deepEqual([gone.status, gone.body.error], [410, 'already_deleted']);
+    assert.deepEqual(adminDeletes(auth.calls), []);
+  });
+
   it('turns back a body that names an account, or anything but the companies to close, and deletes nothing', async () => {
     const { ask, auth } = handler();
     const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }, { first: 'Lee', last: 'Park' }] });
@@ -198,7 +288,7 @@ describe('the request', () => {
       const answer = await ask(post(token, body));
       assert.deepEqual([answer.status, answer.body.error], [400, 'bad_request'], JSON.stringify(body).slice(0, 80));
     }
-    for (const raw of ['[]', 'null', '"x"', 'not json', '{"close": [}', 'x'.repeat(20000)]) {
+    for (const raw of ['[]', 'null', '"x"', 'not json', '{"close": [}', '{"close": [] }\u0000']) {
       const answer = await ask(post(token, null, { raw }));
       assert.deepEqual([answer.status, answer.body.error], [400, 'bad_request'], raw.slice(0, 20));
     }
@@ -297,8 +387,10 @@ describe('deleting', () => {
     const [kept] = await db.adminRows("select created_by from public.records where company_id = $1 and kind = 'shift' and id = 'sh-1'", [company.id]);
     assert.deepEqual(kept, { created_by: null });
 
+    // The same token again: Auth has checked its signature and has no such account, so it is deleted already.
     const again = await ask(post(token, {}));
-    assert.deepEqual([again.status, again.body.error], [401, 'signed_out']);
+    assert.deepEqual([again.status, again.body.error], [410, 'already_deleted']);
+    assert.equal(adminDeletes(auth.calls).length, 1);
   });
 
   it('answers 409 for a company’s last supervisor, naming who could take over, and deletes nothing', async () => {
@@ -308,7 +400,14 @@ describe('deleting', () => {
     const answer = await ask(post(auth.tokenFor(company.owner), {}));
     assert.equal(answer.status, 409);
     assert.deepEqual(answer.body.companies, [
-      { id: company.id, name: 'Test Pit A', successors: [{ roster_id: company.rows['Riley J Quinn'], first_name: 'Riley J', last_name: 'Quinn' }] },
+      {
+        id: company.id,
+        name: 'Test Pit A',
+        successors: [{ roster_id: company.rows['Riley J Quinn'], first_name: 'Riley J', last_name: 'Quinn' }],
+        can_close: false,
+        close_from: null,
+        running: 0,
+      },
     ]);
     assert.equal(answer.body.error, 'last_supervisor');
     assert.deepEqual(adminDeletes(auth.calls), []);
@@ -394,6 +493,73 @@ describe('deleting', () => {
     assert.equal(raced.body.error, 'last_supervisor');
     assert.deepEqual(raced.body.companies.map((c) => c.name), ['Test Pit R']);
     assert.ok(await accountExists(pit.owner));
+  });
+
+  it('does not close a company while someone taken off lately could come back, and says from when', async () => {
+    const { ask, auth } = handler();
+    const company = await startCompany(db, { name: 'Test Pit W', roster: [{ first: 'Lee', last: 'Park' }] });
+    await newMember(db, company, 'Lee', 'Park');
+    await db.as(company.owner).query('update public.roster set active = false where id = $1', [company.rows['Lee Park']]);
+    // Deleting without closing: the last supervisor, nobody to hand over to, and not yet a company to close.
+    const asked = await ask(post(auth.tokenFor(company.owner), {}));
+    assert.equal(asked.status, 409);
+    const [named] = asked.body.companies;
+    assert.deepEqual([named.name, named.successors, named.can_close], ['Test Pit W', [], false]);
+    const thirtyDays = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    assert.ok(Math.abs(Date.parse(named.close_from) - thirtyDays) < 60_000, named.close_from);
+    const closing = await ask(post(auth.tokenFor(company.owner), { close: [{ company_id: company.id, name: 'Test Pit W' }] }));
+    assert.deepEqual([closing.status, closing.body.reason, closing.body.closed], [409, 'someone_can_take_over', []]);
+    assert.ok(Math.abs(Date.parse(closing.body.close_from) - thirtyDays) < 60_000);
+    assert.ok(await companyExists(company.id));
+    assert.ok(await accountExists(company.owner));
+  });
+
+  it('answers 403 password_needed when the database finds the password too old to close a company, and closes nothing', async () => {
+    const { ask, auth } = handler();
+    const company = await startCompany(db, { name: 'Test Pit V', roster: [{ first: 'Lee', last: 'Park' }] });
+    // The function's clock and the database's disagree by more than the ten minutes: the database's word goes.
+    const token = auth.tokenFor(company.owner, { databaseAmr: [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) - 700 }] });
+    const answer = await ask(post(token, { close: [{ company_id: company.id, name: 'Test Pit V' }] }));
+    assert.deepEqual([answer.status, answer.body.error], [403, 'password_needed']);
+    assert.ok(await companyExists(company.id));
+    assert.ok(await accountExists(company.owner));
+    assert.deepEqual(adminDeletes(auth.calls), []);
+  });
+
+  it('asks Supabase Auth again when the delete goes unanswered: deleted when the account is gone, 504 not_known while it is there', async () => {
+    const { ask, auth } = handler();
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }, { first: 'Lee', last: 'Park' }, { first: 'Bo', last: 'Lark' }] });
+    const riley = await newMember(db, company, 'Riley', 'Quinn');
+    const lee = await newMember(db, company, 'Lee', 'Park');
+    const bo = await newMember(db, company, 'Bo', 'Lark');
+
+    // The delete went through, and its answer was lost on the way back.
+    auth.answerAdminWith(async (id) => {
+      await db.admin('delete from auth.users where id = $1', [id]);
+      throw new TypeError('fetch failed');
+    });
+    const lost = await ask(post(auth.tokenFor(riley), {}));
+    assert.deepEqual([lost.status, lost.body], [200, { deleted: true, closed: [] }]);
+    assert.equal(await accountExists(riley), false);
+
+    // No answer, and the account is still there: it may yet be deleted, so nothing is promised either way.
+    auth.answerAdminWith(() => {
+      throw new TypeError('fetch failed');
+    });
+    const silent = await ask(post(auth.tokenFor(lee), {}));
+    assert.deepEqual([silent.status, silent.body.error, silent.body.closed], [504, 'not_known', []]);
+    assert.ok(await accountExists(lee));
+
+    // A gateway's timeout is no answer from Auth either.
+    auth.answerAdminWith(() => json(504, { message: 'The upstream server is timing out' }));
+    const timedOut = await ask(post(auth.tokenFor(bo), {}));
+    assert.deepEqual([timedOut.status, timedOut.body.error], [504, 'not_known']);
+
+    // Auth's own refusal, for a delete Auth answered: nothing was deleted.
+    auth.answerAdminWith(() => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error deleting user' }));
+    const turnedDown = await ask(post(auth.tokenFor(bo), {}));
+    assert.deepEqual([turnedDown.status, turnedDown.body.error], [500, 'try_again']);
+    assert.ok(await accountExists(bo));
   });
 
   it('deletes an account that is on no roster at all, such as one that only ever asked to join', async () => {

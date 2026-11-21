@@ -5,7 +5,8 @@
 //
 // Requests are made the way PostgREST makes them: as the role anon or
 // authenticated, with the signed-in account's id in request.jwt.claim.sub,
-// and, when a test gives them, the request's headers in request.headers.
+// and, when a test gives them, the token's other claims (such as amr) in
+// request.jwt.claims and the request's headers in request.headers.
 //
 // The names in these tests are made up, and the companies are "Test Pit A",
 // "Test Pit B" and so on. The repository is public: keep it that way.
@@ -102,10 +103,13 @@ class Database {
     return id;
   }
 
-  /** Requests from a signed-in account. */
-  as(userId) {
+  /**
+   * Requests from a signed-in account. `claims` are more of its token's claims, as Supabase Auth puts
+   * them there: amr, for one, says how and when the account signed in.
+   */
+  as(userId, claims = null) {
     assert.ok(userId, 'as() needs an account id');
-    return new Session(this, 'authenticated', userId);
+    return new Session(this, 'authenticated', userId, null, claims);
   }
 
   /**
@@ -127,10 +131,11 @@ class Database {
     return new Session(this, 'service_role', null);
   }
 
-  run(role, userId, sql, params, headers = null) {
+  run(role, userId, sql, params, headers = null, claims = null) {
     assert.ok(ROLES.has(role), `unknown role ${role}`);
     return this.#inTurn(async () => {
       await this.pg.query("select set_config('request.jwt.claim.sub', $1, false)", [userId ?? '']);
+      await this.pg.query("select set_config('request.jwt.claims', $1, false)", [claims ? JSON.stringify({ sub: userId, role, ...claims }) : '']);
       await this.pg.query("select set_config('request.headers', $1, false)", [headers ? JSON.stringify(headers) : '']);
       await this.pg.exec(`set role ${role}`);
       try {
@@ -138,6 +143,7 @@ class Database {
       } finally {
         await this.pg.exec('reset role');
         await this.pg.query("select set_config('request.jwt.claim.sub', '', false)");
+        await this.pg.query("select set_config('request.jwt.claims', '', false)");
         await this.pg.query("select set_config('request.headers', '', false)");
       }
     });
@@ -156,16 +162,17 @@ function namedArguments(args) {
 }
 
 class Session {
-  constructor(db, role, userId, headers = null) {
+  constructor(db, role, userId, headers = null, claims = null) {
     this.db = db;
     this.role = role;
     this.userId = userId;
     this.headers = headers;
+    this.claims = claims;
   }
 
   /** The whole result: rows, and affectedRows for a write. */
   query(sql, params) {
-    return this.db.run(this.role, this.userId, sql, params, this.headers);
+    return this.db.run(this.role, this.userId, sql, params, this.headers, this.claims);
   }
 
   async rows(sql, params) {

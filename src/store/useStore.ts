@@ -3,10 +3,10 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { accountHere, supervisorHere } from '../domain/access';
+import { accountHere, offTheRosterHere, supervisorHere } from '../domain/access';
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
-import { floorWords, freshReceiving, mergeRows, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
+import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
@@ -325,6 +325,8 @@ interface Actions {
   confirmConnection: (found: { userId: string; email: string; role: Role; name: string }) => void;
   /** Stop sending. The records stay on the phone, and what the server has is remembered for when it connects again. */
   disconnectCompany: () => void;
+  /** The phone's own company sign-in was deleted: who it was to the company is forgotten (`signInGone`). */
+  signInDeleted: () => void;
   /** Remember a request to join a company, or forget it. */
   setJoinAsked: (asked: JoinAsked | null) => void;
   /**
@@ -501,7 +503,8 @@ export const useStore = create<Store>()(
       const nothingUnsent = () => {
         const state = get();
         const r = state.receiving;
-        if (!state.syncedWith || !r || r.company !== state.syncedWith) return false;
+        // Until the phone has read the company's records to the end, a round leaves its new units, sheets and settings out of what it would send.
+        if (!state.syncedWith || !r || r.company !== state.syncedWith || r.caughtUpAt == null) return false;
         const sorted = sortedChanges(state, state.synced, SAMPLE_CREW_IDS, { connected: true, role: r.role, caughtUp: r.caughtUpAt != null, unreadable: r.unreadable, held: r.held });
         return sorted.now.length === 0 && sorted.afterReceive.length === 0 && sorted.notTaken.length === 0;
       };
@@ -607,7 +610,8 @@ export const useStore = create<Store>()(
           const account = accounts.find((a) => a.email === address && a.passwordHash && a.salt);
           const wrong: Result = { ok: false, error: 'That email and password do not match an account.' };
           if (!account || account.passwordHash !== hashPassword(password, account.salt ?? '')) return wrong;
-          if (!employees.find((e) => e.id === account.employeeId)?.active) {
+          const employee = employees.find((e) => e.id === account.employeeId);
+          if (!employee || offTheRosterHere(employee, !!get().connectedCompany, get().receiving)) {
             return { ok: false, error: 'This account is no longer on the active roster. See your supervisor.', offRoster: true };
           }
           startSession(account);
@@ -640,7 +644,8 @@ export const useStore = create<Store>()(
           }
           const refused = keepsAccount(account.employeeId, 'off_roster');
           if (refused) return refused;
-          if (employees.find((e) => e.id === account.employeeId)?.active) return { ok: false, error: 'Sign in, then delete your account on More.' };
+          const employee = employees.find((e) => e.id === account.employeeId);
+          if (employee && !offTheRosterHere(employee, !!get().connectedCompany, get().receiving)) return { ok: false, error: 'Sign in, then delete your account on More.' };
           const rates = { ...payRates };
           delete rates[account.employeeId];
           set({ accounts: accounts.filter((a) => a.id !== account.id), payRates: rates, ...(session?.accountId === account.id ? { session: null } : null) });
@@ -1462,6 +1467,13 @@ export const useStore = create<Store>()(
         },
 
         disconnectCompany: () => set({ connectedCompany: null }),
+
+        signInDeleted: () => {
+          const { receiving, employees } = get();
+          if (!receiving) return;
+          const next = signInGone({ employees, receiving });
+          set({ employees: next.employees as Employee[], receiving: next.receiving });
+        },
 
         setJoinAsked: (joinAsked) => set({ joinAsked }),
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { CAN_SEND } from '../config';
-import { NO_SIGNAL_BLOCKER, waitingBlocker, type DeletionAnswer } from '../domain/accountDeletion';
+import { NO_SIGNAL_BLOCKER, sendable, waitingBlocker, type DeletionAnswer } from '../domain/accountDeletion';
 import type { ConnectedCompany } from '../domain/server';
 import { useStore } from '../store/useStore';
 import type * as Server from './server';
@@ -194,9 +194,12 @@ export async function deleteMyServerAccount(password: string): Promise<ServerDel
   const linked = useStore.getState().connectedCompany;
   if (linked && linked.userId === account.id) {
     await syncNow();
-    const { waiting, online } = useSyncStatus.getState();
-    if (waiting > 0) {
-      const words = waitingBlocker(waiting, linked.name, online);
+    // Only what a round could still send holds it up: what the server will not take, or cannot be sent
+    // from a sign-in off the roster or for a company MineMuster has stopped for, stays on the phone.
+    const status = useSyncStatus.getState();
+    const left = sendable(status);
+    if (left > 0) {
+      const words = waitingBlocker(left, linked.name, status.online);
       return { ok: false, reason: 'waiting', error: `${words.title}. ${words.body}` };
     }
   }
@@ -214,7 +217,11 @@ export async function deleteMyServerAccount(password: string): Promise<ServerDel
  */
 export async function forgetDeletedSignIn(accountId: string | undefined = useServerAccount.getState().account?.id): Promise<void> {
   const store = useStore.getState();
-  if (accountId && store.connectedCompany?.userId === accountId) store.disconnectCompany();
+  if (accountId && store.connectedCompany?.userId === accountId) {
+    // Who the sign-in was to the company goes with it: the next account here is not made under its name.
+    store.signInDeleted();
+    store.disconnectCompany();
+  }
   if (accountId && store.joinAsked?.accountId === accountId) store.setJoinAsked(null);
   await syncSettled();
   await server?.signOut();

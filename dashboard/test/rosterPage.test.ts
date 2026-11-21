@@ -102,7 +102,7 @@ describe('the Roster page', () => {
     expect(text).toContain('Two in the app');
     expect(text).not.toContain('Make both');
     // Both are listed with a way to take the one who should not be there off the app's roster.
-    const shown = under(text, 'On the sign-in roster');
+    const shown = under(text, 'On the sign-in roster') ?? '';
     expect(shown.match(/Take off the app’s roster/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 

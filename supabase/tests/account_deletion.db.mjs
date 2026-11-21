@@ -1,11 +1,13 @@
 // Deleting an account (migration 20261120000200). account_deletion_check tells a signed-in account,
 // before anything is deleted, what deleting it means in each of its companies: its role, whether it is
-// the last supervisor who can sign in, who could take over, and whether a subscription still runs.
-// close_company lets a company's last supervisor, when nobody else can take over and nothing is being
-// charged, delete the company and its records. Deleting the account itself is Supabase Auth's admin
-// delete, played here by a delete from auth.users as postgres, as the other tests do: it takes the
-// sign-in and what is the person's alone (their join requests, holds and send counts), and leaves the
-// company's records and roster row with only the link to the account cleared.
+// the last supervisor who can sign in, who could take over, whether it may close the company and from
+// when, and whether a subscription still runs. close_company lets a company's last supervisor, with
+// their password typed in the last ten minutes, delete the company and its records, when nobody else
+// could take over or come back (nobody else active, nobody taken off or released in the last 30 days)
+// and nothing is being charged. Deleting the account itself is Supabase Auth's admin delete, played
+// here by a delete from auth.users as postgres, as the other tests do: it takes the sign-in and what
+// is the person's alone (their join requests, holds and send counts), and leaves the company's records
+// and roster row with only the link to the account cleared.
 //
 // The names and companies here are made up.
 
@@ -38,7 +40,24 @@ after(async () => {
 });
 
 const check = (account) => db.as(account).call('account_deletion_check');
-const close = (account, id, name) => db.as(account).call('close_company', { p_company_id: id, p_company_name: name });
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+/** A token's amr claim after a sign-in with the password `ago` seconds ago, as Supabase Auth writes it. */
+const typed = (ago = 0) => ({ amr: [{ method: 'password', timestamp: nowSeconds() - ago }] });
+/** close_company, by default with the password just typed. */
+const close = (account, id, name, claims = typed()) => db.as(account, claims).call('close_company', { p_company_id: id, p_company_name: name });
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A row taken off the roster `days` ago: what 30 days of waiting would leave. The trigger lets no write move it. */
+async function takenOffAgo(rowId, days) {
+  await db.admin('alter table public.roster disable trigger roster_note_inactive_since');
+  try {
+    await db.admin("update public.roster set inactive_since = now() - make_interval(days => $2) where id = $1 and not active", [rowId, days]);
+  } finally {
+    await db.admin('alter table public.roster enable trigger roster_note_inactive_since');
+  }
+}
+/** Every hold of a company made `days` ago. */
+const heldAgo = (companyId, days) => db.admin('update public.join_holds set created_at = now() - make_interval(days => $2) where company_id = $1', [companyId, days]);
+const takeOff = (account, rowId) => db.as(account).query('update public.roster set active = false where id = $1', [rowId]);
 /** Supabase Auth's admin delete, a hard delete: the auth.users row goes, and the foreign keys do the rest. */
 const deleteAccount = (id) => db.admin('delete from auth.users where id = $1', [id]);
 const softDelete = (id) => db.admin('update auth.users set deleted_at = now(), email = null where id = $1', [id]);
@@ -122,14 +141,14 @@ describe('account_deletion_check', () => {
     const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
     const riley = await newMember(db, company, 'Riley', 'Quinn');
     assert.deepEqual(await check(riley), [
-      { id: company.id, name: 'Test Pit A', role: 'employee', last_supervisor: false, successors: [], running: null },
+      { id: company.id, name: 'Test Pit A', role: 'employee', last_supervisor: false, successors: [], can_close: false, close_from: null, running: null },
     ]);
   });
 
   it('tells a lone supervisor they are the last one, with nobody to take over and nothing being charged', async () => {
     const company = await startCompany(db, { roster: [{ first: 'Lee', last: 'Park' }] });
     assert.deepEqual(await check(company.owner), [
-      { id: company.id, name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [], running: 0 },
+      { id: company.id, name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [], can_close: true, close_from: null, running: 0 },
     ]);
   });
 
@@ -154,6 +173,7 @@ describe('account_deletion_check', () => {
     const [mine] = await check(company.owner);
     assert.equal(mine.last_supervisor, true);
     assert.deepEqual(mine.successors, [{ roster_id: company.rows['Riley J Quinn'], first_name: 'Riley J', last_name: 'Quinn' }]);
+    assert.deepEqual([mine.can_close, mine.close_from], [false, null], 'Riley can take over, so there is no date to close from');
     // The crew member sees no names.
     assert.deepEqual((await check(riley))[0].successors, []);
     assert.equal((await check(maria)).length, 0, 'taken off the roster: nothing of the company');
@@ -246,23 +266,113 @@ describe('close_company', () => {
     assert.equal((await companyState(company.id)).companies.length, 0);
   });
 
-  it('is refused while someone else on the roster can sign in, until that row is taken off or that account can no longer sign in', async () => {
+  it('is refused while someone else on the roster can sign in, until that account can no longer sign in', async () => {
     const company = await lonelyCompany();
     const lee = await newMember(db, company, 'Lee', 'Park');
     const before = await companyState(company.id);
     const error = await refused(close(company.owner, company.id, 'Test Pit C'), WRONG_STATE, /^Someone else can take over this company\. Make them a supervisor instead\.$/);
     assert.equal(error.hint, 'someone_can_take_over');
     assert.deepEqual(await companyState(company.id), before);
-    // Taken off the roster: nobody is left who could take over.
-    await db.as(company.owner).query('update public.roster set active = false where id = $1', [company.rows['Lee Park']]);
+    await softDelete(lee);
     assert.equal(await close(company.owner, company.id, 'Test Pit C'), '');
-    assert.ok(await accountExists(lee), 'closing a company deletes no account');
 
     const again = await lonelyCompany('Test Pit D');
     const leeToo = await newMember(db, again, 'Lee', 'Park');
     await refused(close(again.owner, again.id, 'Test Pit D'), WRONG_STATE, /Someone else can take over/);
-    await softDelete(leeToo);
+    await ban(leeToo);
     assert.equal(await close(again.owner, again.id, 'Test Pit D'), '');
+    assert.ok(await accountExists(leeToo), 'closing a company deletes no account');
+  });
+
+  it('cannot be had by taking everyone else off the roster: it waits 30 days after the last of them is taken off', async () => {
+    // A comped company: an owner, a second supervisor and a crew member who joined, with shifts sent.
+    const company = await startCompany(db, { name: 'Test Pit G', roster: [{ first: 'Lee', last: 'Park' }] });
+    const second = await secondSupervisor(db, company, 'Ana', 'Diaz');
+    const lee = await newMember(db, company, 'Lee', 'Park');
+    for (const who of [company.owner, second, lee]) await sendShift(who, company.id);
+    await refused(close(company.owner, company.id, 'Test Pit G'), WRONG_STATE, /Someone else can take over/);
+
+    // One update takes both of them off. The owner is now the last supervisor, with nobody to hand over to,
+    // but the two can still sign in and could be put back: closing waits for them.
+    const taken = await db
+      .as(company.owner)
+      .affected('update public.roster set active = false where company_id = $1 and id <> $2', [company.id, company.ownRow]);
+    assert.equal(taken, 2);
+    const [mine] = await check(company.owner);
+    assert.deepEqual([mine.last_supervisor, mine.successors, mine.can_close, mine.running], [true, [], false, 0]);
+    const from = Date.parse(mine.close_from);
+    assert.ok(Math.abs(from - (Date.now() + 30 * DAY_MS)) < 60_000, `close_from ${mine.close_from} is 30 days from now`);
+    const before = await companyState(company.id);
+    const error = await refused(close(company.owner, company.id, 'Test Pit G'), WRONG_STATE, /Someone else can take over/);
+    assert.equal(error.hint, 'someone_can_take_over');
+    assert.deepEqual(await companyState(company.id), before, 'nothing is deleted');
+
+    // 29 days on, still not; 31 days on, the company can be closed.
+    await takenOffAgo(company.rows['Ana Diaz'], 31);
+    await takenOffAgo(company.rows['Lee Park'], 29);
+    await refused(close(company.owner, company.id, 'Test Pit G'), WRONG_STATE, /Someone else can take over/);
+    const later = (await check(company.owner))[0];
+    assert.ok(Math.abs(Date.parse(later.close_from) - (Date.now() + DAY_MS)) < 60_000, 'the date is the last one to go, plus 30 days');
+    await takenOffAgo(company.rows['Lee Park'], 31);
+    const ready = (await check(company.owner))[0];
+    assert.deepEqual([ready.can_close, ready.close_from], [true, null]);
+    assert.equal(await close(company.owner, company.id, 'Test Pit G'), '');
+    assert.equal((await companyState(company.id)).companies.length, 0);
+  });
+
+  it('waits 30 days after a claim is released or a row with an account is deleted, too', async () => {
+    const company = await startCompany(db, { name: 'Test Pit H', roster: [{ first: 'Lee', last: 'Park' }, { first: 'Bo', last: 'Lark' }] });
+    await newMember(db, company, 'Lee', 'Park');
+    await newMember(db, company, 'Bo', 'Lark');
+    await db.as(company.owner).call('release_roster_claim', { roster_id: company.rows['Lee Park'] });
+    assert.equal(await db.as(company.owner).affected('delete from public.roster where id = $1', [company.rows['Bo Lark']]), 1);
+    // Neither has a row the owner could hand over to now, and neither can be counted out yet.
+    const [mine] = await check(company.owner);
+    assert.deepEqual([mine.successors, mine.can_close], [[], false]);
+    assert.ok(Math.abs(Date.parse(mine.close_from) - (Date.now() + 30 * DAY_MS)) < 60_000);
+    await refused(close(company.owner, company.id, 'Test Pit H'), WRONG_STATE, /Someone else can take over/);
+    await heldAgo(company.id, 31);
+    assert.equal(await close(company.owner, company.id, 'Test Pit H'), '');
+  });
+
+  it('does not wait for someone whose account can no longer sign in, or for a row nobody claimed', async () => {
+    const company = await startCompany(db, { name: 'Test Pit J', roster: [{ first: 'Lee', last: 'Park' }, { first: 'Bo', last: 'Lark' }, { first: 'Kit', last: 'Marlow' }] });
+    const lee = await newMember(db, company, 'Lee', 'Park');
+    const bo = await newMember(db, company, 'Bo', 'Lark');
+    await takeOff(company.owner, company.rows['Lee Park']);
+    await db.as(company.owner).call('release_roster_claim', { roster_id: company.rows['Bo Lark'] });
+    await takeOff(company.owner, company.rows['Kit Marlow']);
+    assert.equal((await check(company.owner))[0].can_close, false);
+    await softDelete(lee);
+    await ban(bo);
+    assert.deepEqual((await check(company.owner)).map((c) => [c.can_close, c.close_from]), [[true, null]]);
+    assert.equal(await close(company.owner, company.id, 'Test Pit J'), '');
+  });
+
+  it('needs the password typed in the last ten minutes, before it says anything about the company', async () => {
+    const company = await lonelyCompany('Test Pit K');
+    const before = await companyState(company.id);
+    const tokens = [
+      null,
+      {},
+      { amr: [] },
+      { amr: 'password' },
+      { amr: [{ method: 'otp', timestamp: nowSeconds() }, { method: 'magiclink', timestamp: nowSeconds() }] },
+      { amr: [{ method: 'password', timestamp: nowSeconds() - 601 }] },
+      { amr: [{ method: 'password', timestamp: nowSeconds() + 120 }] },
+      { amr: [{ method: 'password', timestamp: String(nowSeconds()) }] },
+      { amr: [{ method: 'password' }] },
+      { amr: ['password'] },
+    ];
+    for (const claims of tokens) {
+      for (const target of [company.id, nobody()]) {
+        const error = await refused(close(company.owner, target, 'Test Pit K', claims), NOT_SIGNED_IN, /^Type your password again to close a company\.$/);
+        assert.equal(error.hint, 'password_needed', JSON.stringify(claims));
+      }
+    }
+    assert.deepEqual(await companyState(company.id), before);
+    // A refreshed token keeps the password's time beside the refresh's own entry.
+    assert.equal(await close(company.owner, company.id, 'Test Pit K', { amr: [{ method: 'token_refresh', timestamp: nowSeconds() }, { method: 'password', timestamp: nowSeconds() - 590 }] }), '');
   });
 
   it('is refused while a subscription is still charged, so it is cancelled first', async () => {
@@ -285,6 +395,8 @@ describe('close_company', () => {
     await sendShift(company.owner, company.id);
     await join(db, await db.newAccount(), company.code, 'Pat', 'Cole');
     await db.as(company.owner).call('release_roster_claim', { roster_id: company.rows['Lee Park'] });
+    // Released over 30 days ago, so Lee no longer holds the closing up.
+    await heldAgo(company.id, 31);
     await subscription(company.id, 'canceled');
     const leeOther = await newMember(db, other, 'Lee', 'Park');
     await sendShift(leeOther, other.id);
@@ -300,6 +412,42 @@ describe('close_company', () => {
     // The account that closed it is still there, and is the last supervisor nowhere now.
     assert.ok(await accountExists(company.owner));
     assert.deepEqual(await check(company.owner), []);
+  });
+});
+
+describe('roster.inactive_since', () => {
+  it('is set when a row is taken off, kept while it is off, and cleared when it is put back', async () => {
+    const company = await startCompany(db, { name: 'Test Pit L', roster: [{ first: 'Lee', last: 'Park' }] });
+    const row = company.rows['Lee Park'];
+    assert.equal((await rosterRow(db, row)).inactive_since, null);
+    await takeOff(company.owner, row);
+    const off = (await rosterRow(db, row)).inactive_since;
+    assert.ok(off instanceof Date && Math.abs(off.getTime() - Date.now()) < 60_000);
+    await takenOffAgo(row, 3);
+    await db.as(company.owner).query("update public.roster set title = 'Loader operator' where id = $1", [row]);
+    assert.ok((await rosterRow(db, row)).inactive_since.getTime() < Date.now() - 2 * DAY_MS, 'a change to an off row keeps when it was taken off');
+    await db.as(company.owner).query('update public.roster set active = true where id = $1', [row]);
+    assert.equal((await rosterRow(db, row)).inactive_since, null);
+    const [added] = await db.as(company.owner).rows(
+      "insert into public.roster (company_id, first_name, last_name, active) values ($1, 'Bo', 'Lark', false) returning inactive_since",
+      [company.id],
+    );
+    assert.ok(added.inactive_since instanceof Date, 'a row added off the roster is off from then');
+  });
+
+  it('is written by no client, and no write moves it, not even the server key’s', async () => {
+    const company = await startCompany(db, { name: 'Test Pit M', roster: [{ first: 'Lee', last: 'Park' }] });
+    const row = company.rows['Lee Park'];
+    await takeOff(company.owner, row);
+    const off = (await rosterRow(db, row)).inactive_since;
+    await refused(db.as(company.owner).query("update public.roster set inactive_since = now() - interval '90 days' where id = $1", [row]), NOT_SIGNED_IN, /permission denied/);
+    await refused(
+      db.as(company.owner).query("insert into public.roster (company_id, first_name, last_name, active, inactive_since) values ($1, 'Bo', 'Lark', false, now() - interval '90 days')", [company.id]),
+      NOT_SIGNED_IN,
+      /permission denied/,
+    );
+    await db.admin("update public.roster set inactive_since = now() - interval '90 days' where id = $1", [row]);
+    assert.deepEqual((await rosterRow(db, row)).inactive_since, off);
   });
 });
 

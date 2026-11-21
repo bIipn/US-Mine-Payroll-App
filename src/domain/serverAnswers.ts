@@ -388,15 +388,25 @@ export function readDeletionCheck(raw: unknown): DeletionCheckCompany[] | null {
   const out: DeletionCheckCompany[] = [];
   for (const row of raw) {
     if (!row || typeof row !== 'object') return null;
-    const { id, name, role, last_supervisor, successors, running } = row as Record<string, unknown>;
+    const { id, name, role, last_supervisor, successors, can_close, close_from, running } = row as Record<string, unknown>;
     if (typeof id !== 'string' || typeof name !== 'string' || !isRole(role) || typeof last_supervisor !== 'boolean' || !Array.isArray(successors)) return null;
+    if (typeof can_close !== 'boolean' || (close_from !== null && typeof close_from !== 'string')) return null;
     const people: DeletionCheckCompany['successors'] = [];
     for (const s of successors) {
       const { roster_id, first_name, last_name } = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
       if (typeof roster_id !== 'string' || typeof first_name !== 'string' || typeof last_name !== 'string') return null;
       people.push({ rosterId: roster_id, firstName: first_name, lastName: last_name });
     }
-    out.push({ id, name, role, lastSupervisor: last_supervisor, successors: people, running: typeof running === 'number' ? running : null });
+    out.push({
+      id,
+      name,
+      role,
+      lastSupervisor: last_supervisor,
+      successors: people,
+      canClose: can_close,
+      closeFrom: close_from,
+      running: typeof running === 'number' ? running : null,
+    });
   }
   return out;
 }
@@ -405,11 +415,17 @@ export type { DeletionAnswer };
 
 const ids = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
 
-/** The delete-account function's answer, by its status and body. */
+/**
+ * The delete-account function's answer, by its status and body. Only its own 410 says the sign-in is
+ * deleted already; a plain 401 says the server did not take the session, and a 504 that the request
+ * went with no word yet of whether the sign-in was deleted.
+ */
 export function readDeletionAnswer(status: number, body: unknown): DeletionAnswer {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   if (status === 200 && b.deleted === true) return { kind: 'deleted', closed: ids(b.closed) };
-  if (status === 401) return { kind: 'already_deleted' };
+  if (status === 410 && b.error === 'already_deleted') return { kind: 'already_deleted' };
+  if (status === 401) return { kind: 'signed_out' };
+  if (status === 504 && b.error === 'not_known') return { kind: 'not_known', closed: ids(b.closed) };
   if (status === 403 && b.error === 'password_needed') return { kind: 'password_needed' };
   if (status === 409 && b.error === 'last_supervisor') {
     const companies = Array.isArray(b.companies) ? b.companies : [];
@@ -436,8 +452,14 @@ export function deletionAnswerWords(answer: DeletionAnswer, { email }: { email: 
     }
     case 'already_deleted':
       return 'Your company sign-in is already deleted. Delete the rest from this phone.';
+    case 'signed_out':
+      return 'MineMuster’s server did not take this phone’s sign-in. Nothing was deleted. Try again.';
     case 'unreachable':
       return 'Could not reach MineMuster’s server. Nothing was deleted. Try again when you have signal.';
+    case 'not_known':
+      return answer.closed.length
+        ? 'The company is closed. MineMuster’s server did not say in time whether your company sign-in was deleted too. Try again in a minute.'
+        : 'MineMuster’s server did not say in time whether your company sign-in was deleted. Try again in a minute.';
     case 'too_many':
       return 'Too many tries for now. Wait a few minutes and try again. Nothing was deleted.';
     case 'not_ready':

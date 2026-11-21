@@ -511,7 +511,8 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
         </View>
       </Panel>
 
-      <AccountRow email={email} canDelete />
+      {/* Never joined: deleting the company sign-in alone, with its password, whoever is signed in to the app. */}
+      <AccountRow email={email} deletes="sign_in" />
 
       <Sheet testID="server-other-company" visible={sure != null} onClose={() => setSure(null)} title={sure ? `Send to ${sure.name}?` : undefined}>
         <Txt v="body" c={color.inkSoft}>
@@ -659,7 +660,7 @@ function Connected({ email }: { email: string }) {
       <WebPageLinks testID="server-pages" />
 
       <DisconnectButton />
-      <AccountRow email={email} canDelete={theirs} />
+      <AccountRow email={email} deletes={theirs ? 'account' : undefined} />
     </>
   );
 }
@@ -761,10 +762,11 @@ function DisconnectButton() {
 }
 
 /**
- * Who is signed in to the server on this phone, and signing out. With `canDelete`, deleting that
- * sign-in too: on a phone that never joined a company, and on one joined with this person's own.
+ * Who is signed in to the server on this phone, and signing out. With `deletes`, deleting: `sign_in`,
+ * the company sign-in alone, on a phone that never joined a company; `account`, the person's whole
+ * account with their own sign-in, on one joined with it.
  */
-function AccountRow({ email, canDelete = false }: { email: string; canDelete?: boolean }) {
+function AccountRow({ email, deletes }: { email: string; deletes?: 'sign_in' | 'account' }) {
   const navigation = useNavigation();
   return (
     <View style={{ gap: space.md }}>
@@ -772,8 +774,10 @@ function AccountRow({ email, canDelete = false }: { email: string; canDelete?: b
         <Row testID="server-account" left={<Users color={color.ink} size={24} />} title={email} sub="Signed in to the company server" subLines={3} />
       </Panel>
       <Button testID="server-sign-out" label="Sign out of the server" icon={LogOut} kind="quiet" onPress={() => void server?.signOut()} />
-      {canDelete ? (
-        <Button testID="server-delete-sign-in" label="Delete this company sign-in" icon={UserX} kind="quiet" onPress={() => navigation.navigate('DeleteAccount')} />
+      {deletes === 'sign_in' ? (
+        <Button testID="server-delete-sign-in" label="Delete this company sign-in" icon={UserX} kind="quiet" onPress={() => navigation.navigate('DeleteAccount', { signInOnly: true })} />
+      ) : deletes === 'account' ? (
+        <Button testID="server-delete-sign-in" label="Delete my account" icon={UserX} kind="quiet" onPress={() => navigation.navigate('DeleteAccount')} />
       ) : null}
     </View>
   );

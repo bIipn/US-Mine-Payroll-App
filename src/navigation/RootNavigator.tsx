@@ -128,22 +128,25 @@ export function RootNavigator() {
   });
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: color.kaolin } }}>
+      {/* Each view is a group of its own: moving to another view (signing in, signing out, deleting the
+          account) takes the last view's screens off the stack, even ones both views have, such as
+          DeleteAccount, so nobody is left on a screen of a view they are no longer in. */}
       {view === 'out' ? (
-        <>
+        <Stack.Group navigationKey="out">
           <Stack.Screen name="Auth" component={AuthScreen} />
           {/* A new phone connects to its company from the sign-in screen, so it has the company's roster first. */}
           {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
           {/* A company sign-in with no account on this phone is deleted from there too. */}
           {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} /> : null}
-        </>
+        </Stack.Group>
       ) : view === 'clock_only' ? (
-        <>
+        <Stack.Group navigationKey="clock_only">
           <Stack.Screen name="Main" component={ClockScreen} />
           <Stack.Screen name="EndUse" component={EndUseScreen} />
           <Stack.Screen name="Site" component={SiteScreen} />
-        </>
+        </Stack.Group>
       ) : (
-        <>
+        <Stack.Group navigationKey="full">
           <Stack.Screen name="Main" component={MainTabs} />
           <Stack.Screen name="Inspection" component={InspectionScreen} />
           <Stack.Screen name="InspectionResult" component={InspectionResultScreen} options={{ gestureEnabled: false }} />
@@ -170,7 +173,7 @@ export function RootNavigator() {
           <Stack.Screen name="Company" component={CompanyScreen} />
           <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} />
           {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
-        </>
+        </Stack.Group>
       )}
     </Stack.Navigator>
   );

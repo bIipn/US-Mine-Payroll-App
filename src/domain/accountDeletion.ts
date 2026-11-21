@@ -1,5 +1,6 @@
 import { signInIsTheirs, type SignInStanding } from './access';
 import type { ConnectedCompany } from './server';
+import type { SendTrouble } from './sync';
 import { lunchEndAt } from './time';
 import type { Account, Employee, Role, Shift } from './types';
 
@@ -14,8 +15,10 @@ import type { Account, Employee, Role, Shift } from './types';
  * Deleting "my account" deletes the app's sign-in, and the company sign-in too
  * when it is theirs: the one this phone sends with, when the company says it
  * is this person's, or the one it is signed in with when it never joined a
- * company (the password, checked by the server, shows it is theirs). On a
- * phone joined with someone else's sign-in, that sign-in is never touched.
+ * company and its email is the app account's (the password, checked by the
+ * server, shows it is theirs). On a phone joined with someone else's sign-in,
+ * that sign-in is never touched. Company account deletes a company sign-in
+ * alone, with its password, and never the app's.
  *
  * The company keeps its records and the person's roster row; on the server
  * only the link to the account is cleared. A company always keeps a
@@ -39,6 +42,10 @@ export interface DeletionCheckCompany {
   lastSupervisor: boolean;
   /** Who could take over: told to a supervisor only. */
   successors: { rosterId: string; firstName: string; lastName: string }[];
+  /** Nobody else could take over or come back: its last supervisor may close it now. Told to a supervisor only. */
+  canClose: boolean;
+  /** When only people taken off its roster in the last 30 days stop it being closed, from when it may be (an ISO time). */
+  closeFrom: string | null;
   /** How many of the company's subscriptions Stripe still charges; told to a supervisor only. */
   running: number | null;
 }
@@ -53,9 +60,14 @@ export type DeletionAnswer =
   | { kind: 'wrong_password' }
   | { kind: 'password_needed' }
   | { kind: 'last_supervisor'; companies: string[] }
-  /** The server takes the sign-in no more: it was deleted already (another phone, the dashboard, or an answer that was lost). */
+  /** The server says the sign-in is deleted already: from another phone, the dashboard, or a request whose answer was lost. */
   | { kind: 'already_deleted' }
+  /** The server turned the sign-in down without saying it is deleted. Nothing was deleted. */
+  | { kind: 'signed_out' }
+  /** The phone could not reach the server, so nothing was asked of it. Nothing was deleted. */
   | { kind: 'unreachable' }
+  /** The request went, and nothing says yet whether the sign-in was deleted. */
+  | { kind: 'not_known'; closed: string[] }
   | { kind: 'too_many' }
   /** The server has no delete-account function yet. */
   | { kind: 'not_ready' }
@@ -71,6 +83,8 @@ export type SignInHere =
   | { kind: 'theirs_signed_out'; email: string | null }
   /** Another person's: never touched. */
   | { kind: 'someone_else'; name: string | null }
+  /** On a phone that never joined, a sign-in under another email than the app account's: not touched. */
+  | { kind: 'other_email'; email: string }
   /** The phone has not heard yet who its sign-in is to the company. */
   | { kind: 'unknown' };
 
@@ -106,26 +120,30 @@ export interface DeletionInput {
   otherAccounts: number;
   /** Other people on the clock on this phone. */
   othersOnClock: number;
-  sync: { online: boolean; waiting: number; notTaken: number; stuck: number };
-  /** account_deletion_check's answer, being asked for, or not known. */
-  check: DeletionCheckCompany[] | 'checking' | 'unknown';
+  /** The phone has read its company's records to the end (`receiving.caughtUpAt`): until then a round leaves some of its own changes out of what waits. */
+  caughtUp: boolean;
+  sync: { online: boolean; waiting: number; notTaken: number; stuck: number; trouble: SendTrouble | null };
+  /** account_deletion_check's answer: being asked for, not asked yet, or asked and not answered. */
+  check: DeletionCheckCompany[] | 'checking' | 'unknown' | 'failed';
   fmtTime: (ms: number) => string;
   fmtDay: (ms: number) => string;
 }
 
-export type BlockerKind = 'sample' | 'on_clock' | 'at_lunch' | 'waiting' | 'no_signal' | 'last_supervisor' | 'checking';
+export type BlockerKind = 'sample' | 'on_clock' | 'at_lunch' | 'waiting' | 'no_signal' | 'last_supervisor' | 'checking' | 'check_failed';
 
 /** What stops the deletion for now, and the one thing to do about it. */
 export interface Blocker {
   kind: BlockerKind;
   title: string;
   body: string;
-  action?: 'clock' | 'send' | 'dashboard' | 'reset';
+  action?: 'clock' | 'send' | 'dashboard' | 'reset' | 'retry';
 }
 
 export interface DeletionPlan {
   title: string;
   intro: string;
+  /** The title over what stays: the company, or each of them. */
+  keepsTitle: string;
   signIn: SignInHere;
   /** The company sign-in is deleted on the server too. */
   serverToo: boolean;
@@ -161,6 +179,27 @@ export const NO_SIGNAL_BLOCKER: Blocker = {
   body: 'Deleting your company sign-in is done on MineMuster’s server. Try again when you have signal. Nothing has been deleted.',
 };
 
+/** The server did not answer what deleting the company sign-in means in each company: asked again before anything goes. */
+export const CHECK_FAILED_BLOCKER: Blocker = {
+  kind: 'check_failed',
+  title: 'Could not check your account with MineMuster’s server',
+  body: 'Before your company sign-in is deleted, the server says what stays with each company. Nothing has been deleted.',
+  action: 'retry',
+};
+
+/**
+ * Of what waits on this phone, what a round could still send: nothing while its sign-in is off the
+ * company's roster or MineMuster has stopped for the company, and never what the server will not take
+ * as it is (`stuck`). Only that holds a deletion up; the rest stays on the phone.
+ */
+export function sendable(sync: { waiting: number; stuck: number; trouble: SendTrouble | null }): number {
+  if (sync.trouble === 'not_member' || sync.trouble === 'closed') return 0;
+  return Math.max(0, sync.waiting - sync.stuck);
+}
+
+/** The same email, written either way. */
+export const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
 const full = (p: { firstName: string; lastName: string }) => `${p.firstName} ${p.lastName}`;
 const possessive = (name: string) => `${name}’s`;
 /** "A’s", "A’s and B’s", "A’s, B’s and C’s". */
@@ -169,9 +208,20 @@ const possessives = (names: string[]) => {
   return each.length <= 1 ? each.join('') : `${each.slice(0, -1).join(', ')} and ${each[each.length - 1]}`;
 };
 
-/** Whose the company sign-in on this phone is, for a deletion made by the person signed in to the app. */
-export function whoseSignIn(input: Pick<DeletionInput, 'canConnect' | 'linked' | 'standing' | 'serverAccount' | 'me'>): SignInHere {
-  const { canConnect, linked, standing, serverAccount, me } = input;
+/** Why a company keeps a person's records, as a plain-language summary: `several` for an account in more than one. */
+export function legalLine(company: string, keepsTime: boolean, several = false): string {
+  const whose = several ? 'each company’s' : possessive(company);
+  return keepsTime
+    ? `They are ${whose} records. The company keeps pre shift exam records for at least a year, as 30 CFR 56.18002 has it, and the time and pay records the law has the company keep. A plain-language summary, not legal advice.`
+    : `They are ${whose} records. The company keeps pre shift exam records for at least a year, as 30 CFR 56.18002 has it. A plain-language summary, not legal advice.`;
+}
+
+/**
+ * Whose the company sign-in on this phone is, for a deletion made by the person signed in to the app
+ * (`me`, with their `account`), or of the company sign-in alone (`me` null).
+ */
+export function whoseSignIn(input: Pick<DeletionInput, 'canConnect' | 'linked' | 'standing' | 'serverAccount' | 'me' | 'account'>): SignInHere {
+  const { canConnect, linked, standing, serverAccount, me, account } = input;
   if (!canConnect) return { kind: 'none' };
   if (linked) {
     if (!me || !standing?.name) return { kind: 'unknown' };
@@ -181,7 +231,11 @@ export function whoseSignIn(input: Pick<DeletionInput, 'canConnect' | 'linked' |
     return { kind: 'theirs_signed_out', email: linked.email ?? null };
   }
   if (serverAccount === undefined) return { kind: 'unknown' };
-  return serverAccount ? { kind: 'theirs', email: serverAccount.email, connected: false } : { kind: 'none' };
+  if (!serverAccount) return { kind: 'none' };
+  // A phone that never joined says nothing of whose its sign-in is: a supervisor may be signed in to join it.
+  // It goes with the app account only when it is under the same email; on its own, the password shows whose it is.
+  if (me && account && !sameEmail(account.email, serverAccount.email)) return { kind: 'other_email', email: serverAccount.email };
+  return { kind: 'theirs', email: serverAccount.email, connected: false };
 }
 
 /** What deleting this person's account means, what stops it now, and the words for each. */
@@ -192,6 +246,9 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   const signIn = whoseSignIn(input);
   const serverToo = signIn.kind === 'theirs';
   const appAccount = !!me && !!account;
+  // An account in more than one company keeps its records with each of them.
+  const several = serverToo && companies.length > 1;
+  const names = companies.map((c) => c.name);
 
   const title = appAccount ? 'Delete my account' : 'Delete this company sign-in';
   const intro = !appAccount
@@ -200,11 +257,10 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
       ? 'Deleting your account takes your sign-in off this phone and off MineMuster’s server. It cannot be undone.'
       : 'Deleting your account takes your sign-in off this phone. It cannot be undone.';
 
-  const legal = keepsTime
-    ? `They are ${possessive(company)} records. The company keeps pre shift exam records for at least a year, as 30 CFR 56.18002 has it, and the time and pay records the law has the company keep. A plain-language summary, not legal advice.`
-    : `They are ${possessive(company)} records. The company keeps pre shift exam records for at least a year, as 30 CFR 56.18002 has it. A plain-language summary, not legal advice.`;
+  const legal = legalLine(company, keepsTime, several);
+  const keepsTitle = several ? 'What stays with each company' : `What stays with ${company}`;
 
-  const base = { title, intro, signIn, serverToo, legal, finishOnDashboard: false };
+  const base = { title, intro, keepsTitle, signIn, serverToo, legal, finishOnDashboard: false };
   if (input.sample) {
     return {
       ...base,
@@ -221,7 +277,7 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   // ---- What is deleted, and what stays --------------------------------------------------------
   const deletes: string[] = [];
   if (appAccount) deletes.push(account.passwordHash ? `Your sign-in on this phone, ${account.email}, and its password.` : `Your sign-in on this phone, ${account.email}.`);
-  if (appAccount && input.hasRate) deletes.push('Your hourly rate, kept only on this phone.');
+  if (appAccount && input.hasRate && keepsTime) deletes.push('Your hourly rate, kept only on this phone.');
   if (serverToo) {
     deletes.push(`Your company sign-in, ${signIn.email}, on MineMuster’s server. It stops working on every phone and on the office dashboard.`);
     deletes.push('Your requests to join a company.');
@@ -230,19 +286,26 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   const keeps: string[] = [];
   const onARoster = !!me || companies.length > 0;
   if (onARoster) {
-    keeps.push(`Your name on ${possessive(company)} roster. A supervisor takes it off when you leave.`);
+    keeps.push(
+      several
+        ? `Your name on ${possessives(names)} rosters. A supervisor takes it off when you leave.`
+        : `Your name on ${possessive(company)} roster. A supervisor takes it off when you leave.`,
+    );
     keeps.push(
       keepsTime
         ? 'Your punches, paid leave, equipment checklists, pre shift exams and maintenance requests, with your name on them.'
         : 'Your equipment checklists, pre shift exams and maintenance requests, with your name on them.',
     );
     // Only records the company's server has are kept there.
-    if (linked || (serverToo && companies.length > 0)) keeps.push(`MineMuster keeps them for ${company} while it uses MineMuster, and deletes them when the company asks.`);
+    if (several) keeps.push('MineMuster keeps them for each company while it uses MineMuster, and deletes them when the company asks.');
+    else if (linked || (serverToo && companies.length > 0)) keeps.push(`MineMuster keeps them for ${company} while it uses MineMuster, and deletes them when the company asks.`);
   }
 
   // ---- This phone ---------------------------------------------------------------------------------
   const sendsWithIt = serverToo && signIn.connected;
-  const clearsPhone = sendsWithIt && appAccount && input.otherAccounts === 0 && sync.waiting === 0 && sync.notTaken === 0 && sync.stuck === 0;
+  // Cleared only when nothing on it would be lost: until the phone has read the company's records to the end, some of its own changes are not counted as waiting.
+  const clearsPhone =
+    sendsWithIt && appAccount && input.caughtUp && input.otherAccounts === 0 && sync.waiting === 0 && sync.notTaken === 0 && sync.stuck === 0;
   const phone: string[] = [];
   if (clearsPhone) {
     phone.push(`Everything on this phone has reached ${company}, so the phone is cleared too and goes back to how the app starts.`);
@@ -265,10 +328,12 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   if (input.canConnect && !serverToo && appAccount) {
     phone.push(`If you have a company sign-in on another phone, delete it there, or at ${ACCOUNT_PAGE_WORDS}.`);
   }
+  if (serverToo) phone.push('An account you made in the app on another phone stays on that phone. Delete it there, under More.');
 
   // ---- What stops it for now ---------------------------------------------------------------------
   const blockers: Blocker[] = [];
-  if (me && input.openShift) {
+  // With time tracking off there is no Clock screen to clock out on, and no shift that counts.
+  if (me && keepsTime && input.openShift) {
     const lunch = input.openShift.lunches[input.openShift.lunches.length - 1];
     const until = lunch ? lunchEndAt(lunch) : 0;
     blockers.push(
@@ -278,29 +343,50 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
     );
   }
   const needsServer = serverToo || signIn.kind === 'unknown';
+  const canSend = sendsWithIt ? sendable(sync) : 0;
   if (needsServer) {
-    if (sendsWithIt && sync.waiting > 0) {
-      blockers.push(waitingBlocker(sync.waiting, company, sync.online));
+    if (canSend > 0) {
+      blockers.push(waitingBlocker(canSend, company, sync.online));
     } else if (!sync.online) {
       blockers.push(NO_SIGNAL_BLOCKER);
-    } else if (check === 'checking' || signIn.kind === 'unknown') {
+    } else if (check === 'checking' || signIn.kind === 'unknown' || (serverToo && check === 'unknown')) {
       blockers.push({ kind: 'checking', title: 'Checking your account with MineMuster’s server…', body: '' });
+    } else if (serverToo && check === 'failed') {
+      blockers.push(CHECK_FAILED_BLOCKER);
     }
   }
   const lastIn = serverToo ? companies.filter((c) => c.lastSupervisor) : [];
   if (lastIn.length) {
+    // A company only people who left lately stop being closed: from when it may be.
+    const later = lastIn.filter((c) => !c.successors.length && !c.canClose && c.closeFrom && Number.isFinite(Date.parse(c.closeFrom)));
     blockers.push({
       kind: 'last_supervisor',
       title: `You are ${possessives(lastIn.map((c) => c.name))} only supervisor`,
-      body: 'Someone has to take over before your account is deleted, so the crew can still be let in and the records read. Make someone else a supervisor, or close the company, on the office dashboard.',
+      body: [
+        'Someone has to take over before your account is deleted, so the crew can still be let in and the records read. Make someone else a supervisor, or close the company, on the office dashboard.',
+        ...later.map(
+          (c) => `${c.name} can be closed from ${input.fmtDay(Date.parse(c.closeFrom as string))}: someone taken off its roster in the last 30 days could still be put back.`,
+        ),
+      ].join(' '),
       action: 'dashboard',
     });
   }
 
   // ---- Worth knowing first ------------------------------------------------------------------------
   const warnings: string[] = [];
-  if (me && input.openUnit) warnings.push(`You still have ${input.openUnit} checked out. Check it in from the Checklists screen so the next operator can take it.`);
-  if (me && input.staleShift) warnings.push(`Your shift of ${input.fmtDay(input.staleShift.clockIn.at)} has no clock-out. It counts no hours until a supervisor sets its end.`);
+  if (me && input.openUnit) warnings.push(`You still have ${input.openUnit} checked out. End use on the Checklists screen so the next operator can take it.`);
+  if (me && keepsTime && input.staleShift) {
+    warnings.push(`Your shift of ${input.fmtDay(input.staleShift.clockIn.at)} has no clock-out. It counts no hours until a supervisor sets its end.`);
+  }
+  // What no round will send stays on the phone, and holds nothing up.
+  const unsendable = sendsWithIt ? sync.waiting - canSend : 0;
+  if (unsendable > 0) {
+    warnings.push(
+      unsendable === 1
+        ? `1 record cannot be sent to ${company}, so it stays on this phone.`
+        : `${unsendable} records cannot be sent to ${company}, so they stay on this phone.`,
+    );
+  }
   if (serverToo) {
     for (const c of companies) {
       if (c.role === 'supervisor' && !c.lastSupervisor && (c.running ?? 0) > 0) {
@@ -313,6 +399,11 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   if (signIn.kind === 'theirs_signed_out' && appAccount) {
     warnings.push(
       `Your company sign-in${signIn.email ? `, ${signIn.email},` : ''} is signed out on this phone, so it is not deleted here. Sign in to it on Company account first to delete it too, or delete it at ${ACCOUNT_PAGE_WORDS}.`,
+    );
+  }
+  if (signIn.kind === 'other_email' && appAccount) {
+    warnings.push(
+      `This phone is signed in to MineMuster’s server as ${signIn.email}, not as ${account.email}, so that sign-in is not deleted with your account. If it is yours, delete it on Company account.`,
     );
   }
 
@@ -342,12 +433,17 @@ export function moreRowWords({ keepsTime, sample, company }: { keepsTime: boolea
   };
 }
 
-/** The sign-in screen, for a person taken off the roster: their account taken off this phone, asked first. */
-export function offRosterWords(email: string, company: string) {
+/**
+ * The sign-in screen, for a person taken off the roster: their account taken off this phone, asked
+ * first, with why the records stay. `hasRate` when the account's hourly rate is on this phone.
+ */
+export function offRosterWords({ email, company, keepsTime, hasRate }: { email: string; company: string; keepsTime: boolean; hasRate: boolean }) {
+  const theirs = company || 'your company';
   return {
     button: 'Delete this account from this phone',
     title: 'Delete this account?',
-    body: `${email} and its password are taken off this phone. Your records stay with ${company || 'your company'}. If you have a company sign-in, delete it at ${ACCOUNT_PAGE_WORDS}.`,
+    body: `${email} and its password${keepsTime && hasRate ? ', and the hourly rate you entered,' : ''} are taken off this phone. Your records stay with ${theirs}. If you have a company sign-in, delete it at ${ACCOUNT_PAGE_WORDS}.`,
+    legal: legalLine(theirs, keepsTime),
     confirm: 'Delete this account',
     keep: 'Keep it',
   };

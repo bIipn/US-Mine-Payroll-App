@@ -50,7 +50,7 @@ export interface Receiving {
   caughtUpAt: number | null;
   /** Rows a page asks for: 200 to start, halved after a page that timed out, doubled after a quick one. */
   pageSize: number;
-  /** Who this phone's sign-in is to the company, as the last standing read found. Written only by standingChange. */
+  /** Who this phone's sign-in is to the company, as the last standing read found. Written only by standingChange and signInGone. */
   role: Role | 'none' | null;
   /** The name on this phone's sign-in row, from the same read. */
   name: PersonName | null;
@@ -535,6 +535,15 @@ export function standingChange(
   const again = { ...r, role: standing.role, name: standing.name, epoch: r.epoch + 1, cursor: 0 };
   if (standing.role === 'employee') return { employees: withoutPayrollIds(state.employees), receiving: again };
   return { employees: state.employees, receiving: { ...again, held: {} } };
+}
+
+/**
+ * The phone's own company sign-in was deleted: who it was to the company is forgotten, as for a sign-in
+ * taken off the roster, and its name with it, so nothing on the phone goes by the name of a sign-in that
+ * is gone (the next account made here among it). Payroll IDs go too: no sign-in here is a supervisor's.
+ */
+export function signInGone(state: { employees: readonly Employee[]; receiving: Receiving }): { employees: readonly Employee[]; receiving: Receiving } {
+  return { employees: withoutPayrollIds(state.employees), receiving: { ...state.receiving, role: 'none', name: null } };
 }
 
 // ---- What the company did not take, in words ------------------------------------------------------------

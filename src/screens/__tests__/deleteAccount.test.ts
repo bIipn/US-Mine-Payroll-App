@@ -28,7 +28,9 @@ describe('Delete my account', () => {
     const navigator = source('navigation/RootNavigator.tsx');
     expect(navigator).toMatch(/^\s*<Stack\.Screen name="DeleteAccount" component=\{DeleteAccountScreen\} \/>$/m);
     expect(source('screens/more/MoreScreen.tsx')).toMatch(/navigation\.navigate\('DeleteAccount'\)/);
-    expect(source('screens/more/CompanyAccountScreen.tsx')).toMatch(/label="Delete this company sign-in"[^\n]*navigate\('DeleteAccount'\)/);
+    // On a phone that never joined, the company sign-in alone; on one joined with the person's own, the whole account.
+    expect(source('screens/more/CompanyAccountScreen.tsx')).toMatch(/label="Delete this company sign-in"[^\n]*navigate\('DeleteAccount', \{ signInOnly: true \}\)/);
+    expect(source('screens/more/CompanyAccountScreen.tsx')).toMatch(/label="Delete my account"[^\n]*navigate\('DeleteAccount'\)/);
     expect(source('screens/auth/AuthScreen.tsx')).toMatch(/deleteAccountWithPassword\(email, password\)/);
   });
 });

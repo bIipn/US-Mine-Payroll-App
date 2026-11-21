@@ -111,6 +111,17 @@ export function companyAccountView(state: {
 }
 
 /**
+ * Whether a person is off the roster as far as this phone can tell: their record says so, or, on a
+ * phone connected to its company, the phone's sign-in is theirs and the company has taken that
+ * sign-in off its roster. A round stops at that standing read, so the roster that took them off never
+ * arrives: their record here can still say active. The sign-in screen, its "Delete this account from
+ * this phone" and what a signed-in person sees all go by this.
+ */
+export function offTheRosterHere(person: Employee, connected: boolean, receiving: SignInStanding | null): boolean {
+  return !person.active || (connected && receiving?.role === 'none' && fits(person, receiving.name));
+}
+
+/**
  * What a person signed in to the app sees. `out`: the sign-in screen. `full`:
  * the app. `clock_only`: the Clock screen alone, and End use from it, so a
  * person taken off the roster while on the clock (or the person a phone's
@@ -126,7 +137,6 @@ export function signedInView(state: {
 }): 'out' | 'clock_only' | 'full' {
   const { person, onTheClock, connected, receiving } = state;
   if (!person) return 'out';
-  const held = !person.active || (connected && receiving?.role === 'none' && fits(person, receiving.name));
-  if (!held) return 'full';
+  if (!offTheRosterHere(person, connected, receiving)) return 'full';
   return onTheClock ? 'clock_only' : 'out';
 }

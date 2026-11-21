@@ -1,9 +1,12 @@
 import {
   ACCOUNT_PAGE,
+  CHECK_FAILED_BLOCKER,
   DELETED_TOAST,
   deletionPlan,
+  legalLine,
   moreRowWords,
   offRosterWords,
+  sendable,
   whoseSignIn,
   type DeletionCheckCompany,
   type DeletionInput,
@@ -35,7 +38,8 @@ function input(over: Partial<DeletionInput> = {}): DeletionInput {
     serverAccount: null,
     otherAccounts: 0,
     othersOnClock: 0,
-    sync: { online: true, waiting: 0, notTaken: 0, stuck: 0 },
+    caughtUp: true,
+    sync: { online: true, waiting: 0, notTaken: 0, stuck: 0, trouble: null },
     check: 'unknown',
     fmtTime: hhmm,
     fmtDay: day,
@@ -48,7 +52,7 @@ const ownPhone = (over: Partial<DeletionInput> = {}) =>
     linked: PIT,
     standing: { role: 'employee', name: { firstName: 'Riley J', lastName: 'Quinn' } },
     serverAccount: { id: 'u-riley', email: 'riley@example.com' },
-    check: [{ id: 'c-a', name: 'Test Pit A', role: 'employee', lastSupervisor: false, successors: [], running: null }],
+    check: [{ id: 'c-a', name: 'Test Pit A', role: 'employee', lastSupervisor: false, successors: [], canClose: false, closeFrom: null, running: null }],
     ...over,
   });
 const kinds = (plan: ReturnType<typeof deletionPlan>) => plan.blockers.map((b) => b.kind);
@@ -139,12 +143,16 @@ describe('deleting with their own company sign-in', () => {
     ]);
     expect(plan.keeps).toContain('MineMuster keeps them for Test Pit A while it uses MineMuster, and deletes them when the company asks.');
     expect(plan.clearsPhone).toBe(true);
-    expect(plan.phone).toEqual(['Everything on this phone has reached Test Pit A, so the phone is cleared too and goes back to how the app starts.']);
+    expect(plan.phone).toEqual([
+      'Everything on this phone has reached Test Pit A, so the phone is cleared too and goes back to how the app starts.',
+      // An account made in the app elsewhere is that phone's: it is not on the server, so it is not deleted here.
+      'An account you made in the app on another phone stays on that phone. Delete it there, under More.',
+    ]);
     expect(plan.blockers).toEqual([]);
   });
 
   it('clears no phone that others sign in to, or that holds anything the company does not have', () => {
-    for (const over of [{ otherAccounts: 1 }, { sync: { online: true, waiting: 0, notTaken: 2, stuck: 0 } }, { sync: { online: true, waiting: 0, notTaken: 0, stuck: 1 } }]) {
+    for (const over of [{ otherAccounts: 1 }, { sync: { online: true, waiting: 0, notTaken: 2, stuck: 0, trouble: null } }, { sync: { online: true, waiting: 0, notTaken: 0, stuck: 1, trouble: null } }]) {
       expect(deletionPlan(ownPhone(over)).clearsPhone).toBe(false);
     }
     const shared = deletionPlan(ownPhone({ otherAccounts: 2, othersOnClock: 3 }));
@@ -152,41 +160,42 @@ describe('deleting with their own company sign-in', () => {
       'This phone sends Test Pit A’s records with your company sign-in, the crew’s included. Once it is deleted, the phone stops sending until it is joined again with another sign-in.',
       '3 people are on the clock on this phone. Their punches wait on the phone until then.',
       'Your records stay on this phone. They are Test Pit A’s; a supervisor clears them from the phone.',
+      'An account you made in the app on another phone stays on that phone. Delete it there, under More.',
     ]);
     expect(deletionPlan(ownPhone({ otherAccounts: 1, othersOnClock: 1 })).phone[1]).toBe('1 person is on the clock on this phone. Their punches wait on the phone until then.');
   });
 
   it('waits for the records to reach the company first, and says it needs signal', () => {
-    const waiting = deletionPlan(ownPhone({ sync: { online: true, waiting: 4, notTaken: 0, stuck: 0 } }));
+    const waiting = deletionPlan(ownPhone({ sync: { online: true, waiting: 4, notTaken: 0, stuck: 0, trouble: null } }));
     expect(waiting.blockers).toEqual([
       { kind: 'waiting', title: '4 records have not reached Test Pit A yet', body: 'They are sent before your company sign-in is deleted, so the company has them.', action: 'send' },
     ]);
-    const one = deletionPlan(ownPhone({ sync: { online: false, waiting: 1, notTaken: 0, stuck: 0 } }));
+    const one = deletionPlan(ownPhone({ sync: { online: false, waiting: 1, notTaken: 0, stuck: 0, trouble: null } }));
     expect(one.blockers).toEqual([
       { kind: 'waiting', title: '1 record has not reached Test Pit A yet', body: 'They are sent before your company sign-in is deleted, so the company has them. This needs signal.', action: 'send' },
     ]);
   });
 
   it('needs signal, and says nothing has been deleted', () => {
-    const plan = deletionPlan(ownPhone({ sync: { online: false, waiting: 0, notTaken: 0, stuck: 0 } }));
+    const plan = deletionPlan(ownPhone({ sync: { online: false, waiting: 0, notTaken: 0, stuck: 0, trouble: null } }));
     expect(plan.blockers).toEqual([
       { kind: 'no_signal', title: 'This needs signal', body: 'Deleting your company sign-in is done on MineMuster’s server. Try again when you have signal. Nothing has been deleted.' },
     ]);
     // A phone that never joined needs it too, to delete the company sign-in it is signed in with.
-    expect(kinds(deletionPlan(input({ serverAccount: { id: 'u-riley', email: 'riley@example.com' }, sync: { online: false, waiting: 0, notTaken: 0, stuck: 0 } })))).toEqual(['no_signal']);
+    expect(kinds(deletionPlan(input({ serverAccount: { id: 'u-riley', email: 'riley@example.com' }, sync: { online: false, waiting: 0, notTaken: 0, stuck: 0, trouble: null } })))).toEqual(['no_signal']);
   });
 
   it('waits while the server is asked, and while the phone has not heard who its sign-in is', () => {
     expect(deletionPlan(ownPhone({ check: 'checking' })).blockers).toEqual([{ kind: 'checking', title: 'Checking your account with MineMuster’s server…', body: '' }]);
     expect(kinds(deletionPlan(ownPhone({ standing: { role: null, name: null } })))).toEqual(['checking']);
-    expect(kinds(deletionPlan(ownPhone({ standing: { role: null, name: null }, sync: { online: false, waiting: 0, notTaken: 0, stuck: 0 } })))).toEqual(['no_signal']);
+    expect(kinds(deletionPlan(ownPhone({ standing: { role: null, name: null }, sync: { online: false, waiting: 0, notTaken: 0, stuck: 0, trouble: null } })))).toEqual(['no_signal']);
   });
 
   it('sends a company’s only supervisor to the office dashboard, with or without someone to make supervisor', () => {
-    const lone: DeletionCheckCompany = { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], running: 0 };
+    const lone: DeletionCheckCompany = { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], canClose: true, closeFrom: null, running: 0 };
     const samPhone = (check: DeletionCheckCompany[]) =>
       ownPhone({ me: SAM, account: { email: 'sam@example.com', passwordHash: 'h' }, linked: { ...PIT, role: 'supervisor', userId: 'u-sam', email: 'sam@example.com' }, standing: { role: 'supervisor', name: { firstName: 'Sam', lastName: 'Ortiz' } }, serverAccount: { id: 'u-sam', email: 'sam@example.com' }, check });
-    for (const check of [[lone], [{ ...lone, successors: [{ rosterId: 'r-1', firstName: 'Riley J', lastName: 'Quinn' }] }]]) {
+    for (const check of [[lone], [{ ...lone, canClose: false, successors: [{ rosterId: 'r-1', firstName: 'Riley J', lastName: 'Quinn' }] }]]) {
       const plan = deletionPlan(samPhone(check));
       expect(plan.blockers).toEqual([
         {
@@ -209,10 +218,10 @@ describe('deleting with their own company sign-in', () => {
 
   it('names every company where they are the only supervisor', () => {
     const check: DeletionCheckCompany[] = [
-      { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], running: 0 },
-      { id: 'c-b', name: 'Test Pit B', role: 'supervisor', lastSupervisor: true, successors: [], running: 0 },
+      { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], canClose: true, closeFrom: null, running: 0 },
+      { id: 'c-b', name: 'Test Pit B', role: 'supervisor', lastSupervisor: true, successors: [], canClose: true, closeFrom: null, running: 0 },
     ];
-    expect(deletionPlan(input({ serverAccount: { id: 'u', email: 'sam@example.com' }, check })).blockers[0].title).toBe('You are Test Pit A’s and Test Pit B’s only supervisor');
+    expect(deletionPlan(input({ serverAccount: { id: 'u', email: 'riley@example.com' }, check })).blockers[0].title).toBe('You are Test Pit A’s and Test Pit B’s only supervisor');
   });
 });
 
@@ -230,7 +239,7 @@ describe('a phone joined with someone else’s sign-in', () => {
       'If you have a company sign-in on another phone, delete it there, or at app.minemuster.com/account.',
     ]);
     // Nothing of the server is in the way: no signal is needed for the phone's own account.
-    expect(deletionPlan(ownPhone({ standing: { role: 'supervisor', name: { firstName: 'Sam', lastName: 'Ortiz' } }, sync: { online: false, waiting: 9, notTaken: 0, stuck: 0 } })).blockers).toEqual([]);
+    expect(deletionPlan(ownPhone({ standing: { role: 'supervisor', name: { firstName: 'Sam', lastName: 'Ortiz' } }, sync: { online: false, waiting: 9, notTaken: 0, stuck: 0, trouble: null } })).blockers).toEqual([]);
   });
 
   it('says so when their own sign-in is signed out on this phone, and deletes the rest', () => {
@@ -262,7 +271,7 @@ describe('what stops it, and what to look at first', () => {
     const plan = deletionPlan(input({ openUnit: 'L-12', staleShift: shiftAt(Date.UTC(2026, 10, 17, 14)) }));
     expect(plan.blockers).toEqual([]);
     expect(plan.warnings).toEqual([
-      'You still have L-12 checked out. Check it in from the Checklists screen so the next operator can take it.',
+      'You still have L-12 checked out. End use on the Checklists screen so the next operator can take it.',
       'Your shift of 2026-11-17 has no clock-out. It counts no hours until a supervisor sets its end.',
     ]);
   });
@@ -301,14 +310,149 @@ describe('the words around it', () => {
     expect(moreRowWords({ keepsTime: true, sample: true, company: 'Sample Mining Co.' }).sub).toBe('A made-up sample account. Reset the sample data to start over.');
   });
 
-  it('asks a person taken off the roster before taking their account off this phone', () => {
-    expect(offRosterWords('riley@example.com', 'Test Pit A')).toEqual({
+  it('asks a person taken off the roster before taking their account off this phone, saying the rate goes and why the records stay', () => {
+    expect(offRosterWords({ email: 'riley@example.com', company: 'Test Pit A', keepsTime: true, hasRate: true })).toEqual({
       button: 'Delete this account from this phone',
       title: 'Delete this account?',
-      body: 'riley@example.com and its password are taken off this phone. Your records stay with Test Pit A. If you have a company sign-in, delete it at app.minemuster.com/account.',
+      body: 'riley@example.com and its password, and the hourly rate you entered, are taken off this phone. Your records stay with Test Pit A. If you have a company sign-in, delete it at app.minemuster.com/account.',
+      legal: legalLine('Test Pit A', true),
       confirm: 'Delete this account',
       keep: 'Keep it',
     });
+    // No rate on the phone, or a company that keeps no time: no rate named, and the reason follows keepsTime.
+    expect(offRosterWords({ email: 'riley@example.com', company: 'Test Pit A', keepsTime: true, hasRate: false }).body).toBe(
+      'riley@example.com and its password are taken off this phone. Your records stay with Test Pit A. If you have a company sign-in, delete it at app.minemuster.com/account.',
+    );
+    const safety = offRosterWords({ email: 'riley@example.com', company: '', keepsTime: false, hasRate: true });
+    expect(safety.body).not.toMatch(/hourly rate/);
+    expect(safety.legal).toBe('They are your company’s records. The company keeps pre shift exam records for at least a year, as 30 CFR 56.18002 has it. A plain-language summary, not legal advice.');
     expect(DELETED_TOAST).toBe('Your account is deleted.');
+  });
+});
+
+describe('a phone that never joined, signed in to the server under another email', () => {
+  // A supervisor signed in on Company account, waiting to join the phone, while Riley is signed in to the app.
+  const waitingToJoin = (over: Partial<DeletionInput> = {}) => input({ serverAccount: { id: 'u-sam', email: 'sam@example.com' }, ...over });
+
+  it('counts the sign-in as the app account’s only when it is under the same email', () => {
+    expect(whoseSignIn(waitingToJoin())).toEqual({ kind: 'other_email', email: 'sam@example.com' });
+    expect(whoseSignIn(input({ serverAccount: { id: 'u-riley', email: ' Riley@Example.com ' } }))).toEqual({ kind: 'theirs', email: ' Riley@Example.com ', connected: false });
+    // The company sign-in alone, from Company account: its password shows whose it is.
+    expect(whoseSignIn(waitingToJoin({ me: null, account: null }))).toEqual({ kind: 'theirs', email: 'sam@example.com', connected: false });
+  });
+
+  it('deletes Riley’s account on the phone without Sam’s password, and says Sam’s sign-in is left as it is', () => {
+    const plan = deletionPlan(waitingToJoin());
+    expect([plan.serverToo, plan.needsPassword, plan.passwordLabel]).toEqual([false, false, undefined]);
+    expect(plan.deletes.join(' ')).not.toMatch(/sam@example\.com/);
+    expect(plan.warnings).toContain(
+      'This phone is signed in to MineMuster’s server as sam@example.com, not as riley@example.com, so that sign-in is not deleted with your account. If it is yours, delete it on Company account.',
+    );
+    // Nothing of the server is in the way, so no signal is needed.
+    expect(deletionPlan(waitingToJoin({ sync: { online: false, waiting: 0, notTaken: 0, stuck: 0, trouble: null } })).blockers).toEqual([]);
+  });
+});
+
+describe('time and pay lines, with time tracking off', () => {
+  it('names no hourly rate, no old shift and no clock-out for a company that keeps no time', () => {
+    const plan = deletionPlan(
+      input({ keepsTime: false, hasRate: true, openShift: shiftAt(NOW - 3_600_000), staleShift: shiftAt(Date.UTC(2026, 10, 17, 14)) }),
+    );
+    expect(plan.deletes).toEqual(['Your sign-in on this phone, riley@example.com, and its password.']);
+    expect(plan.blockers).toEqual([]);
+    expect([...plan.deletes, ...plan.keeps, ...plan.warnings, plan.legal].join(' ')).not.toMatch(/hourly rate|clock-out|clock out|punch/i);
+    // With time kept, both are said.
+    const time = deletionPlan(input({ hasRate: true, staleShift: shiftAt(Date.UTC(2026, 10, 17, 14)) }));
+    expect(time.deletes).toContain('Your hourly rate, kept only on this phone.');
+    expect(time.warnings).toContain('Your shift of 2026-11-17 has no clock-out. It counts no hours until a supervisor sets its end.');
+  });
+});
+
+describe('which company the lines name', () => {
+  const company = (name: string, id: string): DeletionCheckCompany => ({ id, name, role: 'employee', lastSupervisor: false, successors: [], canClose: false, closeFrom: null, running: null });
+
+  it('titles what stays with the company the lines name, the server’s when the phone has none', () => {
+    const fresh = deletionPlan(input({ company: '', serverAccount: { id: 'u-riley', email: 'riley@example.com' }, check: [company('Test Pit Q', 'c-q')] }));
+    expect(fresh.keepsTitle).toBe('What stays with Test Pit Q');
+    expect(fresh.keeps[0]).toBe('Your name on Test Pit Q’s roster. A supervisor takes it off when you leave.');
+    expect(deletionPlan(input()).keepsTitle).toBe('What stays with Test Pit A');
+  });
+
+  it('names each company for an account in more than one', () => {
+    const plan = deletionPlan(input({ serverAccount: { id: 'u-riley', email: 'riley@example.com' }, check: [company('Test Pit A', 'c-a'), company('Test Pit B', 'c-b')] }));
+    expect(plan.keepsTitle).toBe('What stays with each company');
+    expect(plan.keeps).toEqual([
+      'Your name on Test Pit A’s and Test Pit B’s rosters. A supervisor takes it off when you leave.',
+      'Your punches, paid leave, equipment checklists, pre shift exams and maintenance requests, with your name on them.',
+      'MineMuster keeps them for each company while it uses MineMuster, and deletes them when the company asks.',
+    ]);
+    expect(plan.legal).toBe(legalLine('', true, true));
+    expect(plan.legal.startsWith('They are each company’s records.')).toBe(true);
+  });
+});
+
+describe('asking the server first', () => {
+  it('waits on the first look, and offers Try again when the server did not answer, deleting nothing', () => {
+    // Not asked yet: the screen asks as soon as it opens, so it waits rather than going ahead.
+    expect(kinds(deletionPlan(ownPhone({ check: 'unknown' })))).toEqual(['checking']);
+    const failed = deletionPlan(ownPhone({ check: 'failed' }));
+    expect(failed.blockers).toEqual([CHECK_FAILED_BLOCKER]);
+    expect(CHECK_FAILED_BLOCKER).toEqual({
+      kind: 'check_failed',
+      title: 'Could not check your account with MineMuster’s server',
+      body: 'Before your company sign-in is deleted, the server says what stays with each company. Nothing has been deleted.',
+      action: 'retry',
+    });
+    // A dashboard-only supervisor's sign-in on a fresh phone: the check must answer before it goes.
+    expect(kinds(deletionPlan(input({ me: null, account: null, hasRate: false, serverAccount: { id: 'u-pat', email: 'pat@example.com' }, check: 'failed' })))).toEqual([
+      'check_failed',
+    ]);
+    // No signal comes first: that is what to fix.
+    expect(kinds(deletionPlan(ownPhone({ check: 'failed', sync: { online: false, waiting: 0, notTaken: 0, stuck: 0, trouble: null } })))).toEqual(['no_signal']);
+  });
+
+  it('says from when a company can be closed when only people taken off lately stand in the way', () => {
+    const later: DeletionCheckCompany = { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [], canClose: false, closeFrom: '2026-12-20T18:00:00+00:00', running: 0 };
+    const plan = deletionPlan(input({ serverAccount: { id: 'u-riley', email: 'riley@example.com' }, check: [later] }));
+    expect(plan.blockers[0]).toEqual({
+      kind: 'last_supervisor',
+      title: 'You are Test Pit A’s only supervisor',
+      body: 'Someone has to take over before your account is deleted, so the crew can still be let in and the records read. Make someone else a supervisor, or close the company, on the office dashboard. Test Pit A can be closed from 2026-12-20: someone taken off its roster in the last 30 days could still be put back.',
+      action: 'dashboard',
+    });
+    // Someone who can take over now: no date, since handing over is the way.
+    const handover = deletionPlan(input({ serverAccount: { id: 'u-riley', email: 'riley@example.com' }, check: [{ ...later, closeFrom: null, successors: [{ rosterId: 'r-2', firstName: 'Lee', lastName: 'Park' }] }] }));
+    expect(handover.blockers[0].body).not.toMatch(/can be closed from/);
+  });
+});
+
+describe('records that cannot be sent', () => {
+  it('counts only what a round could still send', () => {
+    expect(sendable({ waiting: 5, stuck: 2, trouble: null })).toBe(3);
+    expect(sendable({ waiting: 2, stuck: 2, trouble: 'refused' })).toBe(0);
+    expect(sendable({ waiting: 4, stuck: 0, trouble: 'not_member' })).toBe(0);
+    expect(sendable({ waiting: 4, stuck: 0, trouble: 'closed' })).toBe(0);
+    expect(sendable({ waiting: 4, stuck: 0, trouble: 'unreachable' })).toBe(4);
+    expect(sendable({ waiting: 1, stuck: 3, trouble: null })).toBe(0);
+  });
+
+  it('does not hold the deletion up for records the server will not take, and says they stay on the phone', () => {
+    const refused = deletionPlan(ownPhone({ sync: { online: true, waiting: 3, notTaken: 0, stuck: 3, trouble: 'refused' } }));
+    expect(refused.blockers).toEqual([]);
+    expect(refused.warnings).toContain('3 records cannot be sent to Test Pit A, so they stay on this phone.');
+    expect(refused.clearsPhone).toBe(false);
+    // A sign-in off the company's roster sends nothing more: what waits stays, and the deletion goes ahead.
+    const off = deletionPlan(ownPhone({ sync: { online: true, waiting: 2, notTaken: 0, stuck: 0, trouble: 'not_member' } }));
+    expect(off.blockers).toEqual([]);
+    expect(off.warnings).toContain('2 records cannot be sent to Test Pit A, so they stay on this phone.');
+    // What can still go is sent first, and only that is counted.
+    const some = deletionPlan(ownPhone({ sync: { online: true, waiting: 5, notTaken: 0, stuck: 1, trouble: null } }));
+    expect(some.blockers.map((b) => [b.kind, b.title])).toEqual([['waiting', '4 records have not reached Test Pit A yet']]);
+    expect(some.warnings).toContain('1 record cannot be sent to Test Pit A, so it stays on this phone.');
+  });
+
+  it('clears no phone that has not read its company’s records to the end', () => {
+    expect(deletionPlan(ownPhone()).clearsPhone).toBe(true);
+    expect(deletionPlan(ownPhone({ caughtUp: false })).clearsPhone).toBe(false);
   });
 });

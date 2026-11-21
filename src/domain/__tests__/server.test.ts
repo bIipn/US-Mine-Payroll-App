@@ -413,21 +413,58 @@ describe('what read_shared_records and the roster answered', () => {
 describe('deleting a company sign-in', () => {
   it('reads account_deletion_check, and none from an answer it does not understand', () => {
     const raw = [
-      { id: 'c-a', name: 'Test Pit A', role: 'supervisor', last_supervisor: true, successors: [{ roster_id: 'r-1', first_name: 'Riley J', last_name: 'Quinn' }], running: 1 },
-      { id: 'c-b', name: 'Test Pit B', role: 'employee', last_supervisor: false, successors: [], running: null },
+      {
+        id: 'c-a',
+        name: 'Test Pit A',
+        role: 'supervisor',
+        last_supervisor: true,
+        successors: [{ roster_id: 'r-1', first_name: 'Riley J', last_name: 'Quinn' }],
+        can_close: false,
+        close_from: null,
+        running: 1,
+      },
+      { id: 'c-b', name: 'Test Pit B', role: 'employee', last_supervisor: false, successors: [], can_close: false, close_from: null, running: null },
+      { id: 'c-c', name: 'Test Pit C', role: 'supervisor', last_supervisor: true, successors: [], can_close: false, close_from: '2026-12-20T18:00:00+00:00', running: 0 },
     ];
     expect(readDeletionCheck(raw)).toEqual([
-      { id: 'c-a', name: 'Test Pit A', role: 'supervisor', lastSupervisor: true, successors: [{ rosterId: 'r-1', firstName: 'Riley J', lastName: 'Quinn' }], running: 1 },
-      { id: 'c-b', name: 'Test Pit B', role: 'employee', lastSupervisor: false, successors: [], running: null },
+      {
+        id: 'c-a',
+        name: 'Test Pit A',
+        role: 'supervisor',
+        lastSupervisor: true,
+        successors: [{ rosterId: 'r-1', firstName: 'Riley J', lastName: 'Quinn' }],
+        canClose: false,
+        closeFrom: null,
+        running: 1,
+      },
+      { id: 'c-b', name: 'Test Pit B', role: 'employee', lastSupervisor: false, successors: [], canClose: false, closeFrom: null, running: null },
+      { id: 'c-c', name: 'Test Pit C', role: 'supervisor', lastSupervisor: true, successors: [], canClose: false, closeFrom: '2026-12-20T18:00:00+00:00', running: 0 },
     ]);
     expect(readDeletionCheck([])).toEqual([]);
-    for (const bad of [null, {}, 'x', [{ id: 'c-a' }], [{ ...raw[0], role: 'owner' }], [{ ...raw[0], successors: [{ roster_id: 1 }] }]]) expect(readDeletionCheck(bad)).toBeNull();
+    for (const bad of [
+      null,
+      {},
+      'x',
+      [{ id: 'c-a' }],
+      [{ ...raw[0], role: 'owner' }],
+      [{ ...raw[0], successors: [{ roster_id: 1 }] }],
+      [{ ...raw[0], can_close: undefined }],
+      [{ ...raw[0], close_from: 20261220 }],
+    ]) {
+      expect(readDeletionCheck(bad)).toBeNull();
+    }
   });
 
   it('reads each answer of the delete-account function', () => {
     expect(readDeletionAnswer(200, { deleted: true, closed: [] })).toEqual({ kind: 'deleted', closed: [] });
     expect(readDeletionAnswer(200, { deleted: true, closed: ['c-a'] })).toEqual({ kind: 'deleted', closed: ['c-a'] });
-    expect(readDeletionAnswer(401, { error: 'signed_out' })).toEqual({ kind: 'already_deleted' });
+    // Only the function's own 410 says the sign-in is deleted already. A plain 401 says nothing of the kind.
+    expect(readDeletionAnswer(410, { error: 'already_deleted' })).toEqual({ kind: 'already_deleted' });
+    expect(readDeletionAnswer(401, { error: 'signed_out' })).toEqual({ kind: 'signed_out' });
+    expect(readDeletionAnswer(401, { message: 'Invalid JWT' })).toEqual({ kind: 'signed_out' });
+    expect(readDeletionAnswer(410, null)).toEqual({ kind: 'try_again', closed: [] });
+    // The request went, and the function could not tell whether the sign-in was deleted.
+    expect(readDeletionAnswer(504, { error: 'not_known', closed: ['c-a'] })).toEqual({ kind: 'not_known', closed: ['c-a'] });
     expect(readDeletionAnswer(403, { error: 'password_needed' })).toEqual({ kind: 'password_needed' });
     expect(readDeletionAnswer(409, { error: 'last_supervisor', companies: [{ id: 'c-a', name: 'Test Pit A', successors: [] }] })).toEqual({ kind: 'last_supervisor', companies: ['Test Pit A'] });
     expect(readDeletionAnswer(500, { error: 'try_again', closed: ['c-a'] })).toEqual({ kind: 'try_again', closed: ['c-a'] });
@@ -451,5 +488,12 @@ describe('deleting a company sign-in', () => {
     expect(deletionAnswerWords({ kind: 'already_deleted' }, at)).toBe('Your company sign-in is already deleted. Delete the rest from this phone.');
     expect(deletionAnswerWords({ kind: 'not_ready' }, at)).toBe('Deleting a company sign-in is not ready on MineMuster’s server yet. Nothing was deleted. Try again later.');
     expect(deletionAnswerWords({ kind: 'too_many' }, at)).toBe('Too many tries for now. Wait a few minutes and try again. Nothing was deleted.');
+    expect(deletionAnswerWords({ kind: 'signed_out' }, at)).toBe('MineMuster’s server did not take this phone’s sign-in. Nothing was deleted. Try again.');
+    // Never "Nothing was deleted" when nobody can tell yet.
+    expect(deletionAnswerWords({ kind: 'not_known', closed: [] }, at)).toBe('MineMuster’s server did not say in time whether your company sign-in was deleted. Try again in a minute.');
+    expect(deletionAnswerWords({ kind: 'not_known', closed: ['c-a'] }, at)).toBe(
+      'The company is closed. MineMuster’s server did not say in time whether your company sign-in was deleted too. Try again in a minute.',
+    );
+    for (const closed of [[], ['c-a']]) expect(deletionAnswerWords({ kind: 'not_known', closed }, at)).not.toMatch(/Nothing was deleted/);
   });
 });

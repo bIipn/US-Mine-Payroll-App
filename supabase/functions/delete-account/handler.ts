@@ -9,26 +9,33 @@
 //     request from any other site's page is 403, before anything is asked; a phone sends no Origin.
 //     Any method but POST is 405.
 //  2. Without a bearer token: 401 signed_out.
-//  3. The body is {} or { close: [{ company_id, name }] }, at most 20 companies. Anything else, an
-//     account's id or email included, is 400 bad_request.
-//  4. Supabase Auth says whose token it is (GET /auth/v1/user, with the publishable key). A token it
-//     does not take is 401 signed_out.
+//  3. The body is {} or { close: [{ company_id, name }] }, at most 20 companies and 16 KB: a body
+//     said to be larger, or found larger while it is read, is 413 too_large, and no more of it is
+//     read. Anything else, an account's id or email included, is 400 bad_request.
+//  4. Supabase Auth says whose token it is (GET /auth/v1/user, with the publishable key). Its own
+//     reason decides the answer when it says no: an account it no longer has (user_not_found, after
+//     it has checked the token's signature) is 410 already_deleted; any other reason of its own (a
+//     session signed out, a token expired or not one it signed) is 401 signed_out. Turned down with
+//     no reason of Auth's, such as the gateway refusing the key, is 500 not_set_up.
 //  5. The password was typed in the last ten minutes: the token's amr holds a password entry no older
 //     than 600 seconds, or the answer is 403 password_needed. Supabase Auth writes the time of the
 //     password sign-in that started the session there, and keeps it through every refresh, so the
 //     app and the dashboard sign in with the password just before they call (checked against
-//     Supabase Auth v2.198.0 on the private local scan stack).
+//     Supabase Auth v2.198.0 on the private local scan stack). close_company asks the same itself.
 //  6. account_deletion_check, with the person's own token: a company where they are the last
 //     supervisor who can sign in, and that they are not closing, is 409 last_supervisor, with who
-//     could take over. A company they ask to close has to be one they may close: theirs as its last
-//     supervisor, with nobody else who can sign in, and nothing being charged; otherwise 409
-//     close_refused, before anything is closed.
+//     could take over and whether, or from when, they may close it. A company they ask to close has
+//     to be one they may close now (can_close: nobody else could take over or come back to it) with
+//     nothing being charged; otherwise 409 close_refused, before anything is closed.
 //  7. close_company, with their own token, for each company asked: a refusal is 409 close_refused,
-//     with the reason and the companies closed before it.
-//  8. Supabase Auth's admin delete with the server key, a hard delete. When it fails, the check runs
-//     again: the last supervisor somewhere now (someone stepped down meanwhile, and the database's
-//     guard refused the delete) is 409 last_supervisor; anything else is 500 try_again, with what was
-//     closed.
+//     with the reason and the companies closed before it (403 password_needed for the password).
+//  8. Supabase Auth's admin delete with the server key, a hard delete. When it does not say it went
+//     through, Supabase Auth is asked again whose the token is: an account it no longer has was
+//     deleted all the same (200). When Auth answered the delete and turned it down, nothing was
+//     deleted: the last supervisor somewhere now (someone stepped down meanwhile, and the database's
+//     guard refused it) is 409 last_supervisor, anything else 500 try_again, with what was closed.
+//     When the delete got no answer, or only a gateway's, it may still go through: 504 not_known,
+//     with what was closed.
 //  9. 200 { deleted: true, closed: [...] }.
 //
 // It logs what happened as a code: never a token, a key, an email or an id.
@@ -63,6 +70,8 @@ const CORS: Record<string, string> = {
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Statuses a gateway gives when it did not hear from the service behind it: the request may still have been carried out. */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
 type Json = Record<string, unknown>;
 
@@ -83,10 +92,26 @@ interface Checked {
   role: 'employee' | 'supervisor';
   lastSupervisor: boolean;
   successors: Successor[];
+  /** Nobody else could take over or come back: the caller may close it now. */
+  canClose: boolean;
+  /** When only people who left lately stop it: from when it may be closed. */
+  closeFrom: string | null;
   running: number;
 }
 
 type Called = { ok: true; data: unknown } | { ok: false; status: number; code?: string; hint?: string };
+
+/** What Supabase Auth says of a token. */
+type Whose =
+  | { kind: 'user'; id: string }
+  /** Auth took the token's signature and has no such account: it was deleted. */
+  | { kind: 'gone' }
+  /** Auth turned the token down for a reason of its own: signed out, expired, or not one it signed. */
+  | { kind: 'signed_out' }
+  /** Turned down with no reason of Auth's, such as the gateway refusing the key. */
+  | { kind: 'refused'; status: number }
+  /** No answer, or one this cannot read. */
+  | { kind: 'no_answer'; status: number };
 
 /** The time of the latest password entry of a token's amr claim, in Unix seconds, or null for none. */
 export function passwordTypedAt(amr: unknown): number | null {
@@ -121,15 +146,49 @@ function bearerOf(header: string | null): string | null {
   return match ? match[1] : null;
 }
 
-/** The companies the body asks to close, or null when the body is anything but {} or { close: [...] }. */
-async function readBody(request: Request): Promise<CloseAsk[] | null> {
-  let text: string;
+/**
+ * The body as text, read no further than MAX_BODY_BYTES: 'too_large' when it is said to be larger, or
+ * turns out larger while it is read, and null when it cannot be read as UTF-8.
+ */
+export async function readCapped(request: Request): Promise<string | 'too_large' | null> {
+  const declared = request.headers.get('content-length');
+  if (declared !== null) {
+    if (!/^\d{1,15}$/.test(declared.trim())) return null;
+    if (Number(declared.trim()) > MAX_BODY_BYTES) return 'too_large';
+  }
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
   try {
-    text = await request.text();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => {});
+        return 'too_large';
+      }
+      chunks.push(value);
+    }
   } catch {
     return null;
   }
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return null;
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/** The companies the body asks to close, or null when the body is anything but {} or { close: [...] }. */
+function readBody(text: string): CloseAsk[] | null {
   if (!text.trim()) return [];
   let body: unknown;
   try {
@@ -162,9 +221,9 @@ function readCheck(data: unknown): Checked[] | null {
   const out: Checked[] = [];
   for (const row of data) {
     if (!row || typeof row !== 'object') return null;
-    const { id, name, role, last_supervisor, successors, running } = row as Json;
+    const { id, name, role, last_supervisor, successors, can_close, close_from, running } = row as Json;
     if (typeof id !== 'string' || typeof name !== 'string' || (role !== 'employee' && role !== 'supervisor') || typeof last_supervisor !== 'boolean') return null;
-    if (!Array.isArray(successors)) return null;
+    if (!Array.isArray(successors) || typeof can_close !== 'boolean' || (close_from !== null && typeof close_from !== 'string')) return null;
     const people: Successor[] = [];
     for (const s of successors) {
       if (!s || typeof s !== 'object') return null;
@@ -172,7 +231,16 @@ function readCheck(data: unknown): Checked[] | null {
       if (typeof roster_id !== 'string' || typeof first_name !== 'string' || typeof last_name !== 'string') return null;
       people.push({ roster_id, first_name, last_name });
     }
-    out.push({ id: id.toLowerCase(), name, role, lastSupervisor: last_supervisor, successors: people, running: typeof running === 'number' ? running : 0 });
+    out.push({
+      id: id.toLowerCase(),
+      name,
+      role,
+      lastSupervisor: last_supervisor,
+      successors: people,
+      canClose: can_close,
+      closeFrom: close_from,
+      running: typeof running === 'number' ? running : 0,
+    });
   }
   return out;
 }
@@ -185,6 +253,8 @@ async function parsed(response: Response): Promise<unknown> {
     return null;
   }
 }
+
+const objectOf = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {});
 
 /** The request handler, for Deno.serve. */
 export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Response> {
@@ -206,7 +276,7 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
     }
     const data = await parsed(response);
     if (!response.ok) {
-      const body = data && typeof data === 'object' ? (data as Json) : {};
+      const body = objectOf(data);
       return {
         ok: false,
         status: response.status,
@@ -215,6 +285,28 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
       };
     }
     return { ok: true, data };
+  }
+
+  /** Whose the token is, by Supabase Auth, or why Auth says no. */
+  async function whose(server: Server, publishable: string, token: string): Promise<Whose> {
+    let response: Response;
+    try {
+      response = await deps.fetch(`${server.url}/auth/v1/user`, {
+        method: 'GET',
+        headers: { apikey: publishable, Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      });
+    } catch {
+      return { kind: 'no_answer', status: 0 };
+    }
+    const body = objectOf(await parsed(response));
+    if (response.ok) return typeof body.id === 'string' ? { kind: 'user', id: body.id } : { kind: 'no_answer', status: response.status };
+    if (response.status === 401 || response.status === 403) {
+      if (body.error_code === 'user_not_found') return { kind: 'gone' };
+      if (typeof body.error_code === 'string') return { kind: 'signed_out' };
+      return { kind: 'refused', status: response.status };
+    }
+    return { kind: 'no_answer', status: response.status };
   }
 
   return async (request: Request): Promise<Response> => {
@@ -233,51 +325,57 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
 
     const token = bearerOf(request.headers.get('authorization'));
     if (!token) return answer(401, { error: 'signed_out', message: 'Sign in first.' });
-    const close = await readBody(request);
+    const text = await readCapped(request);
+    if (text === 'too_large') {
+      said('too_large');
+      return answer(413, { error: 'too_large', message: `The body is at most ${MAX_BODY_BYTES} bytes.` });
+    }
+    const close = text === null ? null : readBody(text);
     if (!close) return answer(400, { error: 'bad_request', message: 'The body is {} or { close: [{ company_id, name }] }, and names no account.' });
 
     const server = serverFrom(deps.env);
     const publishable = publishableKeyFrom(deps.env);
+    const notSetUp = () => answer(500, { error: 'not_set_up', message: 'Account deletion is not set up on this server yet.' });
     if (!server || !publishable) {
       said('not set up: SUPABASE_URL, the server key (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY) or the publishable key (SUPABASE_PUBLISHABLE_KEYS or SUPABASE_ANON_KEY) is missing');
-      return answer(500, { error: 'not_set_up', message: 'Account deletion is not set up on this server yet.' });
+      return notSetUp();
     }
     const tryAgain = (closed: string[]) => answer(500, { error: 'try_again', message: 'The account could not be deleted just now. Try again in a few minutes.', closed });
+    const signedOut = () => answer(401, { error: 'signed_out', message: 'This sign-in is signed out. Sign in again.' });
+    const alreadyDeleted = () => answer(410, { error: 'already_deleted', message: 'This sign-in is deleted already.' });
 
     // 4. Whose token it is, from Supabase Auth.
-    let userId: string;
-    try {
-      const response = await deps.fetch(`${server.url}/auth/v1/user`, {
-        method: 'GET',
-        headers: { apikey: publishable, Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-      });
-      if (response.status === 401 || response.status === 403) {
-        said('signed_out');
-        return answer(401, { error: 'signed_out', message: 'This sign-in is signed out or deleted.' });
-      }
-      const user = await parsed(response);
-      if (!response.ok || !user || typeof (user as Json).id !== 'string') {
-        said(`auth answered ${response.status}`);
-        return tryAgain([]);
-      }
-      userId = (user as Json).id as string;
-    } catch {
-      said('auth could not be reached');
+    const who = await whose(server, publishable, token);
+    if (who.kind === 'gone') {
+      said('already_deleted');
+      return alreadyDeleted();
+    }
+    if (who.kind === 'signed_out') {
+      said('signed_out');
+      return signedOut();
+    }
+    if (who.kind === 'refused') {
+      said(`auth turned the request down with no reason of its own (${who.status}): is the publishable key right?`);
+      return notSetUp();
+    }
+    if (who.kind === 'no_answer') {
+      said(who.status ? `auth answered ${who.status}` : 'auth could not be reached');
       return tryAgain([]);
     }
+    const userId = who.id;
     const claims = claimsOf(token);
     if (!claims || claims.sub !== userId) {
       said('signed_out');
-      return answer(401, { error: 'signed_out', message: 'This sign-in is signed out or deleted.' });
+      return signedOut();
     }
 
     // 5. The password, typed in the last ten minutes.
     const typed = passwordTypedAt(claims.amr);
     const seconds = Math.floor(now() / 1000);
+    const passwordNeeded = () => answer(403, { error: 'password_needed', message: 'Enter your password again. It has to be typed within ten minutes of deleting.' });
     if (typed === null || seconds - typed > PASSWORD_FRESH_SECONDS || typed > seconds + 60) {
       said('password_needed');
-      return answer(403, { error: 'password_needed', message: 'Enter your password again. It has to be typed within ten minutes of deleting.' });
+      return passwordNeeded();
     }
 
     const check = async (): Promise<Checked[] | 'signed_out' | null> => {
@@ -289,27 +387,34 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
       answer(409, {
         error: 'last_supervisor',
         message: 'Someone has to take over as a supervisor first, or the company is closed.',
-        companies: companies.map(({ id, name, successors }) => ({ id, name, successors })),
+        companies: companies.map(({ id, name, successors, canClose, closeFrom, running }) => ({
+          id,
+          name,
+          successors,
+          can_close: canClose,
+          close_from: closeFrom,
+          running,
+        })),
       });
 
     // 6. What deleting the account means in each of the person's companies.
     const companies = await check();
     if (companies === 'signed_out') {
       said('signed_out');
-      return answer(401, { error: 'signed_out', message: 'This sign-in is signed out or deleted.' });
+      return signedOut();
     }
     if (!companies) {
       said('the check could not be read');
       return tryAgain([]);
     }
-    const refused = (companyId: string, reason: string, closed: string[]) => {
+    const refused = (companyId: string, reason: string, closed: string[], closeFrom: string | null = null) => {
       said(`close_refused ${reason}`);
-      return answer(409, { error: 'close_refused', message: 'The company was not closed.', company_id: companyId, reason, closed });
+      return answer(409, { error: 'close_refused', message: 'The company was not closed.', company_id: companyId, reason, close_from: closeFrom, closed });
     };
     for (const ask of close) {
       const company = companies.find((c) => c.id === ask.company_id);
       if (!company || company.role !== 'supervisor') return refused(ask.company_id, 'not_found', []);
-      if (!company.lastSupervisor || company.successors.length) return refused(ask.company_id, 'someone_can_take_over', []);
+      if (!company.canClose) return refused(ask.company_id, 'someone_can_take_over', [], company.closeFrom);
       if (company.running > 0) return refused(ask.company_id, 'subscription_running', []);
     }
     const blocking = companies.filter((c) => c.lastSupervisor && !close.some((ask) => ask.company_id === c.id));
@@ -323,6 +428,10 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
     for (const ask of close) {
       const done = await asPerson(server, publishable, token, 'close_company', { p_company_id: ask.company_id, p_company_name: ask.name });
       if (!done.ok) {
+        if (done.code === '42501' && done.hint === 'password_needed') {
+          said('password_needed (close_company)');
+          return passwordNeeded();
+        }
         const reason =
           done.code === '22023' ? 'wrong_name' : done.code === 'PT409' && (done.hint === 'someone_can_take_over' || done.hint === 'subscription_running') ? done.hint : done.code === 'PT404' ? 'not_found' : null;
         if (reason) return refused(ask.company_id, reason, closed);
@@ -334,6 +443,8 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
 
     // 8. The account itself: Supabase Auth's admin delete, for good.
     let gone = false;
+    /** Auth answered the delete itself and turned it down, so nothing was deleted. */
+    let turnedDown = false;
     let failure = '';
     try {
       const response = await deps.fetch(`${server.url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
@@ -345,14 +456,28 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
       // Already gone (deleted from another phone a moment before) counts as deleted.
       gone = response.ok || response.status === 404;
       if (!gone) {
-        const body = await parsed(response);
-        const code = body && typeof body === 'object' && typeof (body as Json).code === 'string' ? ` ${(body as Json).code}` : '';
-        failure = `${response.status}${code}`;
+        const body = objectOf(await parsed(response));
+        const fromAuth = typeof body.msg === 'string' || typeof body.error_code === 'string' || typeof body.message === 'string';
+        turnedDown = !GATEWAY_STATUSES.has(response.status) && (response.status < 500 || fromAuth);
+        failure = `${response.status}${typeof body.code === 'string' || typeof body.code === 'number' ? ` ${body.code}` : ''}`;
       }
     } catch {
       failure = 'no answer';
     }
     if (!gone) {
+      const after = await whose(server, publishable, token);
+      if (after.kind === 'gone') {
+        said(`deleted (the delete answered ${failure}, and the account is gone)`);
+        return answer(200, { deleted: true, closed });
+      }
+      if (!turnedDown) {
+        said(`not_known (the delete answered ${failure})`);
+        return answer(504, {
+          error: 'not_known',
+          message: 'The server did not say whether the account was deleted. Check again in a minute.',
+          closed,
+        });
+      }
       const again = await check();
       if (Array.isArray(again) && again.some((c) => c.lastSupervisor)) {
         said('last_supervisor (refused by the database meanwhile)');
