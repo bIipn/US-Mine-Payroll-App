@@ -144,7 +144,8 @@ export function recordsOpen(view: BillingView): boolean | null {
 export type Gate = 'in' | 'wait' | 'start' | 'restart' | 'unknown';
 
 export function gate(view: BillingView, path: string): Gate {
-  if (path === '/billing') return 'in';
+  // Billing is how the company opens again, and anyone may delete their own account whatever it owes.
+  if (path === '/billing' || path === '/account') return 'in';
   switch (view.kind) {
     case 'checking':
       return 'wait';

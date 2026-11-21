@@ -1,3 +1,5 @@
+import type { DeletionAnswer, DeletionCheckCompany } from '@app/domain/accountDeletion';
+import { readDeletionAnswer, readDeletionCheck, settleDeletion } from '@app/domain/serverAnswers';
 import type { Change } from '@app/domain/sync';
 import type { Role } from '@app/domain/types';
 
@@ -55,6 +57,67 @@ export async function signOut(): Promise<void> {
   const { error } = await supabase.auth.signOut({ scope: 'local' });
   // The session is gone from this browser whatever the server answered.
   if (error && !/session/i.test(error.message)) console.warn('Sign out:', error.message);
+}
+
+// ---- Deleting your account ----------------------------------------------------------------------
+
+/** What deleting the signed-in account means in each of its companies (account_deletion_check). */
+export async function accountDeletionCheck(): Promise<DeletionCheckCompany[]> {
+  const { data, error } = await supabase.rpc('account_deletion_check');
+  if (error) throw dataProblem(error, 'Checking your account');
+  const companies = readDeletionCheck(data);
+  if (!companies) throw new Problem('The server answered in a way this page does not understand. Reload the page.');
+  return companies;
+}
+
+/** Whether Supabase Auth still has the account of this browser's session: 'gone' once it was deleted. */
+async function accountState(): Promise<'gone' | 'there' | 'unknown'> {
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (!error && data.user) return 'there';
+    return (error as { code?: string } | null)?.code === 'user_not_found' ? 'gone' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** How long the delete may take before this page stops waiting: the function makes several calls in a row. */
+export const DELETE_TIMEOUT_MS = 60_000;
+
+/**
+ * Delete the signed-in account from MineMuster's server, for good, closing the companies in `body`
+ * first. The password is checked by signing in with it again, which also gives the server a sign-in
+ * made just now: the delete-account function deletes an account only within ten minutes of its
+ * password. The request names no account; the server deletes the one the session is. An answer that
+ * does not say whether the account went is checked with Supabase Auth (settleDeletion), as the phone
+ * does, before anything is said.
+ */
+export async function deleteMyAccount(email: string, password: string, body: { close?: { company_id: string; name: string }[] }): Promise<DeletionAnswer> {
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+    if (error || !data.session) {
+      const problem = authProblem(error);
+      if (problem.code === 'offline') return { kind: 'unreachable' };
+      if (problem.code === 'over_request_rate_limit' || (error as { status?: number } | null)?.status === 429) return { kind: 'too_many' };
+      // Supabase Auth answers a deleted account's password as it answers a wrong one: the session this browser holds says which.
+      return (await accountState()) === 'gone' ? { kind: 'already_deleted' } : { kind: 'wrong_password' };
+    }
+  } catch {
+    return { kind: 'unreachable' };
+  }
+  try {
+    const { data, error } = await supabase.functions.invoke('delete-account', { body, timeout: DELETE_TIMEOUT_MS });
+    if (!error) return settleDeletion(readDeletionAnswer(200, data), accountState);
+    const reply = (error as { name?: unknown; context?: unknown }).context as { status?: unknown; json?: () => Promise<unknown> } | undefined;
+    if ((error as { name?: unknown }).name === 'FunctionsHttpError' && reply && typeof reply.status === 'number') {
+      const answer = typeof reply.json === 'function' ? await reply.json().catch(() => null) : null;
+      return settleDeletion(readDeletionAnswer(reply.status, answer), accountState);
+    }
+    // No answer, or the page gave up waiting: the request may have reached the function.
+    return settleDeletion({ kind: 'not_known', closed: [] }, accountState);
+  } catch {
+    return settleDeletion({ kind: 'not_known', closed: [] }, accountState);
+  }
 }
 
 // ---- Companies and joining --------------------------------------------------------------------

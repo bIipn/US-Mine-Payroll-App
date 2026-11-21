@@ -77,6 +77,12 @@ describe('the gate on the supervisor pages', () => {
     }
   });
 
+  it('always opens Your account: anyone may delete their own account, whatever the company owes', () => {
+    for (const view of [known('none'), known('ended', { status: 'canceled' }), { kind: 'checking' } as const, { kind: 'failed', message: 'x', code: 'offline' } as const]) {
+      expect(gate(view, '/account')).toBe('in');
+    }
+  });
+
   it('waits for the first answer, and lets the supervisor in without one only when the server has no billing yet', () => {
     expect(gate({ kind: 'checking' }, '/')).toBe('wait');
     // The server has no billing yet: never shut a company out because the server is behind.

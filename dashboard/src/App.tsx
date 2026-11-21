@@ -8,9 +8,10 @@ import { CompanyProvider } from './lib/company';
 import { messageOf } from './lib/errors';
 import { clearTrialIntent, wantsTrial } from './lib/intent';
 import { remember, remembered } from './lib/picked';
-import { go } from './lib/router';
+import { go, useLocation } from './lib/router';
 import type { CompanyChoice } from './lib/server';
 import { arrivedWith, supabase, tidyAddress } from './lib/supabase';
+import { AccountScreen, deletedWords } from './screens/AccountPage';
 import { AuthScreen, NewPasswordScreen } from './screens/AuthScreen';
 import { EmployeeScreen } from './screens/EmployeeScreen';
 import { NoCompanyScreen } from './screens/NoCompanyScreen';
@@ -40,16 +41,19 @@ function linkProblem(signedIn: boolean): string | null {
 export function App() {
   const [auth, setAuth] = useState<Auth>({ state: 'checking' });
   const [linkSaid, setLinkSaid] = useState<string | null>(null);
+  // Sent here once an account was deleted: the sign-in page says so, until someone signs in.
+  const [farewell, setFarewell] = useState(() => deletedWords(window.location.search));
 
   useEffect(() => {
     let live = true;
     supabase.auth.getSession().then(({ data }) => {
       if (!live) return;
       setLinkSaid(linkProblem(!!data.session));
-      if (arrivedWith.error || arrivedWith.code) tidyAddress();
+      if (arrivedWith.error || arrivedWith.code || farewell) tidyAddress();
       setAuth(data.session ? { state: 'in', session: data.session } : { state: 'out' });
     });
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) setFarewell(null);
       if (event === 'PASSWORD_RECOVERY' && session) setAuth({ state: 'recovery', session });
       else if (session) setAuth((had) => (had.state === 'recovery' && event !== 'USER_UPDATED' ? had : { state: 'in', session }));
       else setAuth({ state: 'out' });
@@ -61,7 +65,7 @@ export function App() {
   }, []);
 
   if (auth.state === 'checking') return <Loading>Opening MineMuster</Loading>;
-  if (auth.state === 'out') return <AuthScreen said={linkSaid} trial={wantsTrial()} />;
+  if (auth.state === 'out') return <AuthScreen said={linkSaid} done={farewell} trial={wantsTrial()} />;
   if (auth.state === 'recovery') return <NewPasswordScreen onDone={() => setAuth({ state: 'in', session: auth.session })} />;
   return (
     <Boundary
@@ -85,6 +89,7 @@ export function App() {
 }
 
 function Companies({ session }: { session: Session }) {
+  const { path } = useLocation();
   const [list, setList] = useState<CompanyChoice[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(remembered);
@@ -147,7 +152,8 @@ function Companies({ session }: { session: Session }) {
     );
   }
   if (!list) return <Loading>Finding your companies</Loading>;
-  if (list.length === 0) return <NoCompanyScreen email={email} onCompany={load} />;
+  // Your account is anyone's: for an account in no company, and for the crew, it is a page of its own.
+  if (list.length === 0) return path === '/account' ? <AccountScreen email={email} openCompany={null} /> : <NoCompanyScreen email={email} onCompany={load} />;
 
   const choice = list.find((c) => c.id === picked) ?? list[0];
   const pick = (id: string) => {
@@ -156,6 +162,7 @@ function Companies({ session }: { session: Session }) {
   };
 
   if (choice.role !== 'supervisor') {
+    if (path === '/account') return <AccountScreen email={email} openCompany={choice.id} onPick={pick} />;
     return <EmployeeScreen email={email} choice={choice} companies={list} onPick={pick} />;
   }
 

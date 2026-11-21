@@ -1,4 +1,4 @@
-import type { DeletionAnswer, DeletionCheckCompany } from './accountDeletion';
+import type { CloseRefusal, DeletionAnswer, DeletionCheckCompany } from './accountDeletion';
 import { isNotFound } from './refusals';
 import { cleanText } from './roster';
 import type { ConnectedCompany } from './server';
@@ -414,6 +414,20 @@ export function readDeletionCheck(raw: unknown): DeletionCheckCompany[] | null {
 export type { DeletionAnswer };
 
 const ids = (value: unknown): string[] => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
+const isCloseRefusal = (value: unknown): value is CloseRefusal =>
+  value === 'wrong_name' || value === 'someone_can_take_over' || value === 'subscription_running' || value === 'not_found';
+
+/**
+ * What became of a deletion once an answer that does not say whether the sign-in went has been checked
+ * with Supabase Auth (`state`, for the session that asked): gone is deleted, by this request or another.
+ * A plain 401 was turned down before anything was deleted. The phone and the office dashboard both
+ * settle their answers here before they say anything.
+ */
+export async function settleDeletion(answer: DeletionAnswer, state: () => Promise<'gone' | 'there' | 'unknown'>): Promise<DeletionAnswer> {
+  if (answer.kind === 'signed_out') return (await state()) === 'gone' ? { kind: 'already_deleted' } : { kind: 'try_again', closed: [] };
+  if (answer.kind === 'not_known') return (await state()) === 'gone' ? { kind: 'deleted', closed: answer.closed } : answer;
+  return answer;
+}
 
 /**
  * The delete-account function's answer, by its status and body. Only its own 410 says the sign-in is
@@ -427,6 +441,9 @@ export function readDeletionAnswer(status: number, body: unknown): DeletionAnswe
   if (status === 401) return { kind: 'signed_out' };
   if (status === 504 && b.error === 'not_known') return { kind: 'not_known', closed: ids(b.closed) };
   if (status === 403 && b.error === 'password_needed') return { kind: 'password_needed' };
+  if (status === 409 && b.error === 'close_refused' && typeof b.company_id === 'string' && isCloseRefusal(b.reason)) {
+    return { kind: 'close_refused', companyId: b.company_id, reason: b.reason, closeFrom: typeof b.close_from === 'string' ? b.close_from : null, closed: ids(b.closed) };
+  }
   if (status === 409 && b.error === 'last_supervisor') {
     const companies = Array.isArray(b.companies) ? b.companies : [];
     const names = companies.map((c) => (c && typeof c === 'object' ? (c as Record<string, unknown>).name : null)).filter((n): n is string => typeof n === 'string');
@@ -460,6 +477,19 @@ export function deletionAnswerWords(answer: DeletionAnswer, { email }: { email: 
       return answer.closed.length
         ? 'The company is closed. MineMuster’s server did not say in time whether your company sign-in was deleted too. Try again in a minute.'
         : 'MineMuster’s server did not say in time whether your company sign-in was deleted. Try again in a minute.';
+    case 'close_refused': {
+      const first = answer.closed.length ? 'The company before it is closed, and your account is not deleted yet. ' : 'Nothing was closed or deleted. ';
+      switch (answer.reason) {
+        case 'wrong_name':
+          return `${first}Type the company’s name as it is written to close it.`;
+        case 'someone_can_take_over':
+          return `${first}Someone else could still take over the company, so it was not closed. Make them a supervisor on the Roster page instead.`;
+        case 'subscription_running':
+          return `${first}The company’s subscription is still running. Cancel it in Billing first.`;
+        case 'not_found':
+          return `${first}That company is not one you can close.`;
+      }
+    }
     case 'too_many':
       return 'Too many tries for now. Wait a few minutes and try again. Nothing was deleted.';
     case 'not_ready':

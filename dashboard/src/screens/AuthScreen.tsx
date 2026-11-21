@@ -28,8 +28,11 @@ export function Gate({ children, title, say, tab }: { children: ReactNode; title
 
 type Tab = 'in' | 'up' | 'reset';
 
-/** `trial`: sent from the website to start a free trial, so the page opens on making an account and says what comes next. */
-export function AuthScreen({ said: arrived = null, trial = false }: { said?: string | null; trial?: boolean } = {}) {
+/**
+ * `trial`: sent from the website to start a free trial, so the page opens on making an account and says what comes next.
+ * `done`: what was just done before this browser was signed out, such as deleting the account.
+ */
+export function AuthScreen({ said: arrived = null, done = null, trial = false }: { said?: string | null; done?: string | null; trial?: boolean } = {}) {
   const [tab, setTab] = useState<Tab>(trial ? 'up' : 'in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -110,6 +113,7 @@ export function AuthScreen({ said: arrived = null, trial = false }: { said?: str
         ) : null}
         <div className="stack" style={{ gap: '1.25rem' }} {...(tab !== 'reset' ? tabPanelProps('auth-panel', tab) : null)}>
         {arrived && !said && !error ? <Notice tone="warn" live>{arrived}</Notice> : null}
+        {done && !arrived && !said && !error ? <Notice tone="ok" live>{done}</Notice> : null}
         {trial && !arrived && !said && tab !== 'reset' ? (
           <Notice tone="info" title="Start your 14-day free trial">
             {tab === 'up'

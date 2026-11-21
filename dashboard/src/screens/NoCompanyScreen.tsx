@@ -9,7 +9,7 @@ import type { OpenWhich } from '../lib/companies';
 import { messageOf } from '../lib/errors';
 import { wantsTrial } from '../lib/intent';
 import { joinMessage, REQUEST_STATUS } from '../lib/joinStatus';
-import { go } from '../lib/router';
+import { go, onLink } from '../lib/router';
 import { REASON_TEXT } from '../lib/rosterTools';
 import type { JoinResult, MyJoinRequest } from '../lib/server';
 import { browserZone } from '../lib/timezone';
@@ -28,6 +28,7 @@ export function TopBand({ email }: { email: string }) {
         <img src="/brand/minemuster-logo-800.webp" width={800} height={371} alt="MineMuster" style={{ width: '8.5rem' }} />
         <div className="row" style={{ gap: '0.5rem 1rem' }}>
           <span className="small" style={{ color: 'var(--on-dark-muted)', overflowWrap: 'anywhere' }}>{email}</span>
+          <a className="btn btn-ondark btn-small" href="/account" onClick={onLink}>Your account</a>
           <Button kind="ondark" small onClick={() => void signOut()}>Sign out</Button>
         </div>
       </div>

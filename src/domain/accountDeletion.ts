@@ -68,10 +68,15 @@ export type DeletionAnswer =
   | { kind: 'unreachable' }
   /** The request went, and nothing says yet whether the sign-in was deleted. */
   | { kind: 'not_known'; closed: string[] }
+  /** A company asked to be closed (the office dashboard's Your account) was not, and nothing after it was done. */
+  | { kind: 'close_refused'; companyId: string; reason: CloseRefusal; closeFrom: string | null; closed: string[] }
   | { kind: 'too_many' }
   /** The server has no delete-account function yet. */
   | { kind: 'not_ready' }
   | { kind: 'try_again'; closed: string[] };
+
+/** Why the server did not close a company: its name typed otherwise, someone who could take over, a subscription still charged, or not the caller's to close. */
+export type CloseRefusal = 'wrong_name' | 'someone_can_take_over' | 'subscription_running' | 'not_found';
 
 /** Whose the company sign-in on this phone is, for this deletion. */
 export type SignInHere =

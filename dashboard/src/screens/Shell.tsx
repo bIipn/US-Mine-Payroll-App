@@ -14,6 +14,7 @@ import { zoneLabel } from '../lib/zones';
 import { CompanyLogoPlate, MineMusterLogo } from '../ui/brand';
 import { Boundary } from '../ui/boundary';
 import { Button, Loading, Notice } from '../ui/kit';
+import { AccountPage } from './AccountPage';
 import { BillingPage, StatusPanel } from './BillingPage';
 import { CompanyPage } from './CompanyPage';
 import { DefectsPage } from './DefectsPage';
@@ -154,16 +155,17 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
   else if ((params = match('/payroll/:id', path)) && timeKept) page = <PayrollPersonPage id={params.id} view={query.get('view')} at={query.get('at')} />;
   else if (path === '/exports') page = <ExportsPage />;
   else if (path === '/billing') page = <BillingPage email={email} started={query.get('started')} />;
+  else if (path === '/account') page = <AccountPage email={email} openCompany={ctx.choice.id} onPick={onPick} />;
   else page = <NotFound timeKept={timeKept} path={path} />;
   // Without the records, an empty list would look like nothing is open. Say so instead.
-  if (ctx.recordsError && path !== '/' && path !== '/roster' && path !== '/billing') page = <PageHead title="The records are not loaded" />;
+  if (ctx.recordsError && path !== '/' && path !== '/roster' && path !== '/billing' && path !== '/account') page = <PageHead title="The records are not loaded" />;
   // With no trial or subscription, every page but Billing is the panel to start one (billing.ts decides).
   const shut = gate(billing.view, path);
   if (shut === 'wait') page = <Loading>Checking billing</Loading>;
   else if (shut === 'unknown' && billing.view.kind === 'failed') page = <BillingUnknown message={billing.view.message} />;
   else if ((shut === 'start' || shut === 'restart') && billing.view.kind === 'known') page = <BillingGate email={email} billing={billing.view.billing} />;
   // Just let in (back from checkout, say): the records are on their way, so no page says there are none.
-  else if (shut === 'in' && ctx.recordsHeld && path !== '/billing' && path !== '/roster') page = <Loading>Loading the records</Loading>;
+  else if (shut === 'in' && ctx.recordsHeld && path !== '/billing' && path !== '/roster' && path !== '/account') page = <Loading>Loading the records</Loading>;
 
   const zone = ctx.company?.timezone;
   const here = browserZone();
@@ -222,6 +224,7 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
         </nav>
         <div className="side-foot">
           <span>Signed in as {email}</span>
+          <a className="btn btn-quiet" href="/account" onClick={onLink} aria-current={path === '/account' ? 'page' : undefined}>Your account</a>
           <Button kind="quiet" onClick={() => void signOut()}>Sign out</Button>
         </div>
       </aside>

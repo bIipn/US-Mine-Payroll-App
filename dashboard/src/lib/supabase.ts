@@ -38,7 +38,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 export function tidyAddress(): void {
   try {
     const url = new URL(window.location.href);
-    for (const key of ['code', 'error', 'error_code', 'error_description', 'sb_flow_id']) url.searchParams.delete(key);
+    for (const key of ['code', 'error', 'error_code', 'error_description', 'sb_flow_id', 'deleted']) url.searchParams.delete(key);
     if (/(^|&)(error|error_code|error_description|access_token)=/.test(url.hash.replace(/^#/, ''))) url.hash = '';
     window.history.replaceState(window.history.state, '', url.toString());
   } catch {

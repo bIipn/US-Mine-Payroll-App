@@ -19,6 +19,7 @@ import {
   readStanding,
   readWaitingRequests,
   serverWords,
+  settleDeletion,
   type JoinAnswer,
   type ServerCompany,
   type ServerProblem,
@@ -421,16 +422,11 @@ export async function deleteAccount(email: string, password: string): Promise<{ 
     return fail({ kind: 'unreachable' });
   }
   // What the person is told has to be true. An answer that does not say whether the account is still
-  // there is checked with Supabase Auth first: gone is deleted, and "Nothing was deleted" only when
-  // nothing can have been.
+  // there is checked with Supabase Auth first (settleDeletion): gone is deleted, and "Nothing was
+  // deleted" only when nothing can have been.
   const settle = async (answer: DeletionAnswer) => {
-    if (answer.kind === 'deleted') return { ok: true as const, closed: answer.closed };
-    if (answer.kind === 'signed_out') {
-      // Turned down before anything was deleted: gone means it went from somewhere else.
-      return fail((await accountState()) === 'gone' ? { kind: 'already_deleted' } : { kind: 'try_again', closed: [] });
-    }
-    if (answer.kind === 'not_known') return (await accountState()) === 'gone' ? { ok: true as const, closed: answer.closed } : fail(answer);
-    return fail(answer);
+    const settled = await settleDeletion(answer, accountState);
+    return settled.kind === 'deleted' ? { ok: true as const, closed: settled.closed } : fail(settled);
   };
   try {
     const { data, error } = await api().functions.invoke('delete-account', { body: {}, timeout: DELETE_TIMEOUT_MS });

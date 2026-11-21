@@ -5,6 +5,8 @@ import {
   deletionAnswerWords,
   readDeletionAnswer,
   readDeletionCheck,
+  settleDeletion,
+  type DeletionAnswer,
   checkJoinCode,
   checkJoinName,
   checkPassword,
@@ -495,5 +497,49 @@ describe('deleting a company sign-in', () => {
       'The company is closed. MineMuster’s server did not say in time whether your company sign-in was deleted too. Try again in a minute.',
     );
     for (const closed of [[], ['c-a']]) expect(deletionAnswerWords({ kind: 'not_known', closed }, at)).not.toMatch(/Nothing was deleted/);
+  });
+
+  it('reads a company the office dashboard asked to close and the server did not, with why and what went before it', () => {
+    expect(readDeletionAnswer(409, { error: 'close_refused', company_id: 'c-b', reason: 'wrong_name', close_from: null, closed: ['c-a'] })).toEqual({
+      kind: 'close_refused',
+      companyId: 'c-b',
+      reason: 'wrong_name',
+      closeFrom: null,
+      closed: ['c-a'],
+    });
+    expect(readDeletionAnswer(409, { error: 'close_refused', company_id: 'c-b', reason: 'someone_can_take_over', close_from: '2026-12-20T18:00:00+00:00', closed: [] })).toMatchObject({
+      reason: 'someone_can_take_over',
+      closeFrom: '2026-12-20T18:00:00+00:00',
+    });
+    // A reason this version does not know is no answer it can act on.
+    expect(readDeletionAnswer(409, { error: 'close_refused', company_id: 'c-b', reason: 'later', closed: [] })).toEqual({ kind: 'try_again', closed: [] });
+    const at = { email: 'riley@example.com' };
+    const refused = (reason: 'wrong_name' | 'someone_can_take_over' | 'subscription_running' | 'not_found', closed: string[] = []) =>
+      deletionAnswerWords({ kind: 'close_refused', companyId: 'c-b', reason, closeFrom: null, closed }, at);
+    expect(refused('wrong_name')).toBe('Nothing was closed or deleted. Type the company’s name as it is written to close it.');
+    expect(refused('subscription_running')).toBe('Nothing was closed or deleted. The company’s subscription is still running. Cancel it in Billing first.');
+    expect(refused('someone_can_take_over', ['c-a'])).toBe(
+      'The company before it is closed, and your account is not deleted yet. Someone else could still take over the company, so it was not closed. Make them a supervisor on the Roster page instead.',
+    );
+    expect(refused('not_found')).toBe('Nothing was closed or deleted. That company is not one you can close.');
+  });
+
+  it('settles an answer that does not say whether the sign-in went by asking Supabase Auth, and leaves every other answer as it is', async () => {
+    const asked: string[] = [];
+    const state = (s: 'gone' | 'there' | 'unknown') => async () => {
+      asked.push(s);
+      return s;
+    };
+    expect(await settleDeletion({ kind: 'not_known', closed: ['c-a'] }, state('gone'))).toEqual({ kind: 'deleted', closed: ['c-a'] });
+    expect(await settleDeletion({ kind: 'not_known', closed: [] }, state('there'))).toEqual({ kind: 'not_known', closed: [] });
+    expect(await settleDeletion({ kind: 'not_known', closed: [] }, state('unknown'))).toEqual({ kind: 'not_known', closed: [] });
+    // A plain 401 was turned down before anything was deleted: gone means deleted from somewhere else.
+    expect(await settleDeletion({ kind: 'signed_out' }, state('gone'))).toEqual({ kind: 'already_deleted' });
+    expect(await settleDeletion({ kind: 'signed_out' }, state('there'))).toEqual({ kind: 'try_again', closed: [] });
+    expect(await settleDeletion({ kind: 'signed_out' }, state('unknown'))).toEqual({ kind: 'try_again', closed: [] });
+    expect(asked).toHaveLength(6);
+    const plain: DeletionAnswer[] = [{ kind: 'deleted', closed: [] }, { kind: 'wrong_password' }, { kind: 'try_again', closed: ['c-a'] }, { kind: 'last_supervisor', companies: ['Test Pit A'] }];
+    for (const answer of plain) expect(await settleDeletion(answer, state('gone'))).toEqual(answer);
+    expect(asked).toHaveLength(6);
   });
 });
