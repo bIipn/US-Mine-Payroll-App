@@ -31,7 +31,7 @@ The Excel exports look like this ([payroll sample](docs/samples/Sample-Mining-Co
 **For everyone on the crew**
 
 - **Works with no signal.** Quarries, pits and underground mines often have none. Clocking in, the equipment checklist, lunch, the pre shift exam and maintenance requests all work without it: a record is saved on the phone the moment it is signed. A strip across the top says when the phone has no signal, and the More screen says where the records stand. GPS needs no cell signal, only a view of the sky.
-- **Clock in and out with a GPS check.** A clock-in only goes through from inside the mine boundary. The location is read at the moment of the punch and never in the background.
+- **Clock in and out with a GPS check.** A clock-in made with a location goes through only inside the mine boundary. With location off, approximate only, or no fix, it still goes through, with no location, marked for a supervisor to review; nothing is paid or docked for it. The location is read at the moment of the punch and never in the background.
 - **Lunch is one tap.** Tap Start lunch and that is it. Thirty minutes later the app puts you back on the clock by itself and sends a notification that lunch is over. Nobody clocks back in. Lunch is unpaid and comes off the day as 0.50.
 - **Lunch reminders, where the state sets a lunch deadline.** In California the app counts down to the end of the fifth hour of work and reminds you 60, 30 and 15 minutes before it, and again when it passes. In a state with no deadline there is no countdown; see [Rules by state](#rules-by-state).
 - **Hours the way the timesheet does them.** Minutes become hundredths of an hour (15 min = .25, 45 min = .75). 6:15 AM to 7:00 PM with a 30-minute lunch is 12.75 − 0.50 = **12.25**.
@@ -257,6 +257,7 @@ The boundary is a circle around a pin on the mine, 1,000 m (0.62 mi) out by defa
 - **A supervisor sets it in the app** on More → Mine boundary: standing on the mine, "Put the pin where I am" moves the pin there, and the buttons size the circle.
 - **The sample company's site is made up:** round numbers in open desert, with a made-up town about a mile and a half off.
 - **Until a site is set,** a clock-in is turned down with a note to ask a supervisor to set the boundary. Clocking out and starting lunch are never blocked by location.
+- **With location off, approximate only, or no fix,** a clock-in still goes through, with no location (`noLocation` on the punch), marked "No location" for a supervisor to review: on the shift, the On site list, the punch log, the safety log's Time On Site sheet and the flags sheet. Nothing is paid or docked for it. A position outside the boundary, a simulated one, or one too vague to trust (over 200 m) is still turned down and logged. With only an approximate location the app reads no position at all, and Check where I am on the boundary screen is a supervisor's.
 
 ## Standards
 
