@@ -30,8 +30,9 @@
 --       again.
 --   cancel_supervisor_invitation(p_invitation_id)  For a supervisor.
 --   account_for_email(p_email)  For the server key: the account an address
---       belongs to, if any, so supervisor-tools asks Supabase Auth to send an
---       invite email only to an address with no account.
+--       belongs to, if any, and whether the address is confirmed, so
+--       supervisor-tools asks Supabase Auth to send an invite email only to an
+--       address with no account or one not confirmed.
 --   my_supervisor_invitations()  The open, unexpired invitations to the
 --       caller's confirmed address.
 --   accept_supervisor_invitation(p_invitation_id)  The invited person takes
@@ -56,12 +57,23 @@
 -- Something that is not an email address is refused with 22023, hint
 -- email_invalid. Addresses are kept and compared trimmed and in lower case
 -- (email_key).
+--
+-- A function that takes a roster row and its invitation locks the row first.
+-- So does deleting a row, which deletes its invitations through the cascade,
+-- and deleting a company, which reaches invitations through its rows alone.
+-- None of them ever holds an invitation while it waits for that invitation's
+-- row.
 
 -- ---- The invitations --------------------------------------------------------------------------------
 
 create table public.supervisor_invitations (
   id uuid primary key default gen_random_uuid(),
-  company_id uuid not null references public.companies (id) on delete cascade,
+  -- The company reaches its invitations through their rows alone (the key
+  -- below), with no key of its own: deleting the company deletes its rows, and
+  -- each row its invitations, so a row is locked before its invitations. A key
+  -- to companies would add a second cascade, and PostgreSQL fires the two in
+  -- the order of their triggers' names, which nothing here decides.
+  company_id uuid not null,
   roster_id uuid not null,
   -- The address as typed, trimmed and in lower case (email_key).
   email text not null,
@@ -87,7 +99,8 @@ create table public.supervisor_invitations (
 -- One open invitation per row.
 create unique index supervisor_invitations_one_open on public.supervisor_invitations (roster_id)
   where accepted_at is null and cancelled_at is null;
--- A row's invitations, for when the row or its company is deleted.
+-- A row's invitations, for when the row is deleted, on its own or with its
+-- company.
 create index supervisor_invitations_row_idx on public.supervisor_invitations (company_id, roster_id);
 -- The open invitations to an address, for my_supervisor_invitations.
 create index supervisor_invitations_email_idx on public.supervisor_invitations (email)
@@ -204,9 +217,10 @@ revoke all on function public.row_open_to_invitation(boolean, uuid) from public,
 --   PT404  no such row among the companies the caller supervises;
 --   PT409  row_taken.
 --
--- It locks the row's open invitation, then the row, the order accepting takes
--- them in: an invitation and an acceptance onto one row take turns, and never
--- each hold what the other waits for.
+-- It locks the row, and then the row's open invitation as it cancels it: a row
+-- before its invitations. Two invitations onto one row, or an invitation and
+-- an acceptance, take turns on the row, and the second sees what the first
+-- did.
 create function public.invite_supervisor(p_roster_id uuid, p_email text)
 returns jsonb
 language plpgsql
@@ -234,14 +248,6 @@ begin
       message = 'Type the email address to send the invitation to.',
       hint = 'email_invalid';
   end if;
-
-  perform 1
-  from public.supervisor_invitations i
-  where i.roster_id = p_roster_id
-    and i.accepted_at is null
-    and i.cancelled_at is null
-    and public.is_supervisor(i.company_id)
-  for update;
 
   select r.* into target
   from public.roster r
@@ -284,10 +290,13 @@ $$;
 -- unexpired (one that has expired is replaced by inviting again), and its row
 -- still open to an invitation. It refuses, in this order:
 --   42501  nobody signed in;
---   PT404  no such invitation among the companies the caller supervises;
+--   PT404  no such invitation among the companies the caller supervises, or
+--          none any longer once its row is locked;
 --   PT409  invitation_closed;
 --   PT409  row_taken.
--- The invitation, then its row, are locked, as accepting locks them.
+-- It finds the invitation's row with no lock, locks the row, then the
+-- invitation, and finds the invitation again, still that row's, before it
+-- checks anything: a row before its invitations.
 create function public.resend_supervisor_invitation(p_invitation_id uuid)
 returns jsonb
 language plpgsql
@@ -297,6 +306,7 @@ set search_path = pg_catalog, pg_temp
 as $$
 declare
   caller uuid := auth.uid();
+  seen public.supervisor_invitations;
   invitation public.supervisor_invitations;
   target public.roster;
 begin
@@ -304,9 +314,24 @@ begin
     raise exception using errcode = '42501', message = 'Sign in first.';
   end if;
 
-  select i.* into invitation
+  select i.* into seen
   from public.supervisor_invitations i
   where i.id = p_invitation_id
+    and public.is_supervisor(i.company_id);
+  if not found then
+    raise exception using errcode = 'PT404', message = 'No such invitation.';
+  end if;
+
+  select r.* into target
+  from public.roster r
+  where r.company_id = seen.company_id
+    and r.id = seen.roster_id
+  for update;
+
+  select i.* into invitation
+  from public.supervisor_invitations i
+  where i.id = seen.id
+    and i.roster_id = seen.roster_id
     and public.is_supervisor(i.company_id)
   for update;
   if not found then
@@ -320,12 +345,6 @@ begin
       message = 'That invitation has expired, or was cancelled or accepted.',
       hint = 'invitation_closed';
   end if;
-
-  select r.* into target
-  from public.roster r
-  where r.company_id = invitation.company_id
-    and r.id = invitation.roster_id
-  for update;
   if not public.row_open_to_invitation(target.active, target.user_id) then
     raise exception using
       errcode = 'PT409',
@@ -353,6 +372,8 @@ $$;
 --   PT404  no such invitation among the companies the caller supervises;
 --   PT409  invitation_closed, for one already accepted: the person is on the
 --          row, and a supervisor changes the row instead.
+-- It locks the invitation alone and no row, so it never waits for a row while
+-- it holds an invitation.
 create function public.cancel_supervisor_invitation(p_invitation_id uuid)
 returns void
 language plpgsql
@@ -392,24 +413,28 @@ $$;
 
 -- ---- An address's account ---------------------------------------------------------------------------
 
--- The account an address belongs to, confirmed or not, or null, for the
--- server key. The supervisor-tools function asks it after invite_supervisor
--- or resend_supervisor_invitation, and asks Supabase Auth to send an invite
--- email only when there is none: an address with an account gets no new
--- account and no email, and its invitation waits on the dashboard until that
--- account signs in. Addresses are compared as email_key reads them.
+-- The account an address belongs to, if it has one, for the server key: its
+-- id, and whether Supabase Auth has confirmed the address. One row at most;
+-- were there two, a confirmed one first. The supervisor-tools function asks
+-- it after invite_supervisor or resend_supervisor_invitation. Supabase Auth's
+-- invite makes the account of a new address, not confirmed until its link is
+-- opened, sends again to an address that is not confirmed, and refuses one
+-- that is. So the function asks it to invite when there is no row or the
+-- address is not confirmed, and never once it is: that invitation waits on
+-- the dashboard until the account signs in. The inviter's answer is the same
+-- either way. Addresses are compared as email_key reads them.
 create function public.account_for_email(p_email text)
-returns uuid
+returns table (user_id uuid, confirmed boolean)
 language sql
 stable
 security definer
 set search_path = pg_catalog, pg_temp
 as $$
-  select u.id
+  select u.id, u.email_confirmed_at is not null
   from auth.users u
   where public.email_key(p_email) <> ''
     and public.email_key(u.email) = public.email_key(p_email)
-  order by u.id
+  order by u.email_confirmed_at is null, u.id
   limit 1
 $$;
 
@@ -459,15 +484,17 @@ $$;
 -- Accept an invitation: the invited person, signed in with the invited
 -- address, confirmed, takes the row. It answers {company_id, company_name}.
 --
--- The invitation is locked, then the row, before anything about either is
--- looked at, and every condition is checked under those locks: two
--- acceptances of one invitation, or an acceptance and a new invitation onto
--- the row, take turns, and the second sees what the first did. The caller's
--- calls to the company take turns with join_company's too (its lock), so a
--- name typed in the app at the same moment never puts the account on a
--- second row there. It refuses, in this order:
+-- It finds the invitation's row with no lock. It takes join_company's lock
+-- for the caller and the company, so a name typed in the app at the same
+-- moment never puts the account on a second row there. Then it locks the row,
+-- then the invitation (a row before its invitations), and finds the
+-- invitation again, still that row's. Every condition is checked under those
+-- locks: two acceptances of one invitation, or an acceptance and a new
+-- invitation onto the row, take turns, and the second sees what the first
+-- did. The roster's write trigger takes the account's lock last, in the
+-- writes. It refuses, in this order:
 --   42501  nobody signed in;
---   PT404  no such invitation;
+--   PT404  no such invitation, or none any longer once its row is locked;
 --   PT409  wrong_email: the caller's confirmed address (confirmed_email_of) is
 --          not the invited one, or it has none. Asked first, so only the
 --          invited person learns more about the invitation;
@@ -494,6 +521,7 @@ set search_path = pg_catalog, pg_temp
 as $$
 declare
   caller uuid := auth.uid();
+  seen public.supervisor_invitations;
   invitation public.supervisor_invitations;
   target public.roster;
 begin
@@ -501,23 +529,31 @@ begin
     raise exception using errcode = '42501', message = 'Sign in first.';
   end if;
 
-  select i.* into invitation
+  select i.* into seen
   from public.supervisor_invitations i
-  where i.id = p_invitation_id
-  for update;
+  where i.id = p_invitation_id;
   if not found then
     raise exception using errcode = 'PT404', message = 'No such invitation.';
   end if;
 
   perform pg_catalog.pg_advisory_xact_lock(
-    pg_catalog.hashtextextended('join_company ' || caller::text || ' ' || invitation.company_id::text, 0)
+    pg_catalog.hashtextextended('join_company ' || caller::text || ' ' || seen.company_id::text, 0)
   );
 
   select r.* into target
   from public.roster r
-  where r.company_id = invitation.company_id
-    and r.id = invitation.roster_id
+  where r.company_id = seen.company_id
+    and r.id = seen.roster_id
   for update;
+
+  select i.* into invitation
+  from public.supervisor_invitations i
+  where i.id = seen.id
+    and i.roster_id = seen.roster_id
+  for update;
+  if not found then
+    raise exception using errcode = 'PT404', message = 'No such invitation.';
+  end if;
 
   if public.confirmed_email_of(caller) is distinct from invitation.email then
     raise exception using

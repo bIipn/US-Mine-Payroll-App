@@ -7,8 +7,9 @@
 //   resend_supervisor_invitation  a supervisor gives an open invitation another 7 days, and supervisor-tools sends
 //                                 the email again;
 //   cancel_supervisor_invitation  a supervisor cancels one;
-//   account_for_email             for the server key: the account an address belongs to, so supervisor-tools asks
-//                                 Supabase Auth to send an invite email only to an address with no account;
+//   account_for_email             for the server key: the account an address belongs to and whether the address is
+//                                 confirmed, so supervisor-tools asks Supabase Auth to send an invite email only to
+//                                 an address with no account or one not confirmed;
 //   my_supervisor_invitations     the open, unexpired invitations to the caller's confirmed email;
 //   accept_supervisor_invitation  the invited person takes the row: a passcode account on it is let go, with a
 //                                 released hold, the row is made a supervisor's and their account is put on it;
@@ -138,6 +139,26 @@ async function notThere(promise, madeUp) {
 /** A function's definition, its comments taken out. */
 const definitionOf = async (fn) =>
   (await db.adminRows(`select pg_get_functiondef('public.${fn}'::regproc) as def`))[0].def.replace(/--[^\n]*/g, ' ');
+
+/**
+ * What a function does with the roster and the invitations, in the order its code does it: each statement of its
+ * definition, comments taken out, that takes join_company's lock, locks a roster row, refuses for a state (PT409),
+ * reads, locks or writes an invitation, or writes a roster row. PGlite is one session, so the order two calls take
+ * turns in is read from the code, as the crew tests read their locks.
+ */
+async function stepsOf(fn) {
+  const steps = [];
+  for (const statement of (await definitionOf(fn)).split(';')) {
+    const locks = /\bfor\s+update\b/i.test(statement);
+    if (/\bpg_advisory_xact_lock\s*\(\s*pg_catalog\.hashtextextended\s*\(\s*'join_company '/i.test(statement)) steps.push('join lock');
+    else if (/\berrcode\s*=\s*'PT409'/i.test(statement)) steps.push('check');
+    else if (/\bfrom\s+public\.roster\b/i.test(statement) && locks) steps.push('row lock');
+    else if (/\bfrom\s+public\.supervisor_invitations\b/i.test(statement)) steps.push(locks ? 'invitation lock' : 'invitation read');
+    else if (/\b(update|insert\s+into)\s+public\.supervisor_invitations\b/i.test(statement)) steps.push('invitation write');
+    else if (/\bupdate\s+public\.roster\b/i.test(statement)) steps.push('row write');
+  }
+  return steps;
+}
 
 describe('invite_supervisor', () => {
   it('only a supervisor of the company invites, onto an active row with no email account', async () => {
@@ -472,16 +493,6 @@ describe('accept_supervisor_invitation', () => {
     // with email now.
     assert.deepEqual(await join(db, crew, company.code, 'Kit', 'Marlow'), { status: 'pending', company_name: 'Test Pit A', reason: 'released' });
     assert.deepEqual(await crewSignIn(company, 'Kit', 'Marlow'), { status: 'use_email' });
-
-    // Accepting locks the invitation, then the row, before it looks at either. PGlite is one session, so the order is
-    // read from the code.
-    const body = await definitionOf('accept_supervisor_invitation');
-    const invitationLock = body.search(/\bfrom\s+public\.supervisor_invitations\s+i\s+where\s+i\.id\s*=\s*p_invitation_id\s+for\s+update\b/i);
-    const rowLock = body.search(/\bfrom\s+public\.roster\s+r\s+where\b[^;]*\bfor\s+update\b/i);
-    const firstLook = body.search(/\bpublic\.confirmed_email_of\s*\(/i);
-    assert.ok(invitationLock > 0, 'it locks the invitation');
-    assert.ok(rowLock > invitationLock, 'then the row');
-    assert.ok(firstLook > rowLock, 'before it looks at either');
   });
 
   it("an account already on the company's roster cannot accept an invitation to another row there", async () => {
@@ -664,7 +675,7 @@ describe('roster_sign_ins', () => {
 });
 
 describe('account_for_email', () => {
-  it('gives the account an address belongs to, confirmed or not, to the server key alone', async () => {
+  it('gives the account an address belongs to, and whether its address is confirmed, to the server key alone', async () => {
     const confirmed = await db.newAccount('found');
     const waiting = await db.newAccount('waiting', { confirmed: false });
     assert.deepEqual(
@@ -675,21 +686,91 @@ describe('account_for_email', () => {
       ],
       'newAccount confirms the address unless it is told not to',
     );
-    const find = (email) => server().call('account_for_email', { p_email: email });
-    assert.equal(await find(await emailOf(confirmed)), confirmed);
-    assert.equal(await find(await emailOf(waiting)), waiting);
+    const find = (email) => server().callRows('account_for_email', { p_email: email });
+    assert.deepEqual(await find(await emailOf(confirmed)), [{ user_id: confirmed, confirmed: true }]);
+    assert.deepEqual(await find(await emailOf(waiting)), [{ user_id: waiting, confirmed: false }]);
     // Trimmed and in any capitals, as an invitation keeps its address, and an address Supabase Auth keeps in capitals.
-    assert.equal(await find(`  ${(await emailOf(confirmed)).toUpperCase()} `), confirmed);
+    assert.deepEqual(await find(`  ${(await emailOf(confirmed)).toUpperCase()} `), [{ user_id: confirmed, confirmed: true }]);
     const lou = newAddress('lou.penrose');
     const capitals = await accountWith(inCapitals(lou));
-    assert.equal(await find(lou), capitals);
-    // An address no account has, and none at all: null.
-    for (const typed of [newAddress('nobody'), '', '   ', null]) assert.equal(await find(typed), null, JSON.stringify(typed));
+    assert.deepEqual(await find(lou), [{ user_id: capitals, confirmed: true }]);
+    // An address no account has, and none at all: no row.
+    for (const typed of [newAddress('nobody'), '', '   ', null]) assert.deepEqual(await find(typed), [], JSON.stringify(typed));
+
+    // Supabase Auth's first invite makes the account of a new address, not confirmed until its link is opened. Its
+    // invite endpoint sends again to an address that is not confirmed and refuses one that is, so the
+    // supervisor-tools function asks it to invite when there is no row or the address is not confirmed, and never
+    // once it is: that account's invitation waits on the dashboard.
+    const jo = newAddress('jo.vale');
+    const invited = await accountWith(jo, { confirmed: false });
+    assert.deepEqual(await find(jo), [{ user_id: invited, confirmed: false }]);
+    await db.admin('update auth.users set email_confirmed_at = now() where id = $1', [invited]);
+    assert.deepEqual(await find(jo), [{ user_id: invited, confirmed: true }]);
+    // One row at most. Supabase Auth keeps one account for an address, but should there be two, a confirmed one is
+    // the one given, so no invite is asked for an address Supabase Auth would refuse. This one, not confirmed, has the
+    // lowest id there can be, so the confirmed one is not given for its id.
+    const twin = '00000000-0000-4000-8000-000000000000';
+    await db.admin('insert into auth.users (id, email, email_confirmed_at) values ($1, $2, null)', [twin, inCapitals(jo)]);
+    assert.deepEqual(await find(jo), [{ user_id: invited, confirmed: true }]);
+
     // The supervisor-tools function asks it with the server key, to decide whether Supabase Auth sends an invite
     // email. Nobody else can call it.
     for (const session of [db.anon(), db.as(confirmed), db.noAccount()]) {
-      await refused(session.call('account_for_email', { p_email: await emailOf(confirmed) }), NO_PRIVILEGE, /permission denied for function account_for_email/);
+      await refused(session.callRows('account_for_email', { p_email: await emailOf(confirmed) }), NO_PRIVILEGE, /permission denied for function account_for_email/);
     }
+  });
+});
+
+describe('the order rows and invitations are locked in', () => {
+  it('a row first, then its invitation, in every function that takes both, as deleting the row or the company does', async () => {
+    // Deleting a roster row locks it, and then its invitations through the cascade, and deleting a company reaches its
+    // invitations through its rows alone. Each function here takes a row before its invitation, then checks under
+    // both locks, then writes, so none holds an invitation while it waits for that invitation's row. Those given an
+    // invitation find its row first with no lock. Accepting takes join_company's lock before the row, and the
+    // roster's write trigger takes the account's lock in the row writes, after both.
+    assert.deepEqual(await stepsOf('invite_supervisor'), ['row lock', 'check', 'invitation write', 'invitation write']);
+    assert.deepEqual(await stepsOf('resend_supervisor_invitation'), ['invitation read', 'row lock', 'invitation lock', 'check', 'check', 'invitation write']);
+    assert.deepEqual(await stepsOf('accept_supervisor_invitation'), [
+      'invitation read',
+      'join lock',
+      'row lock',
+      'invitation lock',
+      'check',
+      'check',
+      'check',
+      'check',
+      'row write',
+      'row write',
+      'row write',
+      'invitation write',
+    ]);
+    // Cancelling takes the invitation alone, and no row.
+    assert.deepEqual(await stepsOf('cancel_supervisor_invitation'), ['invitation lock', 'check', 'invitation write']);
+
+    // No key of an invitation's own points at its company: it reaches the company through its row.
+    const keys = await db.adminRows(`
+      select c.conname as name, rn.nspname || '.' || rc.relname as refers_to, c.confdeltype::text as on_delete
+      from pg_constraint c
+      join pg_class rc on rc.oid = c.confrelid
+      join pg_namespace rn on rn.oid = rc.relnamespace
+      where c.conrelid = 'public.supervisor_invitations'::regclass and c.contype = 'f'
+      order by c.conname`);
+    assert.deepEqual(keys, [
+      { name: 'supervisor_invitations_accepted_by_fkey', refers_to: 'auth.users', on_delete: 'n' },
+      { name: 'supervisor_invitations_invited_by_fkey', refers_to: 'auth.users', on_delete: 'n' },
+      { name: 'supervisor_invitations_row_same_company', refers_to: 'public.roster', on_delete: 'c' },
+    ]);
+    // So deleting a company deletes its rows, and they their invitations; deleting a row deletes its own. Another
+    // company's are left alone.
+    const company = await startCompany(db, { roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }] });
+    const other = await startCompany(db, { name: 'Test Pit B', supervisor: ['Pat', 'Cole'], roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }] });
+    const ours = (await invite(company.owner, company.rows['Ana Diaz'], newAddress('ana.diaz'))).invitation_id;
+    const theirs = (await invite(other.owner, other.rows['Ana Diaz'], newAddress('ana.diaz'))).invitation_id;
+    await server().query('delete from public.companies where id = $1', [company.id]);
+    assert.equal(await invitationOf(ours), undefined);
+    assert.ok(await invitationOf(theirs), "another company's invitation stays");
+    await db.as(other.owner).query('delete from public.roster where id = $1', [other.rows['Ana Diaz']]);
+    assert.equal(await invitationOf(theirs), undefined);
   });
 });
 

@@ -283,6 +283,7 @@ const INVITATION_CLOSED = [WRONG_STATE, 'That invitation has expired, or was can
 const NOT_FOUND_OR_WRONG_STATE = {
   accept_supervisor_invitation: [
     NO_SUCH_INVITATION,
+    NO_SUCH_INVITATION,
     [WRONG_STATE, 'Sign in with the confirmed email address the invitation was sent to.', 'wrong_email'],
     INVITATION_CLOSED,
     [WRONG_STATE, "This account is already on that company's roster.", 'already_on_roster'],
@@ -316,7 +317,7 @@ const NOT_FOUND_OR_WRONG_STATE = {
   push_records: [[NOT_FOUND, 'No such company.']],
   read_shared_records: [[NOT_FOUND, 'No such company.']],
   release_roster_claim: [[NOT_FOUND, 'No such roster row.']],
-  resend_supervisor_invitation: [NO_SUCH_INVITATION, INVITATION_CLOSED, ROW_TAKEN],
+  resend_supervisor_invitation: [NO_SUCH_INVITATION, NO_SUCH_INVITATION, INVITATION_CLOSED, ROW_TAKEN],
   roster_before_write: [
     [WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.'],
     [WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email'],
