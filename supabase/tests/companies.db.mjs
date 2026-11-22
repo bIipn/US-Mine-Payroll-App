@@ -258,8 +258,9 @@ describe('join codes', () => {
       `  ${code.slice(0, 2)} - ${code.slice(2, 6)}${EN_DASH}${code.slice(6)}  `,
       `${NO_BREAK_SPACE}${code}\n`,
     ];
+    const reader = db.as(await db.newAccount());
     for (const text of typed) {
-      assert.deepEqual(await db.anon().callRows('company_by_code', { code: text }), [{ name: 'Test Pit A', state: 'CA' }], text);
+      assert.deepEqual(await reader.callRows('company_by_code', { code: text }), [{ name: 'Test Pit A', state: 'CA' }], text);
     }
   });
 
@@ -282,8 +283,9 @@ describe('company_by_code', () => {
 
   it('gives nothing for a code no company has', async () => {
     await startCompany(db);
+    const reader = db.as(await db.newAccount());
     for (const code of ['', '   ', null, 'ZZZZZZZZ', 'not a code', '%', "' or 1=1 --"]) {
-      assert.deepEqual(await db.anon().callRows('company_by_code', { code }), [], String(code));
+      assert.deepEqual(await reader.callRows('company_by_code', { code }), [], String(code));
     }
   });
 });
@@ -297,13 +299,13 @@ describe('rotate_join_code', () => {
     assert.equal((await companyRow(company.id)).join_code, fresh);
 
     // The old code finds nothing and lets nobody in.
-    assert.deepEqual(await db.anon().callRows('company_by_code', { code: company.code }), []);
     const late = await db.newAccount();
+    assert.deepEqual(await db.as(late).callRows('company_by_code', { code: company.code }), []);
     assert.deepEqual(await join(db, late, company.code, 'Riley', 'Quinn'), { status: 'no_company' });
     assert.equal((await db.adminRows('select count(*)::int as n from public.join_requests where user_id = $1', [late]))[0].n, 0);
 
     // The new one does.
-    assert.deepEqual(await db.anon().callRows('company_by_code', { code: fresh.toLowerCase() }), [{ name: 'Test Pit A', state: 'CA' }]);
+    assert.deepEqual(await db.as(late).callRows('company_by_code', { code: fresh.toLowerCase() }), [{ name: 'Test Pit A', state: 'CA' }]);
     assert.equal((await join(db, late, fresh, 'Riley', 'Quinn')).status, 'joined');
   });
 

@@ -22,7 +22,9 @@ const ROLES = ['anon', 'authenticated', 'service_role'];
 
 // Who may call each function in schema public. Everything else is private.
 const CALLABLE_BY = {
-  company_by_code: ['anon', 'authenticated'],
+  // Signed in only (migration 20261122000100): before anyone is signed in, the app looks a code up through
+  // the crew-auth function, under its limit on tries (crew_lookup).
+  company_by_code: ['authenticated'],
   create_company: ['authenticated'],
   join_company: ['authenticated'],
   approve_join_request: ['authenticated'],
@@ -52,6 +54,13 @@ const CALLABLE_BY = {
   // Crew passcodes (migration 20261122000100): the server key keeps one. Checking one, the passcode
   // rule and the sign-in password are for the sign-in functions inside the database alone.
   crew_keep_passcode: ['service_role'],
+  // The crew-auth function's checks, before it talks to Supabase Auth: the company a code is for, whether a
+  // sign-up may go ahead, a sign-in by name and passcode, and the passcode of the account signed in, for
+  // deleting it. The helpers they share (crew_try_counted, crew_find_person) are theirs alone.
+  crew_lookup: ['service_role'],
+  crew_sign_up_check: ['service_role'],
+  crew_sign_in_check: ['service_role'],
+  crew_confirm_check: ['service_role'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
   // The row level security policies call these as the signed-in account.
@@ -74,9 +83,13 @@ const SECURITY_DEFINER = [
   'company_has_access',
   'create_company',
   'crew_check_passcode',
+  'crew_confirm_check',
   'crew_keep_passcode',
   'crew_login_password',
+  'crew_lookup',
   'crew_passcode_problem',
+  'crew_sign_in_check',
+  'crew_sign_up_check',
   'deny_join_request',
   'is_last_supervisor',
   'is_member',
@@ -112,6 +125,7 @@ const TABLES = [
   'contact_senders',
   'crew_key',
   'crew_logins',
+  'crew_sign_in_tries',
   'join_holds',
   'join_requests',
   'notifications',
@@ -155,6 +169,8 @@ const AUTHENTICATED = {
   // Crew passcodes: the digests and counts, and their key, kept by the crew functions alone.
   crew_logins: { table: [], insert: [], update: [] },
   crew_key: { table: [], insert: [], update: [] },
+  // The limit on crew-auth tries from one address, kept by crew_try_counted alone.
+  crew_sign_in_tries: { table: [], insert: [], update: [] },
 };
 const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 

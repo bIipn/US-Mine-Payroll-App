@@ -1,7 +1,10 @@
-// anon, the public key with nobody signed in, can call company_by_code and
-// the website's contact form (submit_contact_request, contact.db.mjs) and
-// nothing else, and reads nothing. The authenticated role with no account id
-// gets nothing either.
+// anon, the public key with nobody signed in, can call the website's contact
+// form (submit_contact_request, contact.db.mjs) and nothing else, and reads
+// nothing. It no longer looks a company up by its code (migration
+// 20261122000100): the app does that through the crew-auth function, under its
+// limit on tries (crew_lookup, crew_sign_in.db.mjs), and the dashboard calls
+// company_by_code signed in. The authenticated role with no account id gets
+// nothing either.
 
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -16,8 +19,8 @@ import {
 } from './harness.mjs';
 
 const TABLES = ['companies', 'roster', 'join_requests', 'notifications', 'company_supervisor_guard', 'join_holds'];
-// The only functions anon may call: finding a company by its code, and the contact form.
-const ANON_CALLS = ['company_by_code', 'submit_contact_request'];
+// The only function anon may call: the contact form.
+const ANON_CALLS = ['submit_contact_request'];
 
 let db;
 let company;
@@ -48,10 +51,10 @@ async function publicFunctions() {
 }
 
 describe('anon', () => {
-  it('finds a company by its code: its name and state, nothing else', async () => {
-    const found = await db.anon().callRows('company_by_code', { code: company.code });
-    assert.deepEqual(found, [{ name: 'Test Pit A', state: 'CA' }]);
-    assert.deepEqual(await db.anon().callRows('company_by_code', { code: 'ZZZZZZZZ' }), []);
+  it('cannot look a company up by its code, whether or not one has it', async () => {
+    for (const code of [company.code, 'ZZZZZZZZ']) {
+      await refused(db.anon().callRows('company_by_code', { code }), NO_PRIVILEGE, /permission denied for function company_by_code/);
+    }
   });
 
   it('reads nothing from any table', async () => {
@@ -77,7 +80,7 @@ describe('anon', () => {
     assert.equal((await db.adminRows('select count(*)::int as n from public.roster'))[0].n, 2);
   });
 
-  it('calls no function but company_by_code and the contact form', async () => {
+  it('calls no function but the contact form', async () => {
     const functions = await publicFunctions();
     assert.ok(functions.length > 10);
     for (const fn of functions) {
