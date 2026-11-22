@@ -10,10 +10,10 @@
         "EXPO_NO_DOTENV": "1",
         "EXPO_PUBLIC_DEMO": "0",
         "EXPO_PUBLIC_SAMPLE_CREW": "0",
-        "EXPO_PUBLIC_ROSTER_OWNER": "",
-        "EXPO_PUBLIC_ROSTER": "",
-        "EXPO_PUBLIC_AREA_SHEETS": "",
-        "EXPO_PUBLIC_COMPANY": "",
+        "EXPO_PUBLIC_ROSTER_OWNER": " ",
+        "EXPO_PUBLIC_ROSTER": " ",
+        "EXPO_PUBLIC_AREA_SHEETS": " ",
+        "EXPO_PUBLIC_COMPANY": " ",
         "EXPO_PUBLIC_LOGO_ART": "0"
       }
     },

@@ -2,6 +2,7 @@
   "expo": {
     "name": "MineMuster",
     "slug": "minemuster",
+    "owner": "biipns-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -69,6 +70,11 @@
           "icon": "./assets/notification-icon.png"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fcf68f9e-fd36-4dd9-a562-9377c1010ee9"
+      }
+    }
   }
 }

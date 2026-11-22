@@ -5,6 +5,10 @@
 // listing depends on: iPhone only, local notifications only, no cloud backup of what stays on the phone,
 // and location while the app is in use only.
 
+import { parseAreaSheets } from '../../src/domain/areaExam';
+import { parseCompany } from '../../src/domain/company';
+import { parsePersonName, parseRoster } from '../../src/domain/roster';
+
 // This project has no Node types, so the file system is asked for by name with the calls used here.
 const fs = jest.requireActual<{ readFileSync(file: string, encoding: 'utf8'): string }>('fs');
 
@@ -32,11 +36,14 @@ const STORE_ENV: Record<string, string> = {
   EXPO_PUBLIC_DEMO: '0',
   // "0", not empty: with no roster an empty value means the sample crew, and a build with them never connects.
   EXPO_PUBLIC_SAMPLE_CREW: '0',
-  // The private settings, empty: every company's people, sheets and settings come from its server.
-  EXPO_PUBLIC_ROSTER_OWNER: '',
-  EXPO_PUBLIC_ROSTER: '',
-  EXPO_PUBLIC_AREA_SHEETS: '',
-  EXPO_PUBLIC_COMPANY: '',
+  // The private settings, blank: every company's people, sheets and settings come from its server.
+  // A single space, not "": EAS refuses an empty value in eas.json ("is not allowed to be empty", from
+  // eas-cli 27 on), and the app reads a blank one as none. Set here, it also overrides one this
+  // computer's shell has, for `eas build --local`.
+  EXPO_PUBLIC_ROSTER_OWNER: ' ',
+  EXPO_PUBLIC_ROSTER: ' ',
+  EXPO_PUBLIC_AREA_SHEETS: ' ',
+  EXPO_PUBLIC_COMPANY: ' ',
   // No customer's trademark in a public app.
   EXPO_PUBLIC_LOGO_ART: '0',
 };
@@ -52,6 +59,19 @@ describe('the store builds (eas.json)', () => {
 
   it.each(builds)('gives the %s build every store setting, and nothing overrides one', (name) => {
     expect(envOf(name)).toMatchObject(STORE_ENV);
+  });
+
+  it('gives no setting an empty value, which EAS refuses before it builds anything', () => {
+    for (const name of Object.keys(eas.build)) {
+      for (const [key, value] of Object.entries(eas.build[name].env ?? {})) expect([name, key, value]).not.toEqual([name, key, '']);
+    }
+  });
+
+  it('blanks each private setting in a way the app reads as none', () => {
+    expect(parsePersonName(STORE_ENV.EXPO_PUBLIC_ROSTER_OWNER)).toBeNull();
+    expect(parseRoster(STORE_ENV.EXPO_PUBLIC_ROSTER)).toEqual([]);
+    expect(parseAreaSheets(STORE_ENV.EXPO_PUBLIC_AREA_SHEETS)).toEqual([]);
+    expect(parseCompany(STORE_ENV.EXPO_PUBLIC_COMPANY)).toEqual({});
   });
 
   it('names no company server and no key: those are set in the EAS environment, never in the repository', () => {
@@ -73,6 +93,8 @@ describe('the store builds (eas.json)', () => {
 type Plugin = string | [string, Record<string, unknown>];
 const app = (JSON.parse(read('app.json')) as {
   expo: {
+    owner?: string;
+    extra?: { eas?: { projectId?: string } };
     ios: { supportsTablet?: boolean; bundleIdentifier: string; config?: { usesNonExemptEncryption?: boolean } };
     android: { package: string; allowBackup?: boolean; blockedPermissions?: string[]; permissions?: string[] };
     plugins: Plugin[];
@@ -85,6 +107,13 @@ const plugin = (name: string) => {
 };
 
 describe('the store settings (app.json)', () => {
+  it('belongs to the Expo organization and project the store builds are made in', () => {
+    // EAS builds and keeps the signing credentials by project: without these, `eas build` stops
+    // with "EAS project not configured", and an access token cannot make one by itself.
+    expect(app.owner).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+    expect(app.extra?.eas?.projectId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
   it('is for iPhone only, so no update ever has to drop iPad', () => {
     expect(app.ios.supportsTablet).toBe(false);
     expect(app.ios.bundleIdentifier).toBe('com.minemuster.app');
