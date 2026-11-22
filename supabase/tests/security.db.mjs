@@ -61,6 +61,13 @@ const CALLABLE_BY = {
   crew_sign_up_check: ['service_role'],
   crew_sign_in_check: ['service_role'],
   crew_confirm_check: ['service_role'],
+  // A reset with a supervisor's reset code, checked by crew-auth as the other checks are.
+  crew_reset_check: ['service_role'],
+  // A supervisor's side of passcodes, with the supervisor's own token: a reset code for the passcode account
+  // on a row, and that account, which the supervisor-tools function deletes with Supabase Auth. The helper
+  // they share (crew_account_on_row) is theirs alone.
+  make_passcode_reset_code: ['authenticated'],
+  crew_sign_in_to_delete: ['authenticated'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
   // The row level security policies call these as the signed-in account.
@@ -88,7 +95,9 @@ const SECURITY_DEFINER = [
   'crew_login_password',
   'crew_lookup',
   'crew_passcode_problem',
+  'crew_reset_check',
   'crew_sign_in_check',
+  'crew_sign_in_to_delete',
   'crew_sign_up_check',
   'deny_join_request',
   'is_last_supervisor',
@@ -96,6 +105,7 @@ const SECURITY_DEFINER = [
   'is_supervisor',
   'join_company',
   'lift_join_bar',
+  'make_passcode_reset_code',
   'member_company_ids',
   'my_companies',
   'my_join_requests',
@@ -263,12 +273,17 @@ const NOT_FOUND_OR_WRONG_STATE = {
     [WRONG_STATE, "The company's subscription is still running. Cancel it first.", 'subscription_running'],
   ],
   company_billing: [[NOT_FOUND, 'No such company.']],
+  crew_account_on_row: [[NOT_FOUND, 'No such roster row.'], [WRONG_STATE, 'That roster row has no passcode sign-in.', 'not_a_passcode_account']],
+  crew_keep_passcode: [[WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email']],
   deny_join_request: [NO_SUCH_REQUEST, NO_SUCH_REQUEST, ALREADY_DECIDED],
   lift_join_bar: [NO_SUCH_REQUEST],
   push_records: [[NOT_FOUND, 'No such company.']],
   read_shared_records: [[NOT_FOUND, 'No such company.']],
   release_roster_claim: [[NOT_FOUND, 'No such roster row.']],
-  roster_before_write: [[WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.']],
+  roster_before_write: [
+    [WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.'],
+    [WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email'],
+  ],
   rotate_join_code: [[NOT_FOUND, 'No such company.']],
 };
 

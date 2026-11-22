@@ -36,7 +36,8 @@
 --   crew_login_password(email)  A crew account's sign-in password, worked out
 --       from its hidden address. No API role.
 --   crew_keep_passcode(p_user, p_passcode)  Keeps a passcode for an account
---       and starts its counts afresh. The server key alone.
+--       and starts its counts afresh, never for an account that holds a
+--       supervisor's row. The server key alone.
 --   crew_check_passcode(p_user, p_passcode)  Checks a passcode and counts it.
 --       No API role: the sign-in functions call it inside the database.
 --
@@ -222,9 +223,17 @@ revoke all on function public.crew_login_password(text) from public, anon, authe
 -- Keep a passcode for a crew account, for the server key: when crew-auth has
 -- made the account, and when a reset sets a new passcode. A passcode the rule
 -- refuses is refused (22023) with the problem as the hint: not_digits,
--- too_short, too_long or easy. Keeping one gives the account a new salt and
--- digest and clears its counts: no wrong tries, no lock, and no reset code
--- left to use.
+-- too_short, too_long or easy. An account that holds a supervisor's row, in
+-- any company, on the roster or taken off it (which can put it back), is
+-- refused (PT409, hint supervisor_needs_email): supervisors sign in with email,
+-- and the roster's write trigger refuses the other way round (at the end of
+-- this migration). Keeping one gives the account a new salt and digest and
+-- clears its counts: no wrong tries, no lock, and no reset code left to use.
+--
+-- The account's lock is taken before its rows are looked at, as the trigger
+-- takes it before it looks for a passcode: a supervisor's row for the account
+-- and a passcode for it, written at once, take turns, and the second sees the
+-- first.
 --
 -- The salt is 16 random bytes, the first half of SHA-256 of two random uuids
 -- (244 random bits), so no extension is needed, pgcrypto included. With no
@@ -242,6 +251,11 @@ declare
 begin
   if problem is not null then
     raise exception using errcode = '22023', message = 'Pick a passcode of 6 to 12 digits that is not a pattern.', hint = problem;
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_logins ' || p_user::text, 0));
+  if exists (select 1 from public.roster r where r.user_id = p_user and r.role = 'supervisor') then
+    raise exception using errcode = 'PT409', message = 'A supervisor signs in with email, not a passcode.', hint = 'supervisor_needs_email';
   end if;
 
   new_salt := pg_catalog.substr(
@@ -792,3 +806,340 @@ grant execute on function public.crew_confirm_check(uuid, text) to service_role;
 -- looks a code up through crew-auth, under the limit above (crew_lookup); the
 -- dashboard calls company_by_code signed in, and keeps it.
 revoke execute on function public.company_by_code(text) from anon;
+
+-- ==== The supervisor side ============================================================================
+--
+-- What a supervisor does about crew passcodes from the dashboard, and the
+-- reset a crew member then makes in the app:
+--
+--   roster_before_write  The roster's write trigger, with every rule it had and
+--       one more: a supervisor's row is never held by a passcode account.
+--       crew_keep_passcode keeps no passcode for an account that holds one, so
+--       neither comes to the other. Supervisors sign in with email.
+--   make_passcode_reset_code(p_roster_id)  A reset code for the passcode
+--       account on a roster row, for a supervisor of the row's company, who is
+--       shown it once and tells it to the person.
+--   crew_reset_check(p_code, p_first, p_last, p_reset_code, p_new_passcode, p_address)
+--       For the server key, as the other checks: the person found by name as
+--       for signing in, their reset code checked and counted, and the new
+--       passcode kept.
+--   crew_sign_in_to_delete(p_roster_id)  The passcode account on a roster row,
+--       for a supervisor of the row's company. The supervisor-tools function
+--       then deletes it with Supabase Auth's admin API; this deletes nothing.
+
+-- ---- No passcode supervisors ------------------------------------------------------------------------
+
+-- The roster trigger, as in 20261117000600_refusals_are_4xx.sql, with one rule
+-- more: a supervisor's row held by a passcode account (an account with a
+-- crew_logins row) is refused, PT409 with the hint supervisor_needs_email,
+-- whatever writes it: approving a request onto the row or as a new row, any
+-- other claim of it, a role change, an insert (create_company writes a new
+-- company's first supervisor's row). Active or not, as a row taken off the
+-- roster can be put back. Supervisors sign in with email and a password,
+-- because their account can change punch times and see billing.
+--
+-- The account's lock is taken first, the one crew_keep_passcode takes before
+-- it looks for a supervisor's row: a supervisor's row for an account and a
+-- passcode for it, written at once, take turns, and the second sees what the
+-- first wrote. It stays bound to roster as it was.
+create or replace function public.roster_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  name_written boolean := true;
+  title_written boolean := true;
+begin
+  if tg_op = 'UPDATE' then
+    name_written := new.first_name is distinct from old.first_name or new.last_name is distinct from old.last_name;
+    title_written := new.title is distinct from old.title;
+  end if;
+
+  new.first_name := public.clean_text(new.first_name);
+  new.last_name := public.clean_text(new.last_name);
+  new.title := nullif(public.clean_text(new.title), '');
+
+  if (name_written and (public.has_hidden_characters(new.first_name) or public.has_hidden_characters(new.last_name)))
+     or (title_written and public.has_hidden_characters(new.title)) then
+    raise exception using
+      errcode = '22023',
+      message = 'A name cannot hold control or invisible characters.';
+  end if;
+  if name_written and public.mixes_alphabets(new.first_name || ' ' || new.last_name) then
+    raise exception using
+      errcode = '22023',
+      message = 'A name cannot mix letters of different alphabets, such as Latin and Cyrillic.',
+      hint = 'Write the whole name in one alphabet.';
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if new.company_id is distinct from old.company_id then
+      raise exception using
+        errcode = '42501',
+        message = 'A roster row cannot move to another company.';
+    end if;
+    if old.user_id is not null and new.user_id is not null and new.user_id <> old.user_id then
+      raise exception using
+        errcode = 'PT409',
+        message = 'That roster row is already claimed by another account.',
+        hint = 'A supervisor can release it first.';
+    end if;
+  end if;
+
+  if new.role = 'supervisor' and new.user_id is not null then
+    perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_logins ' || new.user_id::text, 0));
+    if exists (select 1 from public.crew_logins l where l.user_id = new.user_id) then
+      raise exception using
+        errcode = 'PT409',
+        message = 'A supervisor signs in with email, not a passcode.',
+        hint = 'supervisor_needs_email';
+    end if;
+  end if;
+
+  if new.user_id is null then
+    new.claimed_at := null;
+  elsif new.claimed_at is null then
+    new.claimed_at := pg_catalog.now();
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.roster_before_write() from public, anon, authenticated, service_role;
+
+-- ---- The passcode account on a row ------------------------------------------------------------------
+
+-- The passcode account that holds a roster row, for a supervisor of the row's
+-- company, on the roster or taken off it: the account make_passcode_reset_code
+-- makes a code for, and the one crew_sign_in_to_delete gives. It refuses, in
+-- this order, with the codes release_roster_claim uses:
+--   42501  nobody signed in;
+--   PT404  no such row;
+--   42501  a caller who is not a supervisor of the row's company;
+--   PT409  a row no passcode account holds, nobody's or an email account's
+--          (hint not_a_passcode_account).
+-- release_roster_claim answers a caller who is not a supervisor there as if the
+-- row were not there (PT404). This answers 42501, so the supervisor-tools
+-- function can answer not_supervisor: a row's id is a random uuid, which
+-- nobody who has not been shown it can guess.
+-- No API role: the two call it.
+create function public.crew_account_on_row(p_roster_id uuid)
+returns uuid
+language plpgsql
+stable
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  target public.roster;
+begin
+  if auth.uid() is null then
+    raise exception using errcode = '42501', message = 'Sign in first.';
+  end if;
+
+  select r.* into target from public.roster r where r.id = p_roster_id;
+  if not found then
+    raise exception using errcode = 'PT404', message = 'No such roster row.';
+  end if;
+  if not public.is_supervisor(target.company_id) then
+    raise exception using errcode = '42501', message = 'Only a supervisor of the company can do that.';
+  end if;
+  if target.user_id is null
+     or not exists (select 1 from public.crew_logins l where l.user_id = target.user_id) then
+    raise exception using
+      errcode = 'PT409',
+      message = 'That roster row has no passcode sign-in.',
+      hint = 'not_a_passcode_account';
+  end if;
+  return target.user_id;
+end;
+$$;
+
+revoke all on function public.crew_account_on_row(uuid) from public, anon, authenticated, service_role;
+
+-- ---- Making a reset code ----------------------------------------------------------------------------
+
+-- A reset code for the passcode account on a roster row, for a supervisor of
+-- the row's company (refused as crew_account_on_row refuses). The dashboard
+-- shows it once, and the person types it in the app with a new passcode. It is
+-- 6 digits, leading zeros and all, good for 30 minutes and 5 tries, and it
+-- replaces the one before, with all 5 tries again. It works while the account
+-- is locked, and opens nothing by itself: the lock and the count stay until
+-- the code is used.
+--
+-- The digits come from random bytes, never random(): the first 7 bytes of
+-- SHA-256 of two random uuids (244 random bits), read as a number below 2^56
+-- and taken modulo a million. 2^56 is not a multiple of a million, so some
+-- codes come up more often than others, by one part in 7 * 10^10. The code is
+-- kept the way a passcode is, as a digest only: SHA-256 of the crew key, the
+-- account's salt, 'reset:' and the code. The mark keeps a code and a passcode
+-- of the same digits apart. With no key the digest is null, and the code
+-- works nowhere.
+create function public.make_passcode_reset_code(p_roster_id uuid)
+returns text
+language plpgsql
+volatile
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  account uuid;
+  fresh text;
+begin
+  account := public.crew_account_on_row(p_roster_id);
+
+  fresh := pg_catalog.lpad(
+    (('x' || pg_catalog.encode(
+        pg_catalog.substr(
+          pg_catalog.sha256(pg_catalog.uuid_send(pg_catalog.gen_random_uuid()) || pg_catalog.uuid_send(pg_catalog.gen_random_uuid())),
+          1, 7),
+        'hex'))::bit(56)::bigint % 1000000)::text,
+    6, '0');
+
+  update public.crew_logins l
+  set reset_digest = (select pg_catalog.sha256(k.key || l.salt || pg_catalog.convert_to('reset:' || fresh, 'UTF8')) from public.crew_key k),
+      reset_until = pg_catalog.now() + interval '30 minutes',
+      reset_tries = 0
+  where l.user_id = account;
+
+  return fresh;
+end;
+$$;
+
+-- ---- Resetting a passcode ---------------------------------------------------------------------------
+
+-- A reset, for the server key: the company's code, the name the person goes
+-- by, the reset code a supervisor gave them and a new passcode. The request is
+-- counted first, as the other checks count theirs, and the person found by
+-- crew_find_person, as crew_sign_in_check finds them. It answers, in the order
+-- it checks,
+--   {status: 'busy'}                30 requests from that address in the last
+--                                   10 minutes;
+--   {status: 'no_company'}          no company has that code;
+--   {status: 'ambiguous'}, {status: 'use_email'} or {status: 'no_account'}
+--                                   as crew_sign_in_check answers a name, and
+--                                   no code is tried against anyone;
+--   {status: 'easy_passcode', problem}
+--                                   a new passcode the rule refuses, before
+--                                   the code is tried, so it spends no try;
+--   {status: 'expired'}             no code to try: none made, used already,
+--                                   past its 30 minutes, or its 5 tries spent;
+--   {status: 'bad_reset_code', tries_left}
+--                                   a wrong code, counted, with the tries the
+--                                   code has left: the fifth wrong one spends
+--                                   it (tries_left 0);
+--   {status: 'ok', company_id, company_name, login_email, login_password, waiting}
+--                                   the right code: the new passcode is kept,
+--                                   which clears the count, the lock and the
+--                                   code, and the login is the one
+--                                   crew_sign_in_check gives.
+-- It works while the account is locked: that is what it is for. It reads the
+-- account's row for update before its code, as crew_check_passcode does, so
+-- codes sent at once are counted one by one. Nothing after a wrong code
+-- raises: it is counted in this transaction and must stay counted. Nor does
+-- keeping the new passcode after the right one: the rule was asked above, and
+-- a passcode account holds no supervisor's row.
+create function public.crew_reset_check(p_code text, p_first text, p_last text, p_reset_code text, p_new_passcode text, p_address text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  company public.companies;
+  person jsonb;
+  account uuid;
+  problem text;
+  kept record;
+  tries integer;
+  hidden_address text;
+begin
+  if not public.crew_try_counted(p_address) then
+    return pg_catalog.jsonb_build_object('status', 'busy');
+  end if;
+
+  select c.* into company from public.companies c where c.join_code = public.normalize_join_code(p_code);
+  if not found then
+    return pg_catalog.jsonb_build_object('status', 'no_company');
+  end if;
+
+  person := public.crew_find_person(company.id, public.clean_text(p_first), public.clean_text(p_last));
+  if person ->> 'status' <> 'found' then
+    return pg_catalog.jsonb_build_object('status', person ->> 'status');
+  end if;
+  account := (person ->> 'user_id')::uuid;
+
+  problem := public.crew_passcode_problem(p_new_passcode);
+  if problem is not null then
+    return pg_catalog.jsonb_build_object('status', 'easy_passcode', 'problem', problem);
+  end if;
+
+  select l.salt, l.reset_digest, l.reset_until, l.reset_tries into kept
+  from public.crew_logins l
+  where l.user_id = account
+  for update;
+  if not found then
+    return pg_catalog.jsonb_build_object('status', 'no_account');
+  end if;
+  if kept.reset_digest is null
+     or kept.reset_until is null
+     or kept.reset_until <= pg_catalog.now()
+     or kept.reset_tries >= 5 then
+    return pg_catalog.jsonb_build_object('status', 'expired');
+  end if;
+
+  if kept.reset_digest = (
+    select pg_catalog.sha256(k.key || kept.salt || pg_catalog.convert_to('reset:' || coalesce(p_reset_code, ''), 'UTF8'))
+    from public.crew_key k
+  ) then
+    perform public.crew_keep_passcode(account, p_new_passcode);
+    select u.email into hidden_address from auth.users u where u.id = account;
+    return pg_catalog.jsonb_build_object(
+      'status', 'ok',
+      'company_id', company.id,
+      'company_name', company.name,
+      'login_email', hidden_address,
+      'login_password', public.crew_login_password(hidden_address),
+      'waiting', (person ->> 'waiting')::boolean
+    );
+  end if;
+
+  -- Wrong, and counted. The fifth spends the code, by its count alone.
+  tries := kept.reset_tries + 1;
+  update public.crew_logins set reset_tries = tries where user_id = account;
+  return pg_catalog.jsonb_build_object('status', 'bad_reset_code', 'tries_left', 5 - tries);
+end;
+$$;
+
+-- ---- A sign-in to delete ----------------------------------------------------------------------------
+
+-- The passcode account on a roster row, for a supervisor of the row's company
+-- (refused as crew_account_on_row refuses). The supervisor-tools function then
+-- deletes the account with Supabase Auth's admin API, which ends its sessions:
+-- the row stays, with no account on it, and the person can sign up for it
+-- again. This deletes nothing itself.
+create function public.crew_sign_in_to_delete(p_roster_id uuid)
+returns uuid
+language sql
+stable
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+  select public.crew_account_on_row(p_roster_id)
+$$;
+
+-- ---- Who may call them ------------------------------------------------------------------------------
+
+revoke all on function public.make_passcode_reset_code(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.crew_reset_check(text, text, text, text, text, text) from public, anon, authenticated, service_role;
+revoke all on function public.crew_sign_in_to_delete(uuid) from public, anon, authenticated, service_role;
+
+-- A supervisor signed in, with their own token: the dashboard for a code, and
+-- the supervisor-tools function for the account to delete. crew-auth, with the
+-- server key, for a reset.
+grant execute on function public.make_passcode_reset_code(uuid) to authenticated;
+grant execute on function public.crew_reset_check(text, text, text, text, text, text) to service_role;
+grant execute on function public.crew_sign_in_to_delete(uuid) to authenticated;
