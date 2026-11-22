@@ -21,12 +21,26 @@ needs a way to give the others access to the dashboard.
 
 - A crew member gets from a fresh install to the Clock screen with: company code, first name, last name,
   passcode (typed twice on sign-up). No email, ever.
-- Each person uses their own phone, signs in once and stays signed in.
+- Each person uses their own phone, signs in once and **stays signed in** (the owner asked for this
+  twice). The app never signs anyone out by itself: not after a length of time, not with no signal, not
+  after an app update or a restart. A session ends only when the person signs out on More, deletes their
+  account, or is taken off the roster (and then, as today, not while they are on the clock). The same
+  holds for supervisors in the app and on the dashboard. With no signal the phone keeps working and
+  refreshes the session when signal returns.
 - A forgotten passcode is fixed by a supervisor from the dashboard, with no email.
 - A supervisor invites another supervisor to the dashboard by email from the Roster page; the invitee
   sets a password and is in.
 - Supervisors sign in to the app with the same email and password they use on the dashboard.
 - Every supervisor keeps seeing billing, as today.
+
+## Already there (no work)
+
+- **The time clock switch.** A company that does not want clock in and clock out turns off **Time clock
+  and hours** on the dashboard's Company page (What the crew uses), or on More → Company in the app. The
+  app then shows the safety forms alone: equipment checklists, pre shift exams and maintenance requests,
+  with no Clock or My hours tab and no payroll, and opens on the checklists (`keepsTime`). Phones take it
+  the next time they are open with signal. It is on the live dashboard. The new sign-in must keep landing
+  such a company's people on the checklists, not the Clock screen.
 
 ## Non-goals
 
@@ -213,12 +227,17 @@ privacy policy (`site/privacy.html`): a crew account holds a name and a scramble
   body rules, no secrets in logs.
 - App: answer wording, the sign-in screen's states, the automatic open after the roster arrives,
   sign-out rules, deletion with a passcode, and the preview build unchanged (and still under 2 MB).
+  **Staying signed in:** a test holds that a kept session survives a restart, a long time with no signal
+  and an expired access token, and that nothing but the person's own sign-out, deletion or removal from
+  the roster ends it.
 - Dashboard: the Account column, Reset passcode, Invite and Send again, the invite landing.
 
 ## Rollout (each live step waits for the owner's OK)
 
 1. Build and test everything locally; review.
-2. Apply the migration to the live database; deploy `crew-auth` and `invite-supervisor`.
+2. Apply the migration to the live database; deploy `crew-auth` and `invite-supervisor`. Check that
+   Supabase Auth keeps sessions without a time limit or an inactivity timeout (its default), so nobody
+   is signed out by the server.
 3. Optionally, word Supabase's invite email for MineMuster (a live Auth setting).
 4. Deploy the dashboard.
 5. A new EAS build to TestFlight. The owner tries it with a made-up test company (the App Review demo
