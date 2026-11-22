@@ -23,12 +23,16 @@ grant usage on schema auth to anon, authenticated, service_role;
 -- migrations read. deleted_at is set when Supabase Auth soft-deletes an
 -- account (auth.admin.deleteUser(id, true)), and banned_until while it is
 -- banned (auth.admin.updateUserById(id, { ban_duration })). Either way the
--- row stays, so the roster's foreign key never fires.
+-- row stays, so the roster's foreign key never fires. email_confirmed_at is
+-- set once Supabase Auth has confirmed the email: when the person opens the
+-- link it sent (a sign-up's confirmation, an invite), or when the admin API
+-- makes the account with email_confirm.
 create table auth.users (
   id uuid primary key,
   email text,
   deleted_at timestamptz,
-  banned_until timestamptz
+  banned_until timestamptz,
+  email_confirmed_at timestamptz
 );
 
 -- The signed-in account, from the request's token. Null when nobody is signed in.

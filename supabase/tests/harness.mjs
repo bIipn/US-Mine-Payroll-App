@@ -95,11 +95,18 @@ class Database {
     return (await this.admin(sql, params)).rows;
   }
 
-  /** A new Supabase Auth account. Returns its id. */
-  async newAccount(label = 'person') {
+  /**
+   * A new Supabase Auth account. Returns its id. Its email is confirmed, as Supabase Auth confirms one
+   * once the person opens the link it sent, unless `confirmed` is false.
+   */
+  async newAccount(label = 'person', { confirmed = true } = {}) {
     const id = randomUUID();
     this.#accounts += 1;
-    await this.admin('insert into auth.users (id, email) values ($1, $2)', [id, `${label}-${this.#accounts}@example.test`]);
+    await this.admin('insert into auth.users (id, email, email_confirmed_at) values ($1, $2, case when $3::boolean then now() end)', [
+      id,
+      `${label}-${this.#accounts}@example.test`,
+      confirmed,
+    ]);
     return id;
   }
 

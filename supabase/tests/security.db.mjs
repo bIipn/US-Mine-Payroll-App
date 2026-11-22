@@ -68,6 +68,17 @@ const CALLABLE_BY = {
   // they share (crew_account_on_row) is theirs alone.
   make_passcode_reset_code: ['authenticated'],
   crew_sign_in_to_delete: ['authenticated'],
+  // Supervisor invitations (migration 20261122000200): a supervisor invites, sends again and cancels, and reads the
+  // roster's sign-ins, with their own token; the invited person lists theirs and accepts one. The server key alone
+  // asks whether an address has an account, so supervisor-tools asks Supabase Auth to send an invite email only to a
+  // new one. The helpers they share (email_key, confirmed_email_of, row_open_to_invitation) are theirs alone.
+  invite_supervisor: ['authenticated'],
+  resend_supervisor_invitation: ['authenticated'],
+  cancel_supervisor_invitation: ['authenticated'],
+  my_supervisor_invitations: ['authenticated'],
+  accept_supervisor_invitation: ['authenticated'],
+  roster_sign_ins: ['authenticated'],
+  account_for_email: ['service_role'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
   // The row level security policies call these as the signed-in account.
@@ -79,10 +90,13 @@ const CALLABLE_BY = {
 };
 
 const SECURITY_DEFINER = [
+  'accept_supervisor_invitation',
   'account_deletion_check',
+  'account_for_email',
   'apply_stripe_event',
   'approve_join_request',
   'billing_standing',
+  'cancel_supervisor_invitation',
   'close_company',
   'companies_before_write',
   'company_billing',
@@ -100,6 +114,7 @@ const SECURITY_DEFINER = [
   'crew_sign_in_to_delete',
   'crew_sign_up_check',
   'deny_join_request',
+  'invite_supervisor',
   'is_last_supervisor',
   'is_member',
   'is_supervisor',
@@ -109,15 +124,18 @@ const SECURITY_DEFINER = [
   'member_company_ids',
   'my_companies',
   'my_join_requests',
+  'my_supervisor_invitations',
   'push_records',
   'read_shared_records',
   'records_open_company_ids',
   'release_roster_claim',
+  'resend_supervisor_invitation',
   'roster_after_reactivate',
   'roster_before_delete',
   'roster_before_write',
   'roster_keeps_a_supervisor',
   'roster_names_look_apart',
+  'roster_sign_ins',
   'rotate_join_code',
   'step_down_everywhere',
   'stripe_webhook_secret',
@@ -145,6 +163,7 @@ const TABLES = [
   'records',
   'roster',
   'stripe_events',
+  'supervisor_invitations',
 ];
 
 // What the authenticated role may do: whole-table privileges, and the columns it may insert and update.
@@ -181,6 +200,8 @@ const AUTHENTICATED = {
   crew_key: { table: [], insert: [], update: [] },
   // The limit on crew-auth tries from one address, kept by crew_try_counted alone.
   crew_sign_in_tries: { table: [], insert: [], update: [] },
+  // Supervisor invitations, kept by the invitation functions alone.
+  supervisor_invitations: { table: [], insert: [], update: [] },
 };
 const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 
@@ -256,7 +277,17 @@ const NOT_FOUND = 'PT404';
 const WRONG_STATE = 'PT409';
 const NO_SUCH_REQUEST = [NOT_FOUND, 'No such join request.'];
 const ALREADY_DECIDED = [WRONG_STATE, 'That join request has already been decided.'];
+const NO_SUCH_INVITATION = [NOT_FOUND, 'No such invitation.'];
+const ROW_TAKEN = [WRONG_STATE, 'That roster row is taken off the roster or held by an email sign-in.', 'row_taken'];
+const INVITATION_CLOSED = [WRONG_STATE, 'That invitation has expired, or was cancelled or accepted.', 'invitation_closed'];
 const NOT_FOUND_OR_WRONG_STATE = {
+  accept_supervisor_invitation: [
+    NO_SUCH_INVITATION,
+    [WRONG_STATE, 'Sign in with the confirmed email address the invitation was sent to.', 'wrong_email'],
+    INVITATION_CLOSED,
+    [WRONG_STATE, "This account is already on that company's roster.", 'already_on_roster'],
+    ROW_TAKEN,
+  ],
   approve_join_request: [
     NO_SUCH_REQUEST,
     NO_SUCH_REQUEST,
@@ -272,6 +303,7 @@ const NOT_FOUND_OR_WRONG_STATE = {
     [WRONG_STATE, 'Someone else can take over this company. Make them a supervisor instead.', 'someone_can_take_over'],
     [WRONG_STATE, "The company's subscription is still running. Cancel it first.", 'subscription_running'],
   ],
+  cancel_supervisor_invitation: [NO_SUCH_INVITATION, [WRONG_STATE, 'That invitation has been accepted.', 'invitation_closed']],
   company_billing: [[NOT_FOUND, 'No such company.']],
   crew_account_on_row: [[NOT_FOUND, 'No such roster row.'], [WRONG_STATE, 'That roster row has no passcode sign-in.', 'not_a_passcode_account']],
   crew_keep_passcode: [
@@ -279,15 +311,18 @@ const NOT_FOUND_OR_WRONG_STATE = {
     [WRONG_STATE, 'A passcode sign-in is for one company only.', 'passcode_account_elsewhere'],
   ],
   deny_join_request: [NO_SUCH_REQUEST, NO_SUCH_REQUEST, ALREADY_DECIDED],
+  invite_supervisor: [[NOT_FOUND, 'No such roster row.'], ROW_TAKEN],
   lift_join_bar: [NO_SUCH_REQUEST],
   push_records: [[NOT_FOUND, 'No such company.']],
   read_shared_records: [[NOT_FOUND, 'No such company.']],
   release_roster_claim: [[NOT_FOUND, 'No such roster row.']],
+  resend_supervisor_invitation: [NO_SUCH_INVITATION, INVITATION_CLOSED, ROW_TAKEN],
   roster_before_write: [
     [WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.'],
     [WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email'],
     [WRONG_STATE, 'A passcode sign-in is for one company only.', 'passcode_account_elsewhere'],
   ],
+  roster_sign_ins: [[NOT_FOUND, 'No such company.']],
   rotate_join_code: [[NOT_FOUND, 'No such company.']],
 };
 
@@ -637,7 +672,7 @@ describe('what Supabase provides', () => {
       order by 1`);
     assert.deepEqual(authObjects.map((o) => o.object), ['function jwt', 'function uid', 'relation users', 'relation users_pkey']);
     const columns = await db.adminRows("select attname from pg_attribute where attrelid = 'auth.users'::regclass and attnum > 0 and not attisdropped order by attnum");
-    assert.deepEqual(columns.map((c) => c.attname), ['id', 'email', 'deleted_at', 'banned_until']);
+    assert.deepEqual(columns.map((c) => c.attname), ['id', 'email', 'deleted_at', 'banned_until', 'email_confirmed_at']);
     const triggers = await db.adminRows("select tgname from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal");
     assert.deepEqual(triggers, []);
     const [uid] = await db.adminRows("select prosrc, prosecdef from pg_proc where oid = 'auth.uid'::regproc");

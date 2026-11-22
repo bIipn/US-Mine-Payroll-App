@@ -557,17 +557,27 @@ describe('deleting an account', () => {
 
 describe('what a signed-in account may call', () => {
   it('names no account in any argument, so nobody is asked about, closed or deleted by an id they send', async () => {
+    // The arguments a call is sent: not the columns a function that returns a table answers with.
     const callable = await db.adminRows(`
-      select p.proname as name, coalesce(p.proargnames, '{}') as args
+      select p.proname as name,
+             array(
+               select a.arg
+               from unnest(coalesce(p.proargnames, '{}'::text[])) with ordinality as a(arg, n)
+               where p.proargmodes is null or p.proargmodes[a.n] in ('i', 'b', 'v')
+             ) as args
       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public' and has_function_privilege('authenticated', p.oid, 'execute')
       order by 1`);
     assert.ok(callable.some((f) => f.name === 'account_deletion_check'));
     assert.ok(callable.some((f) => f.name === 'close_company'));
+    assert.deepEqual(callable.find((f) => f.name === 'read_shared_records').args, ['company_id', 'after', 'max'], 'its arguments, and none of its columns');
     // The contact form's p_email is the address a visitor wants an answer at: it names no account and changes none.
-    const replyAddress = (name, arg) => name === 'submit_contact_request' && arg === 'p_email';
+    // invite_supervisor's p_email is the address an invitation goes to (migration 20261122000200), which names no
+    // account either: nobody is put on the row until an account signed in with that address, confirmed, accepts, and
+    // the inviter is answered the same whether or not an account has it.
+    const anAddress = (name, arg) => ['submit_contact_request', 'invite_supervisor'].includes(name) && arg === 'p_email';
     for (const { name, args } of callable) {
-      for (const arg of args) if (!replyAddress(name, arg)) assert.doesNotMatch(arg, /user|account|uid|email|sub$/i, `${name}(${arg})`);
+      for (const arg of args) if (!anAddress(name, arg)) assert.doesNotMatch(arg, /user|account|uid|email|sub$/i, `${name}(${arg})`);
     }
   });
 });
