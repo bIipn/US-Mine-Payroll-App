@@ -4,15 +4,17 @@
 //   invite_supervisor             a supervisor of the row's company invites an address onto an active row that no
 //                                 email account holds: one nobody holds yet, or one a passcode account holds (a
 //                                 crew member made a supervisor). A new invitation cancels the row's open one;
-//   resend_supervisor_invitation  a supervisor gives an open invitation another 7 days, and supervisor-tools sends
-//                                 the email again;
+//   resend_supervisor_invitation  a supervisor gives an open invitation another 7 days, and vouches for it from then
+//                                 on, and supervisor-tools sends the email again;
 //   cancel_supervisor_invitation  a supervisor cancels one;
 //   account_for_email             for the server key: the account an address belongs to and whether the address is
 //                                 confirmed, so supervisor-tools asks Supabase Auth to send an invite email only to
 //                                 an address with no account or one not confirmed;
-//   my_supervisor_invitations     the open, unexpired invitations to the caller's confirmed email;
-//   accept_supervisor_invitation  the invited person takes the row: a passcode account on it is let go, with a
-//                                 released hold, the row is made a supervisor's and their account is put on it;
+//   my_supervisor_invitations     the open, unexpired invitations to the caller's confirmed email that accepting could
+//                                 still take;
+//   accept_supervisor_invitation  the invited person takes the row, while the supervisor who sent the invitation still
+//                                 is one: a passcode account on the row, and only a passcode account, is let go, with
+//                                 a released hold, the row is made a supervisor's and their account is put on it;
 //   roster_sign_ins               each row's sign-in for the Roster page (none, passcode or email), its lock and
 //                                 its open invitation, for the company's supervisors.
 //
@@ -331,12 +333,15 @@ describe('resend_supervisor_invitation and cancel_supervisor_invitation', () => 
     assert.deepEqual(await everything(), before);
 
     // Sent again by any supervisor of the company: good for 7 days from now, with the address and the company for
-    // the email the supervisor-tools function sends. When it was made stays as it was.
+    // the email the supervisor-tools function sends. When it was made stays as it was, and the supervisor who sent it
+    // again vouches for it from then on.
+    assert.equal((await invitationOf(id)).invited_by, company.owner);
     assert.deepEqual(await resend(bo, id), { email: ana, company_name: 'Test Pit A' });
     const renewed = (await invitationOf(id)).expires_at;
     const ahead = aheadOf(renewed);
     assert.ok(ahead > WEEK - MINUTE && ahead <= WEEK + 1000, `good for ${Math.round(ahead / 1000)} s more`);
     assert.deepEqual((await invitationOf(id)).created_at, madeAt);
+    assert.equal((await invitationOf(id)).invited_by, bo);
     // Not while the row is taken off the roster: row_taken, and nothing is renewed. Put back, it is sent again.
     await takeOff(company, 'Ana Diaz');
     await wrongState(resend(company.owner, id), 'row_taken');
@@ -550,6 +555,80 @@ describe('accept_supervisor_invitation', () => {
     }
     assert.equal((await rosterRow(db, other.rows['Kit Marlow'])).user_id, otherKit);
   });
+
+  it('accepting answers row_taken once the row is taken off the roster or an email account holds it, and lets go of nobody', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }, { first: 'Riley J', last: 'Quinn' }] });
+    // Ana Diaz is invited to her supervisor's row, which is then taken off the roster.
+    const ana = await db.newAccount('ana');
+    const anaInvite = (await invite(company.owner, company.rows['Ana Diaz'], await emailOf(ana))).invitation_id;
+    await takeOff(company, 'Ana Diaz');
+    let before = await everything();
+    await wrongState(accept(ana, anaInvite), 'row_taken');
+    assert.deepEqual(await everything(), before);
+    // Riley J Quinn's crew row is offered to Lee Park, and then Riley Quinn types his name with an email account of
+    // his own, which claims the row. Accepting lets go of no email account: only a passcode account is ever let go.
+    const lee = await db.newAccount('lee');
+    const rileyInvite = (await invite(company.owner, company.rows['Riley J Quinn'], await emailOf(lee))).invitation_id;
+    const riley = await db.newAccount('riley');
+    assert.equal((await join(db, riley, company.code, 'Riley', 'Quinn')).status, 'joined');
+    before = await everything();
+    await wrongState(accept(lee, rileyInvite), 'row_taken');
+    assert.deepEqual(await everything(), before);
+    // Riley Quinn keeps his row, a crew row still, with no hold on his account; neither of the invited is on a row.
+    const row = await rosterRow(db, company.rows['Riley J Quinn']);
+    assert.deepEqual([row.user_id, row.role, row.active], [riley, 'employee', true]);
+    for (const account of [riley, ana, lee]) assert.deepEqual(await holdsOf(company.id, account), []);
+    assert.deepEqual(await db.adminRows('select id from public.roster where user_id = any ($1)', [[ana, lee]]), []);
+  });
+
+  it("an invitation lapses with its inviter's powers, and a supervisor who sends it again vouches for it", async () => {
+    const company = await startCompany(db, {
+      roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }, { first: 'Riley J', last: 'Quinn' }, { first: 'Kit', last: 'Marlow' }],
+    });
+    const bo = await secondSupervisor(db, company, 'Bo', 'Ellison');
+    const jo = await secondSupervisor(db, company, 'Jo', 'Vale');
+    const maria = await secondSupervisor(db, company, 'Maria', 'De La Cruz');
+    const ana = await db.newAccount('ana');
+    const riley = await db.newAccount('riley');
+    const kit = await db.newAccount('kit');
+    const byBo = (await invite(bo, company.rows['Ana Diaz'], await emailOf(ana))).invitation_id;
+    const byJo = (await invite(jo, company.rows['Riley J Quinn'], await emailOf(riley))).invitation_id;
+    const byMaria = (await invite(maria, company.rows['Kit Marlow'], await emailOf(kit))).invitation_id;
+    const listed = async (account) => (await myInvitations(account)).map((i) => i.id);
+    for (const [account, id] of [[ana, byBo], [riley, byJo], [kit, byMaria]]) assert.deepEqual(await listed(account), [id]);
+
+    // An invitation speaks with its inviter's authority. Bo Ellison is taken off the roster, and his invitation is
+    // closed to accepting and no longer listed.
+    await takeOff(company, 'Bo Ellison');
+    await wrongState(accept(ana, byBo), 'invitation_closed');
+    assert.deepEqual(await listed(ana), []);
+    // Jo Vale steps down to crew: the same.
+    await db.as(jo).query("update public.roster set role = 'employee' where id = $1", [company.rows['Jo Vale']]);
+    await wrongState(accept(riley, byJo), 'invitation_closed');
+    assert.deepEqual(await listed(riley), []);
+    // An inviter Supabase Auth has banned has no powers while the ban lasts, as is_supervisor counts one.
+    await db.admin("update auth.users set banned_until = now() + interval '100 years' where id = $1", [maria]);
+    await wrongState(accept(kit, byMaria), 'invitation_closed');
+    assert.deepEqual(await listed(kit), []);
+    await db.admin('update auth.users set banned_until = null where id = $1', [maria]);
+    assert.deepEqual(await listed(kit), [byMaria]);
+    // An inviter whose account is deleted is no longer named, and vouches for nothing.
+    await db.admin('delete from auth.users where id = $1', [maria]);
+    assert.equal((await invitationOf(byMaria)).invited_by, null);
+    await wrongState(accept(kit, byMaria), 'invitation_closed');
+    assert.deepEqual(await listed(kit), []);
+    // None of them put anyone on a row.
+    for (const name of ['Ana Diaz', 'Riley J Quinn', 'Kit Marlow']) assert.equal((await rosterRow(db, company.rows[name])).user_id, null, name);
+
+    // A supervisor who sends an invitation again vouches for it from then on: it is listed, and accepted.
+    for (const [account, id] of [[ana, byBo], [riley, byJo], [kit, byMaria]]) {
+      await resend(company.owner, id);
+      assert.equal((await invitationOf(id)).invited_by, company.owner);
+      assert.deepEqual(await listed(account), [id]);
+      assert.deepEqual(await accept(account, id), { company_id: company.id, company_name: 'Test Pit A' });
+    }
+    assert.equal(await db.as(ana).call('is_supervisor', { company_id: company.id }), true);
+  });
 });
 
 describe('my_supervisor_invitations', () => {
@@ -588,6 +667,32 @@ describe('my_supervisor_invitations', () => {
     for (const session of [db.anon(), server()]) {
       await refused(session.callRows('my_supervisor_invitations'), NO_PRIVILEGE, /permission denied for function my_supervisor_invitations/);
     }
+  });
+
+  it('my invitations leave out those accepting would turn down for their row: taken off the roster, or held with email', async () => {
+    const company = await startCompany(db, {
+      roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }, { first: 'Kit', last: 'Marlow' }, { first: 'Riley J', last: 'Quinn' }, { first: 'Jo', last: 'Vale' }],
+    });
+    await crewMember(company, 'Kit', 'Marlow');
+    // Lou Penrose is invited onto four rows: a supervisor's row nobody holds, a row a passcode account holds, and two
+    // nobody holds yet. Then Riley Quinn types his name with an email account of his own, which claims his row, and
+    // Jo Vale's row is taken off the roster.
+    const lou = await db.newAccount('lou');
+    const address = await emailOf(lou);
+    const on = {};
+    for (const name of ['Ana Diaz', 'Kit Marlow', 'Riley J Quinn', 'Jo Vale']) on[name] = (await invite(company.owner, company.rows[name], address)).invitation_id;
+    assert.equal((await join(db, await db.newAccount('riley'), company.code, 'Riley', 'Quinn')).status, 'joined');
+    await takeOff(company, 'Jo Vale');
+
+    // Only the two whose rows are still open to an invitation are listed. Each one left out, accepting turns down.
+    assert.deepEqual((await myInvitations(lou)).map((i) => i.id).sort(), [on['Ana Diaz'], on['Kit Marlow']].sort());
+    const before = await everything();
+    for (const name of ['Riley J Quinn', 'Jo Vale']) await wrongState(accept(lou, on[name]), 'row_taken');
+    assert.deepEqual(await everything(), before);
+    // The Roster page still sees each row's invitation as it stands: its words go by the account on the row.
+    const shown = Object.fromEntries((await signIns(company.owner, company.id)).map((r) => [r.roster_id, [r.sign_in, r.invitation_id]]));
+    assert.deepEqual(shown[company.rows['Riley J Quinn']], ['email', on['Riley J Quinn']]);
+    assert.deepEqual(shown[company.rows['Jo Vale']], ['none', on['Jo Vale']]);
   });
 });
 
@@ -730,11 +835,16 @@ describe('the order rows and invitations are locked in', () => {
     // roster's write trigger takes the account's lock in the row writes, after both.
     assert.deepEqual(await stepsOf('invite_supervisor'), ['row lock', 'check', 'invitation write', 'invitation write']);
     assert.deepEqual(await stepsOf('resend_supervisor_invitation'), ['invitation read', 'row lock', 'invitation lock', 'check', 'check', 'invitation write']);
+    // Accepting checks the address, that the invitation is open, that its inviter is still a supervisor, that the
+    // caller is not on the roster and that the row is open to it, and, before it lets go of the account on the row,
+    // that this is a passcode account.
     assert.deepEqual(await stepsOf('accept_supervisor_invitation'), [
       'invitation read',
       'join lock',
       'row lock',
       'invitation lock',
+      'check',
+      'check',
       'check',
       'check',
       'check',

@@ -70,8 +70,9 @@ const CALLABLE_BY = {
   crew_sign_in_to_delete: ['authenticated'],
   // Supervisor invitations (migration 20261122000200): a supervisor invites, sends again and cancels, and reads the
   // roster's sign-ins, with their own token; the invited person lists theirs and accepts one. The server key alone
-  // asks whether an address has an account, so supervisor-tools asks Supabase Auth to send an invite email only to a
-  // new one. The helpers they share (email_key, confirmed_email_of, row_open_to_invitation) are theirs alone.
+  // asks whether an address has an account and whether the address is confirmed, so supervisor-tools asks Supabase
+  // Auth to send an invite email only when there is no account or its address is not confirmed yet. The helpers they
+  // share (email_key, confirmed_email_of, row_open_to_invitation, still_a_supervisor) are theirs alone.
   invite_supervisor: ['authenticated'],
   resend_supervisor_invitation: ['authenticated'],
   cancel_supervisor_invitation: ['authenticated'],
@@ -286,7 +287,9 @@ const NOT_FOUND_OR_WRONG_STATE = {
     NO_SUCH_INVITATION,
     [WRONG_STATE, 'Sign in with the confirmed email address the invitation was sent to.', 'wrong_email'],
     INVITATION_CLOSED,
+    [WRONG_STATE, 'The supervisor who sent that invitation is no longer a supervisor there. Ask a supervisor to send it again.', 'invitation_closed'],
     [WRONG_STATE, "This account is already on that company's roster.", 'already_on_roster'],
+    ROW_TAKEN,
     ROW_TAKEN,
   ],
   approve_join_request: [

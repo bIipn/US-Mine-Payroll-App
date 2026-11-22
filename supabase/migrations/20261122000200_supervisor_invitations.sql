@@ -19,6 +19,10 @@
 -- An invitation is open until it is accepted or cancelled, and a row has at
 -- most one open invitation: a new one cancels the one before. An open one past
 -- its 7 days is neither sent again nor accepted; inviting again replaces it.
+-- An invitation speaks with its inviter's authority: it is accepted only while
+-- the supervisor who sent it (or last sent it again) is still a supervisor of
+-- the company, and a supervisor who sends it again vouches for it from then
+-- on.
 --
 -- The functions, each security definer, searching pg_catalog first and the
 -- temporary schema last:
@@ -49,7 +53,9 @@
 -- state that will not do:
 --   row_taken          the row is taken off the roster, or an email account
 --                      holds it;
---   invitation_closed  the invitation expired, was cancelled or was accepted;
+--   invitation_closed  the invitation expired, was cancelled or was accepted,
+--                      or, to accept it, its inviter is no longer a
+--                      supervisor of the company;
 --   wrong_email        the accepting account's confirmed address is not the
 --                      invited one, or it has none;
 --   already_on_roster  the accepting account already holds a row of that
@@ -77,7 +83,9 @@ create table public.supervisor_invitations (
   roster_id uuid not null,
   -- The address as typed, trimmed and in lower case (email_key).
   email text not null,
-  -- The supervisor who sent it. Cleared if that account is deleted.
+  -- The supervisor who sent it, or last sent it again, who vouches for it: it
+  -- is good only while they are a supervisor of the company. Cleared if that
+  -- account is deleted, and then it is good no more.
   invited_by uuid references auth.users (id) on delete set null,
   created_at timestamptz not null default now(),
   -- Good for 7 days, and for 7 more from when it is sent again.
@@ -195,6 +203,34 @@ $$;
 
 revoke all on function public.row_open_to_invitation(boolean, uuid) from public, anon, authenticated, service_role;
 
+-- Whether an account is still a supervisor of a company, as is_supervisor
+-- counts the signed-in caller and the keep-a-supervisor guard counts
+-- supervisors: an active supervisor row there, held by an account Supabase
+-- Auth has neither soft-deleted nor banned. An invitation is good only while
+-- this holds for its invited_by: taken off the roster, stepped down, banned,
+-- soft-deleted or deleted (invited_by null), an inviter vouches for nothing.
+-- No API role.
+create function public.still_a_supervisor(p_user uuid, p_company_id uuid)
+returns boolean
+language sql
+stable
+set search_path = pg_catalog, pg_temp
+as $$
+  select exists (
+    select 1
+    from public.roster r
+    join auth.users u on u.id = r.user_id
+    where r.company_id = p_company_id
+      and r.user_id = p_user
+      and r.active
+      and r.role = 'supervisor'
+      and u.deleted_at is null
+      and (u.banned_until is null or u.banned_until <= pg_catalog.now())
+  )
+$$;
+
+revoke all on function public.still_a_supervisor(uuid, uuid) from public, anon, authenticated, service_role;
+
 -- ---- Inviting ---------------------------------------------------------------------------------------
 
 -- An invitation onto a roster row, for a supervisor of the row's company: the
@@ -288,7 +324,9 @@ $$;
 -- so the email can go again. It answers {email, company_name}, for the
 -- supervisor-tools function to send it. The invitation must be open and
 -- unexpired (one that has expired is replaced by inviting again), and its row
--- still open to an invitation. It refuses, in this order:
+-- still open to an invitation. The supervisor who sends it again vouches for
+-- it from then on (invited_by), so one whose inviter is no longer a
+-- supervisor is good again. It refuses, in this order:
 --   42501  nobody signed in;
 --   PT404  no such invitation among the companies the caller supervises, or
 --          none any longer once its row is locked;
@@ -353,7 +391,8 @@ begin
   end if;
 
   update public.supervisor_invitations i
-  set expires_at = pg_catalog.now() + interval '7 days'
+  set expires_at = pg_catalog.now() + interval '7 days',
+      invited_by = caller
   where i.id = invitation.id;
 
   return pg_catalog.jsonb_build_object(
@@ -442,8 +481,11 @@ $$;
 
 -- The open, unexpired invitations to the caller's confirmed address
 -- (confirmed_email_of), oldest first: the company, the name on the row it is
--- for, and until when it is good. None for an account with no confirmed
--- address. 42501 when nobody is signed in.
+-- for, and until when it is good. Only those accepting could still take, by
+-- the checks it makes: the row still open to an invitation
+-- (row_open_to_invitation), and the inviter still a supervisor of the company
+-- (still_a_supervisor). None for an account with no confirmed address. 42501
+-- when nobody is signed in.
 create function public.my_supervisor_invitations()
 returns table (
   id uuid,
@@ -477,6 +519,8 @@ begin
       and i.accepted_at is null
       and i.cancelled_at is null
       and i.expires_at > pg_catalog.now()
+      and public.row_open_to_invitation(r.active, r.user_id)
+      and public.still_a_supervisor(i.invited_by, i.company_id)
     order by i.created_at, i.id;
 end;
 $$;
@@ -498,20 +542,28 @@ $$;
 --   PT409  wrong_email: the caller's confirmed address (confirmed_email_of) is
 --          not the invited one, or it has none. Asked first, so only the
 --          invited person learns more about the invitation;
---   PT409  invitation_closed;
+--   PT409  invitation_closed: expired, cancelled or accepted;
+--   PT409  invitation_closed: its inviter is no longer a supervisor of the
+--          company (still_a_supervisor). The inviter's row is read, not
+--          locked: locking a second row of the roster could deadlock against
+--          close_company, which locks every row of the company;
 --   PT409  already_on_roster: the caller holds a row of the company, on the
 --          roster or taken off it (an account holds one row per company);
---   PT409  row_taken.
+--   PT409  row_taken: the row is taken off the roster, or an email account
+--          holds it. Asked once more where the row is let go of, so that
+--          accepting never lets go of an email account, whatever is asked
+--          before.
 --
 -- It then writes the row three times, in this order, as the roster's write
--- trigger needs. A passcode account on the row is let go of first, with a
--- released hold, as release_roster_claim lets go of a claim, so it cannot
--- take the row back by typing the name: the trigger never hands a claim
--- straight to another account. Then the row is made a supervisor's: the
--- trigger never lets a passcode account hold one. Then the caller's account
--- is put on it. The trigger still has its say on that last write: a passcode
--- account accepting is refused (supervisor_needs_email), and all of it is
--- undone. From then on the keep-a-supervisor guard counts the caller.
+-- trigger needs. A passcode account on the row, and only a passcode account,
+-- is let go of first, with a released hold, as release_roster_claim lets go
+-- of a claim, so it cannot take the row back by typing the name: the trigger
+-- never hands a claim straight to another account. Then the row is made a
+-- supervisor's: the trigger never lets a passcode account hold one. Then the
+-- caller's account is put on it. The trigger still has its say on that last
+-- write: a passcode account accepting is refused (supervisor_needs_email),
+-- and all of it is undone. From then on the keep-a-supervisor guard counts
+-- the caller.
 create function public.accept_supervisor_invitation(p_invitation_id uuid)
 returns jsonb
 language plpgsql
@@ -569,6 +621,12 @@ begin
       message = 'That invitation has expired, or was cancelled or accepted.',
       hint = 'invitation_closed';
   end if;
+  if not public.still_a_supervisor(invitation.invited_by, invitation.company_id) then
+    raise exception using
+      errcode = 'PT409',
+      message = 'The supervisor who sent that invitation is no longer a supervisor there. Ask a supervisor to send it again.',
+      hint = 'invitation_closed';
+  end if;
   if exists (
     select 1 from public.roster r
     where r.company_id = invitation.company_id and r.user_id = caller
@@ -586,6 +644,15 @@ begin
   end if;
 
   if target.user_id is not null then
+    -- Only a passcode account is ever let go of. An email account on the row is
+    -- that person's: row_taken, as above.
+    if not exists (select 1 from public.crew_logins l where l.user_id = target.user_id) then
+      raise exception using
+        errcode = 'PT409',
+        message = 'That roster row is taken off the roster or held by an email sign-in.',
+        hint = 'row_taken';
+    end if;
+
     -- Kept beside a bar, if the account has one.
     insert into public.join_holds (company_id, user_id, kind)
     values (target.company_id, target.user_id, 'released')
@@ -628,7 +695,11 @@ $$;
 --   needs_reset   whether 10 wrong in a row lock it until a reset code;
 --   invitation_id, invited_email, invited_at
 --                 the row's open, unexpired invitation, if it has one: its id,
---                 its address and when it was made.
+--                 its address and when it was made. It is shown as it stands,
+--                 whether or not it could still be accepted (its row taken,
+--                 or its inviter no longer a supervisor): the Roster page
+--                 words a row by its account first, and sending it again
+--                 vouches for it anew.
 -- It refuses as company_billing does: 42501 when nobody is signed in, and
 -- PT404 for a company the caller does not supervise, or none.
 create function public.roster_sign_ins(p_company_id uuid)
