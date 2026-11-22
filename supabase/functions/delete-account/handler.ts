@@ -40,11 +40,12 @@
 //
 // It logs what happened as a code: never a token, a key, an email or an id.
 
-import { keyHeaders, publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
+import { publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
+import { bearerOf, callFunction, deleteAuthUser, jsonOf, objectOf, personHeaders, readCapped, whoseToken, type Called, type Fetch } from '../_shared/http.ts';
 
 export interface DeleteDeps {
   env: Env;
-  fetch: (input: string, init: RequestInit) => Promise<Response>;
+  fetch: Fetch;
   /** The clock, in milliseconds. */
   now?: () => number;
   log?: (message: string) => void;
@@ -58,8 +59,6 @@ export const PASSWORD_FRESH_SECONDS = 600;
 export const MAX_CLOSE = 20;
 /** The largest body read, in bytes. */
 export const MAX_BODY_BYTES = 16_384;
-/** How long one call to Supabase Auth or the database may take before it counts as failed. */
-export const CALL_TIMEOUT_MS = 15_000;
 
 const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
@@ -99,20 +98,6 @@ interface Checked {
   running: number;
 }
 
-type Called = { ok: true; data: unknown } | { ok: false; status: number; code?: string; hint?: string };
-
-/** What Supabase Auth says of a token. */
-type Whose =
-  | { kind: 'user'; id: string }
-  /** Auth took the token's signature and has no such account: it was deleted. */
-  | { kind: 'gone' }
-  /** Auth turned the token down for a reason of its own: signed out, expired, or not one it signed. */
-  | { kind: 'signed_out' }
-  /** Turned down with no reason of Auth's, such as the gateway refusing the key. */
-  | { kind: 'refused'; status: number }
-  /** No answer, or one this cannot read. */
-  | { kind: 'no_answer'; status: number };
-
 /** The time of the latest password entry of a token's amr claim, in Unix seconds, or null for none. */
 export function passwordTypedAt(amr: unknown): number | null {
   if (!Array.isArray(amr)) return null;
@@ -136,52 +121,6 @@ function claimsOf(token: string): Json | null {
     const bytes = Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
     const claims: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     return claims && typeof claims === 'object' && !Array.isArray(claims) ? (claims as Json) : null;
-  } catch {
-    return null;
-  }
-}
-
-function bearerOf(header: string | null): string | null {
-  const match = /^Bearer\s+([A-Za-z0-9._~+/=-]{1,8192})$/i.exec((header ?? '').trim());
-  return match ? match[1] : null;
-}
-
-/**
- * The body as text, read no further than MAX_BODY_BYTES: 'too_large' when it is said to be larger, or
- * turns out larger while it is read, and null when it cannot be read as UTF-8.
- */
-export async function readCapped(request: Request): Promise<string | 'too_large' | null> {
-  const declared = request.headers.get('content-length');
-  if (declared !== null) {
-    if (!/^\d{1,15}$/.test(declared.trim())) return null;
-    if (Number(declared.trim()) > MAX_BODY_BYTES) return 'too_large';
-  }
-  if (!request.body) return '';
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_BODY_BYTES) {
-        await reader.cancel().catch(() => {});
-        return 'too_large';
-      }
-      chunks.push(value);
-    }
-  } catch {
-    return null;
-  }
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
     return null;
   }
@@ -245,69 +184,17 @@ function readCheck(data: unknown): Checked[] | null {
   return out;
 }
 
-async function parsed(response: Response): Promise<unknown> {
-  const text = await response.text().catch(() => '');
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-}
-
-const objectOf = (value: unknown): Json => (value && typeof value === 'object' && !Array.isArray(value) ? (value as Json) : {});
-
 /** The request handler, for Deno.serve. */
 export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Response> {
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
   /** A call to the database as the person, with their own token, through PostgREST. */
-  async function asPerson(server: Server, publishable: string, token: string, name: string, args: Json): Promise<Called> {
-    let response: Response;
-    try {
-      response = await deps.fetch(`${server.url}/rest/v1/rpc/${name}`, {
-        method: 'POST',
-        headers: { apikey: publishable, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(args),
-        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-      });
-    } catch {
-      return { ok: false, status: 0 };
-    }
-    const data = await parsed(response);
-    if (!response.ok) {
-      const body = objectOf(data);
-      return {
-        ok: false,
-        status: response.status,
-        code: typeof body.code === 'string' ? body.code : undefined,
-        hint: typeof body.hint === 'string' ? body.hint : undefined,
-      };
-    }
-    return { ok: true, data };
-  }
+  const asPerson = (server: Server, publishable: string, token: string, name: string, args: Json): Promise<Called> =>
+    callFunction(deps.fetch, server, name, args, personHeaders(publishable, token));
 
   /** Whose the token is, by Supabase Auth, or why Auth says no. */
-  async function whose(server: Server, publishable: string, token: string): Promise<Whose> {
-    let response: Response;
-    try {
-      response = await deps.fetch(`${server.url}/auth/v1/user`, {
-        method: 'GET',
-        headers: { apikey: publishable, Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-      });
-    } catch {
-      return { kind: 'no_answer', status: 0 };
-    }
-    const body = objectOf(await parsed(response));
-    if (response.ok) return typeof body.id === 'string' ? { kind: 'user', id: body.id } : { kind: 'no_answer', status: response.status };
-    if (response.status === 401 || response.status === 403) {
-      if (body.error_code === 'user_not_found') return { kind: 'gone' };
-      if (typeof body.error_code === 'string') return { kind: 'signed_out' };
-      return { kind: 'refused', status: response.status };
-    }
-    return { kind: 'no_answer', status: response.status };
-  }
+  const whose = (server: Server, publishable: string, token: string) => whoseToken(deps.fetch, server, publishable, token);
 
   return async (request: Request): Promise<Response> => {
     const origin = request.headers.get('origin');
@@ -325,7 +212,7 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
 
     const token = bearerOf(request.headers.get('authorization'));
     if (!token) return answer(401, { error: 'signed_out', message: 'Sign in first.' });
-    const text = await readCapped(request);
+    const text = await readCapped(request, MAX_BODY_BYTES);
     if (text === 'too_large') {
       said('too_large');
       return answer(413, { error: 'too_large', message: `The body is at most ${MAX_BODY_BYTES} bytes.` });
@@ -446,23 +333,18 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
     /** Auth answered the delete itself and turned it down, so nothing was deleted. */
     let turnedDown = false;
     let failure = '';
-    try {
-      const response = await deps.fetch(`${server.url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
-        method: 'DELETE',
-        headers: { ...keyHeaders(server.key), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ should_soft_delete: false }),
-        signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-      });
+    const response = await deleteAuthUser(deps.fetch, server, userId);
+    if (!response) {
+      failure = 'no answer';
+    } else {
       // Already gone (deleted from another phone a moment before) counts as deleted.
       gone = response.ok || response.status === 404;
       if (!gone) {
-        const body = objectOf(await parsed(response));
+        const body = objectOf(await jsonOf(response));
         const fromAuth = typeof body.msg === 'string' || typeof body.error_code === 'string' || typeof body.message === 'string';
         turnedDown = !GATEWAY_STATUSES.has(response.status) && (response.status < 500 || fromAuth);
         failure = `${response.status}${typeof body.code === 'string' || typeof body.code === 'number' ? ` ${body.code}` : ''}`;
       }
-    } catch {
-      failure = 'no answer';
     }
     if (!gone) {
       const after = await whose(server, publishable, token);

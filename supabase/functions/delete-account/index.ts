@@ -1,7 +1,7 @@
 // The delete-account edge function: a person deletes their own MineMuster sign-in, from the app or
 // the office dashboard. What it does is in handler.ts. Deploy it with JWT verification off (a
 // browser's preflight carries no token, and the function asks Supabase Auth about the token itself),
-// together with ../_shared/server.ts: see supabase/README.md.
+// together with ../_shared/server.ts and ../_shared/http.ts: see supabase/README.md.
 
 import { makeHandler } from './handler.ts';
 

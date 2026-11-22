@@ -5,7 +5,7 @@ This is step 1 of MineMuster, the version of the crew app that more than one com
 The app and the office dashboard (https://app.minemuster.com) connect to the MineMuster Supabase project, where these migrations are being applied in order: check which have run (`supabase migration list`, or the project's migrations page) before counting on one. Everything here is tested on a local database on this machine, and the rules that only show when two requests overlap on a throwaway local PostgreSQL server.
 
 - `migrations/` holds the SQL migrations, applied in order of their file names.
-- `functions/` holds the edge functions: `stripe-webhook`, where Stripe sends its events (see [The webhook](#the-webhook)), and `delete-account`, where a person deletes their own sign-in (see [Deleting an account](#deleting-an-account)). `functions/_shared/server.ts` reads the project's address and keys for both.
+- `functions/` holds the edge functions: `stripe-webhook`, where Stripe sends its events (see [The webhook](#the-webhook)), and `delete-account`, where a person deletes their own sign-in (see [Deleting an account](#deleting-an-account)). `functions/_shared/server.ts` reads the project's address and keys for both, and `functions/_shared/http.ts` is how `delete-account` reads its request and makes its calls to Supabase Auth and the database, each given 15 seconds.
 - `tests/` holds the tests, which run the migrations on a fresh local PostgreSQL ([PGlite](https://pglite.dev)) and try every rule as the API roles would.
 - `checks/` holds `shared_shapes.sql`, a read-only check to run on a project before migration `20261120000100` is applied there (see [Applying the migrations](#applying-the-migrations-to-a-supabase-project)).
 - `tools/` holds `make_name_skeleton_table.py`, which makes the table of look-alike characters in `20261116002500_lookalike_names.sql` from Unicode's `confusables.txt` (see [How a typed name is matched](#how-a-typed-name-is-matched)).
@@ -585,7 +585,7 @@ Neither takes an account id: each answers for the signed-in caller only. `close_
 
 ### The delete-account function
 
-`functions/delete-account` is `index.ts`, which starts it, and `handler.ts`, what it does, with `../_shared/server.ts`, which reads the project's address and keys for it and for the stripe-webhook. It uses nothing but `fetch`.
+`functions/delete-account` is `index.ts`, which starts it, and `handler.ts`, what it does, with `../_shared/server.ts`, which reads the project's address and keys for it and for the stripe-webhook, and `../_shared/http.ts`, which reads its body and makes its calls. It uses nothing but `fetch`.
 
 1. `OPTIONS`, a browser's preflight, is answered 204 with CORS for `https://app.minemuster.com` alone. A request with any other `Origin` is 403 `origin_not_allowed`, before anything is asked; a phone sends none. Any other method but `POST` is 405.
 2. No `Authorization: Bearer` token: 401 `signed_out`.
@@ -601,7 +601,7 @@ Missing settings are 500 `not_set_up`, before anything is asked; Supabase Auth o
 
 **Its settings.** Supabase gives every edge function `SUPABASE_URL` and the server key, read as the webhook reads it (`SUPABASE_SECRET_KEYS`, else `SUPABASE_SERVICE_ROLE_KEY`). The publishable key, for the calls made with the person's own token, is the `default` entry of `SUPABASE_PUBLISHABLE_KEYS`, else the legacy `SUPABASE_ANON_KEY`. Those two names could not be checked against Supabase's own documentation from here: look under Edge Functions, Secrets, before relying on the function. Nothing else is set.
 
-**Deploying it.** JWT verification off: a browser's preflight carries no token, and the function asks Supabase Auth about the token itself. With the CLI, from the repository root: `supabase functions deploy delete-account --no-verify-jwt`. Through the Supabase MCP server or the dashboard: `delete-account/index.ts`, `delete-account/handler.ts` and `_shared/server.ts`, with `verify_jwt` off. Apply `20261120000200` first: without it the function answers 500 `try_again`, and deletes nothing.
+**Deploying it.** JWT verification off: a browser's preflight carries no token, and the function asks Supabase Auth about the token itself. With the CLI, from the repository root: `supabase functions deploy delete-account --no-verify-jwt`. Through the Supabase MCP server or the dashboard: `delete-account/index.ts`, `delete-account/handler.ts`, `_shared/server.ts` and `_shared/http.ts`, with `verify_jwt` off. Apply `20261120000200` first: without it the function answers 500 `try_again`, and deletes nothing.
 
 **Backups.** A deleted account is gone from the database at once. Copies in the server's backups are deleted when those backups expire, after the retention of the project's plan (Database, Backups, in Supabase's dashboard).
 
@@ -691,7 +691,7 @@ Being done now for the MineMuster project. Never from a test:
 4. Any server code that soft-deletes or bans accounts calls `step_down_everywhere(user_id)` first, and bans only once it has returned, as [A company always keeps a supervisor](#a-company-always-keeps-a-supervisor) says.
 5. Keep PostgREST's `db-plan-enabled` off (see [What a count can tell](#what-a-count-can-tell)).
 6. For billing (`20261117000500`): keep the webhook's signing secret in Vault as `stripe_webhook_secret`, deploy `functions/stripe-webhook` with JWT verification off, and point a Stripe webhook endpoint at it for the four events it uses, as [The webhook](#the-webhook) says. The Security Advisor may point out `stripe_events` and `contact_requests` as tables with row level security on and no policy, and `submit_contact_request` as callable by `anon`: on purpose, as above.
-7. For deleting accounts (`20261120000200`): deploy `functions/delete-account`, with `_shared/server.ts`, with JWT verification off, and check the names of its settings, as [Deleting an account](#deleting-an-account) says. It needs no secret of its own. The Security Advisor may point out `account_deletion_check` and `close_company` as `security definer` functions callable by signed-in users: on purpose; each answers for the caller alone.
+7. For deleting accounts (`20261120000200`): deploy `functions/delete-account`, with `_shared/server.ts` and `_shared/http.ts`, with JWT verification off, and check the names of its settings, as [Deleting an account](#deleting-an-account) says. It needs no secret of its own. The Security Advisor may point out `account_deletion_check` and `close_company` as `security definer` functions callable by signed-in users: on purpose; each answers for the caller alone.
 
 ### Adding to it later
 
