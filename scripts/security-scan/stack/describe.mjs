@@ -70,7 +70,7 @@ const NOTES = {
   record_history: ['Every version of the records the caller may read.', '', 'None: read only.'],
   billing_subscriptions: ['A company\'s supervisors read its subscriptions.', '', 'None: read only.'],
   billing_overrides: ['A company\'s supervisors read its override.', '', 'None: read only.'],
-  company_by_code: ['Anyone: the name and state of the company with this join code.', '', 'None. Nothing limits how often codes are tried.'],
+  company_by_code: ['A signed-in account: the name and state of the company with this join code. Nobody signed out may call it (migration 20261122000100): the crew sign-in looks a code up through the crew-auth function, with the server key.', '', 'None. Nothing yet limits how often a signed-in account tries codes; the crew sign-in\'s lookup is limited to 30 tries from one address in 10 minutes.'],
   submit_contact_request: ['Anyone: the website\'s contact form.', 'yes', 'Keeps a row for each message. Its limits (3 from one email address in 24 hours, 5 from one sender in an hour, 100 from everyone in an hour) then answer 429 to everyone until a reset.'],
   create_company: ['A signed-in account starts a company and becomes its supervisor.', 'yes', 'Every call makes a company, up to 3 in 24 hours and 20 in all for one account; past either it answers that account 429 until a reset. A1 and B1 have started one each.'],
   join_company: ['A signed-in account joins a company with its code and a name.', 'yes', 'With company A\'s code a junk name leaves a pending request; the name on A3\'s row claims that row. Both change the fixtures until a reset.'],

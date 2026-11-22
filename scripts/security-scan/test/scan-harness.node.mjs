@@ -6,7 +6,7 @@
 // The name ends in .node.mjs and not in .test.mjs, so the app's jest does not pick it up.
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -212,6 +212,34 @@ test('the server config gives no table filter a customVariables value, and its f
     for (const name of functions) assert.ok(entry.field in FUNCTION_INPUTS[name], `${name} has no ${entry.field}`);
   }
   assert.deepEqual(Object.keys(TABLE_FILTERS).sort(), ['companies', 'roster']);
+});
+
+test('the server config waits on a call the key alone may still make, and one that keeps nothing', () => {
+  // The scanner sends waitForAppTarget with the key alone, before it signs in. company_by_code
+  // answered it until migration 20261122000100 made the code lookup a signed-in account's; this
+  // holds the wait to the migrations, so a grant taken back from anon cannot stop a scan unseen.
+  const block = /\n {2}waitForAppTarget:\n((?: {4}.*\n)+)/.exec(configText('stackhawk-api.yml'))?.[1] ?? '';
+  const fn = /^ {4}path: \/rest\/v1\/rpc\/(\w+)$/m.exec(block)?.[1];
+  assert.equal(fn, 'submit_contact_request', 'the wait asks the contact form');
+  const folder = path.join(REPO, 'supabase/migrations');
+  const migrations = readdirSync(folder).filter((name) => name.endsWith('.sql')).sort()
+    .map((name) => readFileSync(path.join(folder, name), 'utf8').replace(/--.*$/gm, '')).join('\n');
+  // Whether anon may call it once every grant and revoke has run, in order.
+  let open = false;
+  for (const [, verb, name, roles] of migrations.matchAll(/\b(grant|revoke)\s+(?:all|execute)\s+on\s+function\s+public\.(\w+)\s*\([^)]*\)\s+(?:to|from)\s+([^;]+);/gi)) {
+    if (name === fn && /\banon\b/.test(roles)) open = verb.toLowerCase() === 'grant';
+  }
+  assert.ok(open, `${fn} is not open to the key alone`);
+  // Sent by POST as JSON with every argument the function takes, or PostgREST cannot find it, and
+  // with the hidden field filled in, so the function answers at once and keeps nothing.
+  assert.match(block, /^ {4}requestMethod: POST$/m);
+  assert.match(block, /^ {6}Content-Type: application\/json$/m);
+  const body = JSON.parse(/^ {4}requestBody: '(.*)'$/m.exec(block)?.[1] ?? 'null');
+  const made = [...migrations.matchAll(/\bcreate\s+(?:or\s+replace\s+)?function\s+public\.submit_contact_request\s*\(([^)]*)\)/gi)].at(-1)?.[1] ?? '';
+  const takes = made.split(',').map((argument) => argument.trim().split(/\s+/)[0]).filter(Boolean);
+  assert.equal(takes.length, 6);
+  assert.deepEqual(Object.keys(body ?? {}).sort(), [...takes].sort());
+  assert.notEqual(String(body.p_website ?? '').trim(), '', 'the hidden field is filled in');
 });
 
 // ---- The copies' links ----------------------------------------------------------------------------

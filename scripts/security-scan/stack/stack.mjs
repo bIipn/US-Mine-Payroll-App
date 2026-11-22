@@ -221,8 +221,16 @@ async function start() {
   startNode(files, 'gateway');
   await waitFor('the functions server', async () => (await httpStatus(PORTS.functions, '/')) === 404);
   await waitFor('the gateway', async () => (await call('GET', '/rest/v1/')).status === 401);
-  // PostgREST reads the schema when it is told to; wait until it knows the last migration's function.
-  await waitFor('PostgREST to read the schema', async () => (await call('POST', '/rest/v1/rpc/company_by_code', { key: secrets.publishableKey, body: { code: 'AAAAAAAA' } })).status === 200);
+  // PostgREST reads the schema when it is told to, and one that was already running answers from the
+  // schema it read before the migrations above until then. So wait until it knows crew_lookup, a
+  // function of migration 20261122000100. It is the server key's alone: the publishable key's call
+  // is refused by the database before anything runs (42501), which PostgREST answers 401, as
+  // smoke.mjs expects of push_records. Until PostgREST has read the function it answers 404
+  // (PGRST202, as after-scan.mjs reads it), and the gateway's own refusals carry no code.
+  await waitFor('PostgREST to read the schema', async () => {
+    const answer = await call('POST', '/rest/v1/rpc/crew_lookup', { key: secrets.publishableKey, body: { p_code: 'AAAAAAAA', p_address: '' } });
+    return answer.status === 401 && answer.json?.code === '42501';
+  });
 
   writeEnvJson(files, secrets);
   if (!fs.existsSync(files.snapshot)) {

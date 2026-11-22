@@ -275,9 +275,21 @@ async function readiness() {
   const inputs = readEnvFile(path.join(inputsFolder(home), 'scan.env'));
   const key = fixtures.keys.publishable;
 
-  // The three addresses.
-  const byCode = await ask(`${LOCAL_SERVER}/rest/v1/rpc/company_by_code?code=XXXXXXXX`, { headers: { apikey: key } });
-  note('The local server answers', byCode.status === 200, `GET /rest/v1/rpc/company_by_code -> ${byCode.status}`);
+  // The three addresses. The local server is asked what the server config's waitForAppTarget asks
+  // with the key alone: the contact form with its hidden field filled in, which answers 200 and
+  // keeps nothing. Since migration 20261122000100 it is the one function the key alone may call.
+  const target = await ask(`${LOCAL_SERVER}/rest/v1/rpc/submit_contact_request`, {
+    method: 'POST',
+    headers: { apikey: key },
+    body: { p_name: '', p_company: '', p_email: '', p_phone: '', p_message: '', p_website: 'waiting for the target' },
+  });
+  let targetAnswer = null;
+  try {
+    targetAnswer = JSON.parse(target.text);
+  } catch {
+    // Not JSON: not the function's answer.
+  }
+  note('The local server answers', target.status === 200 && targetAnswer?.ok === true, `POST /rest/v1/rpc/submit_contact_request -> ${target.status}`);
   const sitePage = await ask(`${WEBSITE}/`);
   note('The website copy answers', sitePage.status === 200 && Boolean(sitePage.headers['content-security-policy']), `GET ${WEBSITE}/ -> ${sitePage.status}`);
   const dashPage = await ask(`${DASHBOARD}/`);

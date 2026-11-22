@@ -74,6 +74,9 @@ export const FUNCTION_INPUTS = {
   deny_join_request: { request_id: 'requestP1' },
   lift_join_bar: { request_id: 'requestP1' },
   release_roster_claim: { roster_id: 'rosterA3' },
+  // A signed-in account's lookup (migration 20261122000100), as every input here is: the description
+  // is PostgREST's as a signed-in account. The crew_* checks are the server key's alone, so they are
+  // in neither the description nor the recorded requests.
   company_by_code: { code: 'codeB' },
   join_company: { code: 'codeB' },
 };
@@ -242,6 +245,9 @@ function seedRequests({ gateway, key, fixtures, webhookBase }) {
   rpc('is_member', { company_id: A.id });
   rpc('is_supervisor', { company_id: A.id });
   rpc('company_billing', { p_company_id: A.id });
+  // The code lookup, as the dashboard makes it for a signed-in account that has joined nothing
+  // (dashboard/src/lib/api.ts). Nobody signed out may make it since migration 20261122000100: it
+  // is a signed-in account's read, like those above.
   rpc('company_by_code', { code: B.joinCode });
   add('GET', '/rest/v1/rpc/company_by_code', { query: { code: B.joinCode } });
 

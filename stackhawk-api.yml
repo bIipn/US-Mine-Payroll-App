@@ -40,14 +40,20 @@ app:
     - "/auth/v1"
     - "/auth/v1/.*"
 
-  # The scanner asks this before it starts and when it suspects the server has stopped. It is a
-  # public function that answers 200 quickly, with a code no company has.
+  # The scanner asks this before it starts and when it suspects the server has stopped, with the key
+  # alone. Since migration 20261122000100 the only function the key alone may call is the website's
+  # contact form (company_by_code is for signed-in accounts), and with its hidden field filled in it
+  # answers 200 at once and keeps nothing, before any limit is counted: a bot's answer. up.mjs asks
+  # the same before a scan, and a test holds this to the migrations' grants.
   waitForAppTarget:
-    path: /rest/v1/rpc/company_by_code?code=XXXXXXXX
+    path: /rest/v1/rpc/submit_contact_request
+    requestMethod: POST
+    requestBody: '{"p_name": "", "p_company": "", "p_email": "", "p_phone": "", "p_message": "", "p_website": "waiting for the target"}'
     waitTimeoutMillis: 60000
     pollDelay: 1000
     requestHeaders:
       apikey: ${SCAN_PUBLISHABLE_KEY}
+      Content-Type: application/json
 
   openApiConf:
     # One file: PostgREST's own description of what a signed-in account reaches, and the

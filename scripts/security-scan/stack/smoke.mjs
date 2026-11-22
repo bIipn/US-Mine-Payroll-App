@@ -36,11 +36,11 @@ export async function smoke(secrets, files) {
   show(`Every answer must also carry ${Object.entries(PLATFORM_HEADERS).map(([name, value]) => `${name}: ${value}`).join(' and ')}, as the live gateway's do.\n`);
 
   show('-- The key');
-  check('anon calls company_by_code with company A\'s join code', await rpc('company_by_code', undefined, { code: A.joinCode }), 200, (a) => a.json[0]?.name === 'Test Pit A' && a.json[0]?.state === 'CA');
+  show('   (The code lookup is for signed-in accounts since migration 20261122000100: anon is refused by the database, 42501, which PostgREST answers with 401. The gateway\'s own refusals carry no code.)');
+  check('anon is refused company_by_code with company A\'s join code', await rpc('company_by_code', undefined, { code: A.joinCode }), 401, (a) => a.json?.code === '42501');
   check('no apikey on /rest/v1 is refused', await call('GET', '/rest/v1/companies'), 401, (a) => a.json.message === 'No API key found in request');
   check('no apikey on /auth/v1 is refused', await call('GET', '/auth/v1/settings'), 401);
   check('a wrong apikey is refused', await call('GET', '/rest/v1/companies', { key: 'sb_publishable_not_a_key_of_this_stack' }), 401, (a) => a.json.message === 'Invalid API key');
-  check('the publishable key in the apikey query parameter is taken', await call('POST', `/rest/v1/rpc/company_by_code?apikey=${key}`, { body: { code: A.joinCode } }), 200, (a) => a.json.length === 1);
   check('the publishable key does not get PostgREST\'s description', await call('GET', '/rest/v1/', { key }), 403);
   check('the secret key is refused from a browser', await call('GET', '/rest/v1/contact_requests', { key: secrets.secretKey, headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64)' } }), 401);
   check('the secret key reads the contact form\'s table as service_role', await call('GET', '/rest/v1/contact_requests?select=name', { key: secrets.secretKey }), 200, (a) => a.json.length === 1);
@@ -52,6 +52,8 @@ export async function smoke(secrets, files) {
   const tokens = {};
   for (const [label, account] of Object.entries(fixtures.accounts)) tokens[label] = (await signIn(secrets, account.email, account.password)).access_token;
   show(`ok   each of ${Object.keys(tokens).join(', ')} signs in with its password and gets an access token`);
+  check('N1, signed in and in no company, calls company_by_code with company A\'s join code', await rpc('company_by_code', tokens.N1, { code: A.joinCode }), 200, (a) => a.json[0]?.name === 'Test Pit A' && a.json[0]?.state === 'CA');
+  check('the publishable key in the apikey query parameter is taken, beside a signed-in account\'s token', await call('POST', `/rest/v1/rpc/company_by_code?apikey=${key}`, { token: tokens.N1, body: { code: A.joinCode } }), 200, (a) => a.json.length === 1);
 
   show('\n-- Each account\'s companies (my_companies)');
   const expected = { A1: ['Test Pit A', 'supervisor'], A2: ['Test Pit A', 'employee'], B1: ['Test Pit B', 'supervisor'], N1: null, P1: null };
@@ -73,7 +75,7 @@ export async function smoke(secrets, files) {
   check('B1 asks for company A\'s billing: no such company', await rpc('company_billing', tokens.B1, { p_company_id: A.id }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
   check('B1 asks for the billing of a company that does not exist: the same answer', await rpc('company_billing', tokens.B1, { p_company_id: randomUUID() }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
   check('B1 asks for company A\'s billing by GET: the same answer', await call('GET', `/rest/v1/rpc/company_billing?p_company_id=${A.id}`, { key, token: tokens.B1 }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
-  check('company A\'s join code still works afterwards', await rpc('company_by_code', undefined, { code: A.joinCode }), 200, (a) => a.json.length === 1);
+  check('company A\'s join code still works afterwards, for N1', await rpc('company_by_code', tokens.N1, { code: A.joinCode }), 200, (a) => a.json.length === 1);
   check('A1 reads company A\'s billing: a trial', await rpc('company_billing', tokens.A1, { p_company_id: A.id }), 200, (a) => a.json.access === 'trial' && a.json.status === 'trialing');
   check('A2, an employee, is refused company A\'s billing', await rpc('company_billing', tokens.A2, { p_company_id: A.id }), 404, (a) => a.json.code === 'PT404' && a.json.message === 'No such company.');
   show('   (A function that refuses "not in a state to do that" raises PT409, which PostgREST answers with HTTP 409, the hint kept.)');
