@@ -22,22 +22,27 @@ function isRun(p: string): boolean {
   return false;
 }
 
-// The whole passcode a 2- or 3-digit block repeated.
+// The whole passcode one block repeated at least twice: a block of 2 digits or more, up to half the
+// passcode, whose length divides the passcode's. (A block of 1 is every digit the same, checked apart.)
 function isRepeatedBlock(p: string): boolean {
-  for (const size of [1, 2, 3]) {
-    if (p.length % size === 0 && p.length / size >= 2 && p.slice(0, size).repeat(p.length / size) === p) return true;
+  for (let size = 2; size * 2 <= p.length; size++) {
+    if (p.length % size === 0 && p.slice(0, size).repeat(p.length / size) === p) return true;
   }
   return false;
 }
 
-// Three or more doubled digits counting up, like 112233.
+// Three or more doubled digits counting up or down by one, like 112233 or 332211.
 function isDoubledRun(p: string): boolean {
   if (p.length % 2 !== 0 || p.length < 6) return false;
-  for (let i = 0; i < p.length; i += 2) {
-    if (p[i] !== p[i + 1]) return false;
-    if (i > 0 && Number(p[i]) - Number(p[i - 2]) !== 1) return false;
+  for (const step of [1, -1]) {
+    let all = true;
+    for (let i = 0; i < p.length; i += 2) {
+      if (p[i] !== p[i + 1]) all = false;
+      if (i > 0 && Number(p[i]) - Number(p[i - 2]) !== step) all = false;
+    }
+    if (all) return true;
   }
-  return true;
+  return false;
 }
 
 function isPalindrome(p: string): boolean {

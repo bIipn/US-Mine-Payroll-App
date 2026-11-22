@@ -16,6 +16,14 @@ describe('passcodeProblem', () => {
     for (const easy of ['111111', '000000', '123456', '654321', '234567', '0123456789', '121212', '123123', '112233', '123321', '90099009'])
       expect(passcodeProblem(easy)).toBe('easy');
   });
+  it('refuses any block repeated, and doubled runs both ways', () => {
+    for (const easy of ['12341234', '58375837', '583920583920', '332211', '998877', '44332211'])
+      expect(passcodeProblem(easy)).toBe('easy');
+  });
+  it('does not refuse what is not a pattern', () => {
+    for (const ok of ['123457', '112234', '121213', '583920', '904712', '27364519', '918273645501'])
+      expect(passcodeProblem(ok)).toBeNull();
+  });
   it('refuses every passcode on the common list', () => {
     expect(EASY_PASSCODES.length).toBeGreaterThanOrEqual(18);
     for (const easy of EASY_PASSCODES) expect(passcodeProblem(easy)).toBe('easy');
