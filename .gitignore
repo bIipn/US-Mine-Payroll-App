@@ -34,6 +34,9 @@ yarn-error.*
 .env*.local
 # What `eas env:pull` writes for a file setting (an Apple key, say). Never committed or sent in a build.
 .eas/.env/
+# Working copies Claude Code makes for parallel work. EAS packs what .gitignore does not name
+# (it does not read .git/info/exclude), so they are named here to stay out of build uploads.
+.claude/worktrees/
 
 # typescript
 *.tsbuildinfo
