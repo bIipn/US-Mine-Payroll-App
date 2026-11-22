@@ -42,6 +42,61 @@ const BAD_NAMES = [
   ['Kit', 'MarIow'],
 ];
 
+const cp = (n) => String.fromCodePoint(n);
+
+// Names typed against the roster of the parity test below, each with what it is: invisible and
+// control characters, two alphabets, look-alikes of a name on the roster, names missing or too
+// long, and ordinary names typed the way people type them, with the edges of each rule. The
+// look-alike and hidden-character examples are those of name_hygiene.db.mjs.
+const NAME_CORPUS = [
+  ['a zero-width space', 'Jo', `Va${cp(0x200b)}le`],
+  ['a soft hyphen', `Ri${cp(0x00ad)}ley J`, 'Quinn'],
+  ['a combining grapheme joiner', `Riley J${cp(0x034f)}`, 'Quinn'],
+  ['a Hangul filler', 'Kit', `Mar${cp(0x3164)}low`],
+  ['a variation selector', `Kit${cp(0xfe0f)}`, 'Marlow'],
+  ['a tag character', 'Jo', `Vale${cp(0xe0041)}`],
+  ['a right-to-left override', `${cp(0x202e)}Jo`, 'Vale'],
+  ['a bell character', 'Jo', `Va${cp(0x07)}le`],
+  ['a Cyrillic i in the first name', `R${cp(0x0456)}ley J`, 'Quinn'],
+  ['a Cyrillic i in the last name', 'Riley J', `Qu${cp(0x0456)}nn`],
+  ['a Cyrillic o after a Latin B', `B${cp(0x043e)}`, 'Ellison'],
+  ['a Cyrillic e at the end', 'Jo', `Val${CYRILLIC_SMALL_IE}`],
+  ['a Greek omicron among Latin letters', 'Kit', `Marl${cp(0x03bf)}w`],
+  ['Joe Cox wholly in Cyrillic look-alikes', cp(0x0408) + cp(0x043e) + cp(0x0435), cp(0x0421) + cp(0x043e) + cp(0x0445)],
+  ['a small Roman numeral fifty for l', 'Kit', `Mar${cp(0x217c)}ow`],
+  ['a Latin small capital O for o', 'Kit', `Marl${cp(0x1d0f)}w`],
+  ['a mathematical sans-serif K', `${cp(0x1d5aa)}it`, 'Marlow'],
+  ['an ASCII capital I for l', 'Kit', 'MarIow'],
+  ['rn for m', 'Kit', 'rnarlow'],
+  ['an Armenian o among Latin letters', 'Kit', `Marl${cp(0x0585)}w`],
+  ["a Cherokee letter, for a supervisor's row", `${cp(0x13aa)}na`, 'Diaz'],
+  ['a fullwidth name', 'Ｋｉｔ', 'Ｍａｒｌｏｗ'],
+  ['a small l for the capital I of Ian', 'lan', 'Park'],
+  ['a zero for an o', 'Lou', 'Penr0se'],
+  ['someone taken off the roster, with a Roman numeral fifty', 'Bo', `E${cp(0x217c)}lison`],
+  ['no first name', '', 'Vale'],
+  ['a first name of spaces', '   ', 'Vale'],
+  ['no last name', 'Jo', null],
+  ['a first name of 101 letters', 'J'.repeat(101), 'Vale'],
+  ['a last name of 101 letters', 'Jo', 'V'.repeat(101)],
+  ['a name on the roster', 'Riley J', 'Quinn'],
+  ['the looser way, once that row is held', 'Riley', 'Quinn'],
+  ['a nickname', 'Buck', 'Park'],
+  ['a capital L, not the I of Ian', 'Lan', 'Park'],
+  ["a phone's curly apostrophe", 'Pat', `O${cp(0x2019)}Neil`],
+  ['a suffix the roster does not have', 'Riley J', 'Quinn Jr'],
+  ["a supervisor's row", 'Ana', 'Diaz'],
+  ['someone taken off the roster', 'Bo', 'Ellison'],
+  ['a name on no row', 'Pat', 'Cole'],
+  ['wholly in Cyrillic, like nobody on the roster', 'Іван', 'Петренко'],
+  ['wholly in Greek', 'Ελένη', 'Καρρά'],
+  ['a decomposed accent', `Jose${cp(0x0301)}`, 'Ortega'],
+  ['accents', 'Zoë', 'Nguyễn'],
+  ['a line break, read as a space', 'Jo', 'Va\nle'],
+  ['a first name of 100 letters', 'J'.repeat(100), 'Vale'],
+  ['100 letters with spaces around them', `  ${'J'.repeat(100)}  `, 'Vale'],
+];
+
 const CHECKS = ['crew_confirm_check', 'crew_lookup', 'crew_sign_in_check', 'crew_sign_up_check'];
 
 let db;
@@ -262,6 +317,85 @@ describe('crew_sign_up_check', () => {
     // Nothing is made: crew-auth makes the account with that address and password.
     assert.deepEqual(await everything(), before);
   });
+
+  it('holds every name refusal join_company makes, word for word, so the two cannot drift apart', async () => {
+    // The sign-up check asks what join_company would refuse (22023) before crew-auth makes an account.
+    // A rule join_company gains, or a refusal it rewords, must be the sign-up check's too, or crew-auth
+    // would make an account that cannot join.
+    const definition = async (fn) =>
+      (await db.adminRows(`select pg_get_functiondef('public.${fn}'::regproc) as def`))[0].def.replace(/--[^\n]*/g, ' ');
+    const unquote = (literal) => literal.replaceAll("''", "'");
+    const joining = await definition('join_company');
+    const signingUp = await definition('crew_sign_up_check');
+    // Each raise of 22023, whatever its layout: its message option, or else the format it raises.
+    const refusals = [...joining.matchAll(/\braise\b([^;]*);/gi)]
+      .map(([, statement]) => statement)
+      .filter((statement) => /'22023'/.test(statement))
+      .map((statement) => {
+        const words = /\bmessage\s*:?=\s*'((?:[^']|'')*)'/i.exec(statement) ?? /^\s*(?:exception\s+)?'((?:[^']|'')*)'/i.exec(statement);
+        return unquote(words?.[1] ?? statement.trim());
+      });
+    assert.ok(refusals.length >= 3, `only ${refusals.length} name refusals were read in join_company`);
+    for (const message of refusals) {
+      assert.ok(signingUp.includes(`'${message.replaceAll("'", "''")}'`), `crew_sign_up_check does not answer join_company's refusal: ${message}`);
+    }
+    // And it refuses a name only with join_company's words.
+    const answered = [...signingUp.matchAll(/'bad_name',\s*'message',\s*'((?:[^']|'')*)'/g)].map(([, literal]) => unquote(literal));
+    for (const message of answered) assert.ok(refusals.includes(message), `crew_sign_up_check answers bad_name with words join_company does not raise: ${message}`);
+    assert.deepEqual([...new Set(answered)].sort(), [...new Set(refusals)].sort());
+  });
+
+  it('answers bad_name exactly when join_company refuses the name, with its words, over many names', async () => {
+    // A company where nobody has signed up with a passcode, so the sign-up check's own answer for a name
+    // someone signed up with comes nowhere into it. Each name is asked of the sign-up check, then typed
+    // by a new account of its own.
+    const company = await startCompany(db, {
+      roster: [
+        { first: 'Riley J', last: 'Quinn' },
+        { first: 'Kit', last: 'Marlow' },
+        { first: 'Joe', last: 'Cox' },
+        { first: 'Ana', last: 'Diaz', role: 'supervisor' },
+        { first: 'Bo', last: 'Ellison', active: false },
+        { first: 'Lee "Buck"', last: 'Park' },
+        { first: 'Ian', last: 'Park' },
+        { first: 'Pat', last: "O'Neil" },
+        { first: 'Lou', last: 'Penrose' },
+      ],
+    });
+    const words = new Set();
+    let refusals = 0;
+    for (const [what, first, last] of NAME_CORPUS) {
+      const answer = await signUpCheck(company.code, first, last);
+      const typed = await join(db, await db.newAccount('visitor'), company.code, first, last).then((result) => ({ result }), (error) => ({ error }));
+      if (typed.error) {
+        assert.equal(typed.error.code, BAD_INPUT, `${what}: join_company raised ${typed.error.code}`);
+        assert.deepEqual(answer, { status: 'bad_name', message: typed.error.message }, what);
+        refusals += 1;
+        words.add(typed.error.message);
+      } else {
+        assert.notEqual(answer.status, 'bad_name', `${what}: refused at sign-up, while join_company answered ${typed.result.status}`);
+      }
+    }
+    // Both sides of the rule are well covered, and every refusal join_company makes today is in it.
+    assert.ok(refusals >= 25, `only ${refusals} names were refused`);
+    assert.ok(NAME_CORPUS.length - refusals >= 12, `only ${NAME_CORPUS.length - refusals} names were let through`);
+    assert.ok(words.size >= 3, `only ${words.size} of join_company's refusals were met`);
+  });
+
+  it('a name a crew account waits under is signed up already, even once a row that looks like it is on the roster', async () => {
+    const company = await startCompany(db);
+    const kit = await crewMember(company, 'Kit', 'Marlow');
+    assert.equal(kit.joined.status, 'pending');
+    // A supervisor then writes a row that only looks like it: a capital I for the l.
+    await addToRoster(db, company.owner, company.id, { first: 'Kit', last: 'MarIow' });
+    // A new account typing the name would now be refused, as one that only looks like the roster's...
+    await refused(join(db, await db.newAccount('visitor'), company.code, 'Kit', 'Marlow'), BAD_INPUT, /way it is written on the roster/);
+    // ...but sign-in finds Kit by the request, so sign-up says the name is signed up already, as join_company
+    // asks about look-alikes only of a name it would leave a request for.
+    const waiting = { status: 'ok', company_id: company.id, company_name: 'Test Pit A', waiting: true };
+    assert.deepEqual(await signedIn(await signInCheck(company.code, 'Kit', 'Marlow'), kit.account), waiting);
+    assert.deepEqual(await signUpCheck(company.code, 'Kit', 'Marlow'), { status: 'already_signed_up' });
+  });
 });
 
 describe('crew_sign_in_check', () => {
@@ -347,6 +481,20 @@ describe('crew_sign_in_check', () => {
     assert.equal((await signUpCheck(company.code, 'Jo', 'Vale')).status, 'ok');
     const jo = await crewMember(company, 'Jo', 'Vale');
     assert.deepEqual(await signedIn(await signInCheck(company.code, 'Jo', 'Vale'), jo.account), waiting);
+  });
+
+  it("a row nobody holds yet is the newcomer's, even beside someone taken off the roster under the same name", async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }] });
+    const kit = await crewMember(company, 'Kit', 'Marlow');
+    assert.equal(kit.joined.status, 'joined');
+    await takeOff(company, 'Kit Marlow');
+    // A supervisor puts a newcomer of that name on the roster: two rows written the same, one held by
+    // the crew account taken off, one held by nobody.
+    await addToRoster(db, company.owner, company.id, { first: 'Kit', last: 'Marlow' });
+    // Whoever types the name is taken for the newcomer, who signs up; nobody's passcode is checked.
+    assert.deepEqual(await signInCheck(company.code, 'Kit', 'Marlow', PASSCODE), { status: 'no_account' });
+    assert.equal((await signUpCheck(company.code, 'Kit', 'Marlow')).status, 'ok');
+    assert.deepEqual(await countsOf(kit.account), { wrong_in_a_row: 0, locked_until: null });
   });
 
   it('a person whose row is held by an email account is sent to the email sign-in', async () => {

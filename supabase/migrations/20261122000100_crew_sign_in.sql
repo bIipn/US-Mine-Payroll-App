@@ -492,7 +492,11 @@ begin
     elsif row_found.user_id is not null then
       return pg_catalog.jsonb_build_object('status', 'found', 'user_id', row_found.user_id, 'waiting', false);
     end if;
-    -- Nobody holds the row yet: only a request can say who signed up with the name.
+    -- Nobody holds the row yet: only a request can say who signed up with the
+    -- name. An inactive row of the same name (2) is passed over: whoever types
+    -- it is most likely the newcomer the row was made for, who signs up, and
+    -- someone taken off the roster under it asks a supervisor to delete the old
+    -- sign-in.
   else
     select coalesce(pg_catalog.array_agg(r.user_id), '{}') into accounts
     from public.roster r
@@ -567,10 +571,9 @@ $$;
 --   {status: 'bad_name', message}       a name join_company refuses (22023)
 --                                       for what it is, with its words:
 --                                       missing or over 100 characters, an
---                                       invisible character, two alphabets,
---                                       or one that only looks like a name on
---                                       the roster. No account is made for a
---                                       name that cannot join;
+--                                       invisible character or two alphabets.
+--                                       No account is made for a name that
+--                                       cannot join;
 --   {status: 'already_signed_up'}       a name crew_sign_in_check finds a
 --                                       crew account for, or several crew
 --                                       accounts signed up with: sign in, or
@@ -578,6 +581,9 @@ $$;
 --                                       second account would only be a stray;
 --   {status: 'use_email'}               a supervisor's row, or a row held by
 --                                       an email account;
+--   {status: 'bad_name', message}       a name that only looks like a name on
+--                                       the roster, which join_company
+--                                       refuses as well;
 --   {status: 'ok', company_id, company_name, login_email, login_password}
 --                                       a hidden address on
 --                                       crew.minemuster.com, which receives no
@@ -616,10 +622,10 @@ begin
   end if;
 
   -- What join_company (migration 20261116002600) refuses with 22023, in its
-  -- order and with its words; crew_sign_in.db.mjs holds the two together. It
-  -- asks poses_as_roster_name only of a name it would leave a request for,
-  -- which for a new account is every name it is asked of: the question is
-  -- false for a name any row is or fits.
+  -- order and with its words; crew_sign_in.db.mjs holds the two together, word
+  -- for word and over many names. First what it refuses before it matches the
+  -- name at all: a name missing or over 100 characters, an invisible
+  -- character, two alphabets.
   typed_first := public.clean_text(p_first);
   typed_last := public.clean_text(p_last);
   if coalesce(pg_catalog.char_length(typed_first), 0) not between 1 and 100
@@ -631,15 +637,20 @@ begin
   if public.mixes_alphabets(typed_first || ' ' || typed_last) then
     return pg_catalog.jsonb_build_object('status', 'bad_name', 'message', 'A name cannot mix letters of different alphabets, such as Latin and Cyrillic.');
   end if;
-  if public.poses_as_roster_name(company.id, typed_first, typed_last) then
-    return pg_catalog.jsonb_build_object('status', 'bad_name', 'message', 'Type your name the way it is written on the roster.');
-  end if;
 
   person := public.crew_find_person(company.id, typed_first, typed_last);
   if person ->> 'status' = 'found' or (person ->> 'status' = 'ambiguous' and (person ->> 'signed_up')::boolean) then
     return pg_catalog.jsonb_build_object('status', 'already_signed_up');
   elsif person ->> 'status' = 'use_email' then
     return pg_catalog.jsonb_build_object('status', 'use_email');
+  end if;
+
+  -- Then a name that only looks like one on the roster. join_company asks this
+  -- only of a name it would leave a request for, after matching it, and
+  -- poses_as_roster_name is false for a name any row is or fits; a name
+  -- someone signed up with is answered above, as crew_sign_in_check finds it.
+  if public.poses_as_roster_name(company.id, typed_first, typed_last) then
+    return pg_catalog.jsonb_build_object('status', 'bad_name', 'message', 'Type your name the way it is written on the roster.');
   end if;
 
   -- 16 random bytes: the first half of SHA-256 of two random uuids (244
