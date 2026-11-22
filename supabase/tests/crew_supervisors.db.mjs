@@ -1,7 +1,9 @@
 // The supervisor side of crew passcodes (migration 20261122000100):
 //   roster_before_write       a supervisor's row is never held by a passcode account, on any path that
 //                             writes one, and crew_keep_passcode keeps no passcode for an account that
-//                             holds a supervisor's row: supervisors sign in with email;
+//                             holds a supervisor's row: supervisors sign in with email. A passcode
+//                             account holds rows in one company only, whichever way it would come to
+//                             hold them in two;
 //   make_passcode_reset_code  a supervisor of the company makes a 6-digit reset code for a row held by a
 //                             passcode account, shown to them once, good for 30 minutes and 5 tries;
 //   crew_reset_check          the person types it in the app with a new passcode, and crew-auth asks this
@@ -9,6 +11,9 @@
 //                             code checked and counted, and the new passcode kept;
 //   crew_sign_in_to_delete    the passcode account on a row of the supervisor's own company, which the
 //                             supervisor-tools function then deletes with Supabase Auth.
+//
+// The two a supervisor calls answer a row of a company the caller does not supervise exactly as they answer
+// an id nobody has, as release_roster_claim does: a refusal never tells a real id from a made-up one.
 //
 // A crew account is made here as crew-auth makes one: an account, its passcode kept with the server key,
 // and the name typed to join. The names, passcodes, codes and addresses are made up (the addresses are
@@ -19,6 +24,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import {
+  addToRoster,
+  errorOf,
   join,
   newMember,
   NO_PRIVILEGE,
@@ -137,8 +144,44 @@ async function notPasscode(promise) {
   return error;
 }
 
-/** Refused because the caller is not a supervisor of the row's company. */
-const notSupervisor = (promise) => refused(promise, NO_PRIVILEGE, /Only a supervisor of the company/);
+/** Refused because a passcode account is for one company only. */
+async function elsewhere(promise) {
+  const error = await refused(promise, WRONG_STATE);
+  assert.equal(error.hint, 'passcode_account_elsewhere', error.message);
+  return error;
+}
+
+/** Refused as a row there is not: word for word what an id nobody has gets. */
+async function noSuchRow(promise, madeUp) {
+  const error = await refused(promise, NOT_FOUND, /^No such roster row\.$/);
+  assert.deepEqual(error, madeUp, 'the same answer as for an id nobody has');
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Whether a statement takes the account's lock, the one crew_keep_passcode takes. The statement runs in a
+ * DO block, which then reads pg_locks for that advisory lock (hashtextextended('crew_logins ' || the
+ * account's id), held by this session) and raises what it found, so the statement is rolled back. Only
+ * statements written here run this way, with ids the tests made.
+ */
+async function takesTheLock(statement, account) {
+  assert.match(account, UUID);
+  const error = await errorOf(
+    db.admin(`do $probe$
+      begin
+        ${statement};
+        raise exception using errcode = 'P0001', message = case when exists (
+          select 1 from pg_catalog.pg_locks l
+          where l.locktype = 'advisory' and l.objsubid = 1 and l.granted and l.pid = pg_catalog.pg_backend_pid()
+            and ((l.classid::bigint << 32) | l.objid::bigint) = pg_catalog.hashtextextended('crew_logins ' || '${account}', 0)
+        ) then 'held' else 'not held' end;
+      end
+    $probe$`),
+  );
+  assert.equal(error.code, 'P0001', error.message);
+  return error.message === 'held';
+}
 
 describe('supervisors sign in with email', () => {
   it('a passcode account never holds a supervisor row: not by approval, a role change or an insert', async () => {
@@ -204,21 +247,119 @@ describe('supervisors sign in with email', () => {
 
   it("a supervisor's row and a passcode take turns for one account", async () => {
     // PGlite is one session, so the two cannot be sent at once here: the order is read from the code. Each
-    // takes the account's lock before it looks for what the other writes, so the one that comes second
-    // waits for the first to commit and then sees what it wrote.
+    // takes the account's lock before it looks for what the other writes (the trigger for a passcode and
+    // for the account's rows elsewhere, crew_keep_passcode for the account's rows), so the one that comes
+    // second waits for the first to commit and then sees what it wrote.
     for (const [fn, account, looks] of [
-      ['roster_before_write', /new\.user_id\b/, /\bfrom\s+public\.crew_logins\b/i],
-      ['crew_keep_passcode', /p_user\b/, /\bfrom\s+public\.roster\b/i],
+      ['roster_before_write', /new\.user_id\b/, [/\bfrom\s+public\.crew_logins\b/i, /\bfrom\s+public\.roster\b/i]],
+      ['crew_keep_passcode', /p_user\b/, [/\bfrom\s+public\.roster\b/i]],
     ]) {
       const body = await definitionOf(fn);
       const lock = body.search(
         new RegExp(String.raw`\bpg_advisory_xact_lock\s*\(\s*pg_catalog\.hashtextextended\s*\(\s*'crew_logins '\s*\|\|\s*${account.source}`, 'i'),
       );
       assert.ok(lock > 0, `${fn} takes the account's lock`);
-      assert.ok(lock < body.search(looks), `${fn} takes it before it looks`);
+      for (const look of looks) assert.ok(lock < body.search(look), `${fn} takes it before it looks (${look.source})`);
     }
     const keeping = await definitionOf('crew_keep_passcode');
     assert.ok(keeping.search(/\bfrom\s+public\.roster\b/i) < keeping.search(/\binsert\s+into\s+public\.crew_logins\b/i), 'it looks before it keeps the passcode');
+  });
+
+  it("every write that puts an account on a row, or writes a supervisor's row it holds, takes the lock keeping a passcode takes", async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }] });
+    const jo = await secondSupervisor(db, company, 'Jo', 'Vale');
+    const visitor = await db.newAccount('visitor');
+    for (const id of [company.id, company.rows['Kit Marlow'], company.rows['Jo Vale']]) assert.match(id, UUID);
+    // The probe itself: a statement that takes no lock is told apart.
+    assert.equal(await takesTheLock('perform 1', visitor), false);
+    // Keeping a passcode takes the account's lock, and so does every write the trigger looks at for it: a
+    // claim of a row, a row written with an account on it, and a change to a supervisor's row an account
+    // holds. Two such writes for one account take turns.
+    assert.equal(await takesTheLock(`perform public.crew_keep_passcode('${visitor}', '${OTHER}')`, visitor), true);
+    assert.equal(await takesTheLock(`update public.roster set user_id = '${visitor}' where id = '${company.rows['Kit Marlow']}'`, visitor), true);
+    assert.equal(
+      await takesTheLock(`insert into public.roster (company_id, first_name, last_name, user_id) values ('${company.id}', 'Lee', 'Park', '${visitor}')`, visitor),
+      true,
+    );
+    assert.equal(await takesTheLock(`update public.roster set title = 'Loader' where id = '${company.rows['Jo Vale']}'`, jo), true);
+    // Each probe was rolled back.
+    assert.deepEqual(await db.adminRows('select user_id from public.crew_logins where user_id = $1', [visitor]), []);
+    assert.deepEqual(await db.adminRows('select id from public.roster where user_id = $1', [visitor]), []);
+    assert.equal((await rosterRow(db, company.rows['Jo Vale'])).title, null);
+  });
+});
+
+describe('one company per passcode account', () => {
+  it('a passcode account holds rows in one company only: not by a join request approved in a second company, nor by a claim or an insert there', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const other = await startCompany(db, { name: 'Test Pit B', supervisor: ['Pat', 'Cole'], roster: [{ first: 'Lee', last: 'Park' }, { first: 'Kit', last: 'Marlow' }] });
+    const riley = await crewMember(company, 'Riley', 'Quinn');
+    assert.equal(riley.joined.status, 'joined');
+    // The account types Test Pit B's code by hand: the app never does, and a sign-up there makes an account
+    // of its own. A name on no row there leaves a request.
+    assert.deepEqual(await join(db, riley.account, other.code, 'Jo', 'Vale'), { status: 'pending', company_name: 'Test Pit B', reason: 'not_on_roster' });
+    const [request] = await db.adminRows("select id from public.join_requests where user_id = $1 and company_id = $2 and status = 'pending'", [
+      riley.account,
+      other.id,
+    ]);
+    const approve = (args) => db.as(other.owner).call('approve_join_request', { request_id: request.id, ...args });
+    const insert = "insert into public.roster (company_id, first_name, last_name, user_id) values ($1, 'Jo', 'Vale', $2)";
+    async function triesInTestPitB() {
+      const before = await everything();
+      // The request approved there, onto a row or as a new one.
+      await elsewhere(approve({ roster_id: other.rows['Lee Park'] }));
+      await elsewhere(approve({}));
+      // A name on that roster, typed by the account, which would claim the row.
+      await elsewhere(join(db, riley.account, other.code, 'Kit', 'Marlow'));
+      // A claim or an insert there, with the server key or in the SQL editor.
+      await elsewhere(server().query('update public.roster set user_id = $1 where id = $2', [riley.account, other.rows['Lee Park']]));
+      await elsewhere(server().query(insert, [other.id, riley.account]));
+      await elsewhere(db.admin(insert, [other.id, riley.account]));
+      assert.deepEqual(await everything(), before);
+    }
+    await triesInTestPitB();
+    // Taken off Test Pit A's roster, the account still holds that row, and the row can be put back.
+    await takeOff(company, 'Riley J Quinn');
+    await triesInTestPitB();
+    // Test Pit B's people are let in as ever: an email account claims the row.
+    assert.equal((await join(db, await db.newAccount('email'), other.code, 'Lee', 'Park')).status, 'joined');
+  });
+
+  it('a second row in the same company is left to the rules there already are', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }, { first: 'Kit', last: 'Marlow' }] });
+    const riley = await crewMember(company, 'Riley', 'Quinn');
+    // One row per account in a company: the roster's own unique index refuses a second (23505), not this rule.
+    for (const [sql, params] of [
+      ["insert into public.roster (company_id, first_name, last_name, user_id) values ($1, 'Jo', 'Vale', $2)", [company.id, riley.account]],
+      ['update public.roster set user_id = $1 where id = $2', [riley.account, company.rows['Kit Marlow']]],
+    ]) {
+      const error = await errorOf(server().query(sql, params));
+      assert.equal(error.code, '23505', error.message);
+      assert.match(error.message, /roster_one_row_per_account/);
+    }
+    // Taken off the roster, the person asks to come back, and a supervisor lets them onto a new row: the row
+    // taken off lets go of the account, as it always has.
+    await takeOff(company, 'Riley J Quinn');
+    assert.deepEqual(await join(db, riley.account, company.code, 'Riley', 'Quinn'), { status: 'pending', company_name: 'Test Pit A', reason: 'removed' });
+    const [request] = await db.adminRows("select id from public.join_requests where user_id = $1 and status = 'pending'", [riley.account]);
+    const fresh = await addToRoster(db, company.owner, company.id, { first: 'Riley J', last: 'Quinn' });
+    assert.equal(await db.as(company.owner).call('approve_join_request', { request_id: request.id, roster_id: fresh }), fresh);
+    const held = await db.adminRows('select id, active from public.roster where user_id = $1', [riley.account]);
+    assert.deepEqual(held, [{ id: fresh, active: true }]);
+    // Signed in by the name as written: beside the old row, taken off under that name, the looser fit is
+    // passed over, as joining passes it over.
+    assert.equal((await signInCheck(company.code, 'Riley J', 'Quinn', PASSCODE)).status, 'ok');
+  });
+
+  it('the server key keeps no passcode for an account that holds rows in two companies', async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Lee', last: 'Park' }] });
+    const other = await startCompany(db, { name: 'Test Pit B', supervisor: ['Pat', 'Cole'], roster: [{ first: 'Kit', last: 'Marlow' }] });
+    // An email account on both rosters, its row at Test Pit B taken off: it still holds that row.
+    const account = await newMember(db, company, 'Lee', 'Park');
+    assert.equal((await join(db, account, other.code, 'Kit', 'Marlow')).status, 'joined');
+    await takeOff(other, 'Kit Marlow');
+    await elsewhere(keep(account, PASSCODE));
+    assert.deepEqual(await db.adminRows('select user_id from public.crew_logins where user_id = $1', [account]), []);
   });
 });
 
@@ -236,16 +377,20 @@ describe('make_passcode_reset_code', () => {
     const rileyRow = company.rows['Riley J Quinn'];
     const before = await everything();
 
-    // Nobody but a supervisor of the company: not signed in, crew, an email account on the roster, a
-    // supervisor of another company.
+    // Nobody signed in is told to sign in. To anyone else who is not a supervisor of the company (crew, an
+    // email account on the roster, a supervisor of another company), the row is not there: the answer an id
+    // nobody has gets, word for word, so a refusal never tells a real id from a made-up one.
     await refused(db.noAccount().call('make_passcode_reset_code', { p_roster_id: rileyRow }), NOT_SIGNED_IN, /Sign in first/);
-    for (const caller of [riley.account, kit.account, lee, other.owner]) await notSupervisor(makeCode(caller, rileyRow));
+    const madeUp = await refused(makeCode(company.owner, nobody()), NOT_FOUND, /^No such roster row\.$/);
+    for (const caller of [riley.account, kit.account, lee, other.owner]) {
+      await noSuchRow(makeCode(caller, rileyRow), madeUp);
+      await noSuchRow(makeCode(caller, nobody()), madeUp);
+    }
     // Only for a row held by a passcode account: not one an email account holds, one nobody holds, or a
-    // supervisor's own; and a row there is not is not found.
+    // supervisor's own.
     for (const row of [company.rows['Lee Park'], company.rows['Jo Vale'], company.ownRow, company.rows['Ana Diaz']]) {
       await notPasscode(makeCode(company.owner, row));
     }
-    await refused(makeCode(company.owner, nobody()), NOT_FOUND, /No such roster row/);
     // The public key and the server key cannot call it at all.
     for (const session of [db.anon(), server()]) {
       await refused(session.call('make_passcode_reset_code', { p_roster_id: rileyRow }), NO_PRIVILEGE, /permission denied for function make_passcode_reset_code/);
@@ -458,23 +603,25 @@ describe('crew_sign_in_to_delete', () => {
     assert.equal(await toDelete(company.owner, rileyRow), riley.account);
     assert.equal(await toDelete(ana, company.rows['Kit Marlow']), kit.account);
     assert.equal(await toDelete(other.owner, boRow), bo.account);
-    // Nobody else: not signed in, crew, an email account on the roster, a supervisor of another company.
+    // Nobody signed in is told to sign in. To anyone else who is not a supervisor of the row's company (crew,
+    // an email account on the roster, a supervisor of another company), the row is not there, word for word
+    // as an id nobody has.
     await refused(db.noAccount().call('crew_sign_in_to_delete', { p_roster_id: rileyRow }), NOT_SIGNED_IN, /Sign in first/);
+    const madeUp = await refused(toDelete(company.owner, nobody()), NOT_FOUND, /^No such roster row\.$/);
     for (const [caller, row] of [
       [riley.account, company.rows['Kit Marlow']],
       [lee, rileyRow],
       [other.owner, rileyRow],
       [company.owner, boRow],
       [ana, boRow],
+      [other.owner, nobody()],
     ]) {
-      await notSupervisor(toDelete(caller, row));
+      await noSuchRow(toDelete(caller, row), madeUp);
     }
-    // Only a passcode account: not one with email, nor a row nobody holds, nor a supervisor's own; and a
-    // row there is not is not found.
+    // Only a passcode account: not one with email, nor a row nobody holds, nor a supervisor's own.
     for (const row of [company.rows['Lee Park'], company.rows['Jo Vale'], company.ownRow, company.rows['Ana Diaz']]) {
       await notPasscode(toDelete(company.owner, row));
     }
-    await refused(toDelete(company.owner, nobody()), NOT_FOUND, /No such roster row/);
     // The public key and the server key cannot call it at all.
     for (const session of [db.anon(), server()]) {
       await refused(session.call('crew_sign_in_to_delete', { p_roster_id: rileyRow }), NO_PRIVILEGE, /permission denied for function crew_sign_in_to_delete/);

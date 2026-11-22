@@ -274,7 +274,10 @@ const NOT_FOUND_OR_WRONG_STATE = {
   ],
   company_billing: [[NOT_FOUND, 'No such company.']],
   crew_account_on_row: [[NOT_FOUND, 'No such roster row.'], [WRONG_STATE, 'That roster row has no passcode sign-in.', 'not_a_passcode_account']],
-  crew_keep_passcode: [[WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email']],
+  crew_keep_passcode: [
+    [WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email'],
+    [WRONG_STATE, 'A passcode sign-in is for one company only.', 'passcode_account_elsewhere'],
+  ],
   deny_join_request: [NO_SUCH_REQUEST, NO_SUCH_REQUEST, ALREADY_DECIDED],
   lift_join_bar: [NO_SUCH_REQUEST],
   push_records: [[NOT_FOUND, 'No such company.']],
@@ -283,6 +286,7 @@ const NOT_FOUND_OR_WRONG_STATE = {
   roster_before_write: [
     [WRONG_STATE, 'That roster row is already claimed by another account.', 'A supervisor can release it first.'],
     [WRONG_STATE, 'A supervisor signs in with email, not a passcode.', 'supervisor_needs_email'],
+    [WRONG_STATE, 'A passcode sign-in is for one company only.', 'passcode_account_elsewhere'],
   ],
   rotate_join_code: [[NOT_FOUND, 'No such company.']],
 };

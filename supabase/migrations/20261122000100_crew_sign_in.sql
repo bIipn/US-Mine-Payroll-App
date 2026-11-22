@@ -37,7 +37,8 @@
 --       from its hidden address. No API role.
 --   crew_keep_passcode(p_user, p_passcode)  Keeps a passcode for an account
 --       and starts its counts afresh, never for an account that holds a
---       supervisor's row. The server key alone.
+--       supervisor's row or rows in more than one company. The server key
+--       alone.
 --   crew_check_passcode(p_user, p_passcode)  Checks a passcode and counts it.
 --       No API role: the sign-in functions call it inside the database.
 --
@@ -223,17 +224,21 @@ revoke all on function public.crew_login_password(text) from public, anon, authe
 -- Keep a passcode for a crew account, for the server key: when crew-auth has
 -- made the account, and when a reset sets a new passcode. A passcode the rule
 -- refuses is refused (22023) with the problem as the hint: not_digits,
--- too_short, too_long or easy. An account that holds a supervisor's row, in
--- any company, on the roster or taken off it (which can put it back), is
--- refused (PT409, hint supervisor_needs_email): supervisors sign in with email,
--- and the roster's write trigger refuses the other way round (at the end of
--- this migration). Keeping one gives the account a new salt and digest and
--- clears its counts: no wrong tries, no lock, and no reset code left to use.
+-- too_short, too_long or easy. Two kinds of account are refused (PT409), and
+-- the roster's write trigger refuses each the other way round (at the end of
+-- this migration). Rows taken off the roster count, as a supervisor can put
+-- them back:
+--   supervisor_needs_email      an account that holds a supervisor's row, in
+--                               any company: supervisors sign in with email;
+--   passcode_account_elsewhere  an account that holds rows in more than one
+--                               company: a passcode account is for one
+--                               company only.
+-- Keeping one gives the account a new salt and digest and clears its counts:
+-- no wrong tries, no lock, and no reset code left to use.
 --
 -- The account's lock is taken before its rows are looked at, as the trigger
--- takes it before it looks for a passcode: a supervisor's row for the account
--- and a passcode for it, written at once, take turns, and the second sees the
--- first.
+-- takes it before it looks for a passcode: a row for the account and a
+-- passcode for it, written at once, take turns, and the second sees the first.
 --
 -- The salt is 16 random bytes, the first half of SHA-256 of two random uuids
 -- (244 random bits), so no extension is needed, pgcrypto included. With no
@@ -256,6 +261,9 @@ begin
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_logins ' || p_user::text, 0));
   if exists (select 1 from public.roster r where r.user_id = p_user and r.role = 'supervisor') then
     raise exception using errcode = 'PT409', message = 'A supervisor signs in with email, not a passcode.', hint = 'supervisor_needs_email';
+  end if;
+  if (select pg_catalog.count(distinct r.company_id) from public.roster r where r.user_id = p_user) > 1 then
+    raise exception using errcode = 'PT409', message = 'A passcode sign-in is for one company only.', hint = 'passcode_account_elsewhere';
   end if;
 
   new_salt := pg_catalog.substr(
@@ -813,9 +821,11 @@ revoke execute on function public.company_by_code(text) from anon;
 -- reset a crew member then makes in the app:
 --
 --   roster_before_write  The roster's write trigger, with every rule it had and
---       one more: a supervisor's row is never held by a passcode account.
---       crew_keep_passcode keeps no passcode for an account that holds one, so
---       neither comes to the other. Supervisors sign in with email.
+--       two more for a passcode account: it never holds a supervisor's row
+--       (supervisors sign in with email), and it holds rows in one company
+--       only. crew_keep_passcode keeps no passcode for an account that holds a
+--       supervisor's row or rows in two companies, so neither comes about the
+--       other way round.
 --   make_passcode_reset_code(p_roster_id)  A reset code for the passcode
 --       account on a roster row, for a supervisor of the row's company, who is
 --       shown it once and tells it to the person.
@@ -827,21 +837,31 @@ revoke execute on function public.company_by_code(text) from anon;
 --       for a supervisor of the row's company. The supervisor-tools function
 --       then deletes it with Supabase Auth's admin API; this deletes nothing.
 
--- ---- No passcode supervisors ------------------------------------------------------------------------
+-- ---- Passcode accounts on the roster ----------------------------------------------------------------
 
--- The roster trigger, as in 20261117000600_refusals_are_4xx.sql, with one rule
--- more: a supervisor's row held by a passcode account (an account with a
--- crew_logins row) is refused, PT409 with the hint supervisor_needs_email,
--- whatever writes it: approving a request onto the row or as a new row, any
+-- The roster trigger, as in 20261117000600_refusals_are_4xx.sql, with two
+-- rules more for a passcode account (an account with a crew_logins row),
+-- whatever writes the row: approving a request onto it or as a new row, any
 -- other claim of it, a role change, an insert (create_company writes a new
--- company's first supervisor's row). Active or not, as a row taken off the
--- roster can be put back. Supervisors sign in with email and a password,
--- because their account can change punch times and see billing.
+-- company's first supervisor's row). Rows taken off the roster count, as a
+-- supervisor can put them back. Each refusal is PT409, with the hint
+--   supervisor_needs_email      for a supervisor's row the account would
+--                               hold. Supervisors sign in with email and a
+--                               password, because their account can change
+--                               punch times and see billing;
+--   passcode_account_elsewhere  for a row the account is put on while it
+--                               holds a row in another company. A passcode
+--                               account is for one company, as crew-auth
+--                               makes it for one. A second row in the same
+--                               company is left to the one-row-per-account
+--                               index, as it always was.
+-- crew_keep_passcode refuses each the other way round.
 --
--- The account's lock is taken first, the one crew_keep_passcode takes before
--- it looks for a supervisor's row: a supervisor's row for an account and a
--- passcode for it, written at once, take turns, and the second sees what the
--- first wrote. It stays bound to roster as it was.
+-- For a write that puts an account on a row, or writes a supervisor's row an
+-- account holds, the account's lock is taken first, the one
+-- crew_keep_passcode takes: two such writes for one account, or one and a
+-- passcode for it, take turns, and the second sees what the first wrote. It
+-- stays bound to roster as it was.
 create or replace function public.roster_before_write()
 returns trigger
 language plpgsql
@@ -851,6 +871,7 @@ as $$
 declare
   name_written boolean := true;
   title_written boolean := true;
+  claim_written boolean := true;
 begin
   if tg_op = 'UPDATE' then
     name_written := new.first_name is distinct from old.first_name or new.last_name is distinct from old.last_name;
@@ -888,13 +909,27 @@ begin
     end if;
   end if;
 
-  if new.role = 'supervisor' and new.user_id is not null then
+  if tg_op = 'UPDATE' then
+    claim_written := new.user_id is distinct from old.user_id;
+  end if;
+  if new.user_id is not null and (claim_written or new.role = 'supervisor') then
     perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_logins ' || new.user_id::text, 0));
     if exists (select 1 from public.crew_logins l where l.user_id = new.user_id) then
-      raise exception using
-        errcode = 'PT409',
-        message = 'A supervisor signs in with email, not a passcode.',
-        hint = 'supervisor_needs_email';
+      if new.role = 'supervisor' then
+        raise exception using
+          errcode = 'PT409',
+          message = 'A supervisor signs in with email, not a passcode.',
+          hint = 'supervisor_needs_email';
+      end if;
+      if claim_written and exists (
+        select 1 from public.roster r
+        where r.user_id = new.user_id and r.company_id <> new.company_id
+      ) then
+        raise exception using
+          errcode = 'PT409',
+          message = 'A passcode sign-in is for one company only.',
+          hint = 'passcode_account_elsewhere';
+      end if;
     end if;
   end if;
 
@@ -914,17 +949,14 @@ revoke all on function public.roster_before_write() from public, anon, authentic
 
 -- The passcode account that holds a roster row, for a supervisor of the row's
 -- company, on the roster or taken off it: the account make_passcode_reset_code
--- makes a code for, and the one crew_sign_in_to_delete gives. It refuses, in
--- this order, with the codes release_roster_claim uses:
+-- makes a code for, and the one crew_sign_in_to_delete gives. It refuses as
+-- release_roster_claim does, in this order:
 --   42501  nobody signed in;
---   PT404  no such row;
---   42501  a caller who is not a supervisor of the row's company;
---   PT409  a row no passcode account holds, nobody's or an email account's
---          (hint not_a_passcode_account).
--- release_roster_claim answers a caller who is not a supervisor there as if the
--- row were not there (PT404). This answers 42501, so the supervisor-tools
--- function can answer not_supervisor: a row's id is a random uuid, which
--- nobody who has not been shown it can guess.
+--   PT404  no such row among the companies the caller supervises: a row of
+--          another company gets the answer an id nobody has gets, word for
+--          word, so a refusal never tells a real id from a made-up one;
+--   PT409  a row the caller supervises that no passcode account holds,
+--          nobody's or an email account's (hint not_a_passcode_account).
 -- No API role: the two call it.
 create function public.crew_account_on_row(p_roster_id uuid)
 returns uuid
@@ -939,12 +971,12 @@ begin
     raise exception using errcode = '42501', message = 'Sign in first.';
   end if;
 
-  select r.* into target from public.roster r where r.id = p_roster_id;
+  select r.* into target
+  from public.roster r
+  where r.id = p_roster_id
+    and public.is_supervisor(r.company_id);
   if not found then
     raise exception using errcode = 'PT404', message = 'No such roster row.';
-  end if;
-  if not public.is_supervisor(target.company_id) then
-    raise exception using errcode = '42501', message = 'Only a supervisor of the company can do that.';
   end if;
   if target.user_id is null
      or not exists (select 1 from public.crew_logins l where l.user_id = target.user_id) then
