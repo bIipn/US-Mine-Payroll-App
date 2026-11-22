@@ -17,7 +17,11 @@ const root = here.slice(0, here.search(/[\\/]scripts[\\/]/));
 const read = (name: string) => fs.readFileSync(`${root}/${name}`, 'utf8');
 
 type Profile = { extends?: string; env?: Record<string, string>; environment?: string; distribution?: string; android?: { buildType?: string } };
-const eas = JSON.parse(read('eas.json')) as { cli: { appVersionSource?: string }; build: Record<string, Profile> };
+const eas = JSON.parse(read('eas.json')) as {
+  cli: { appVersionSource?: string };
+  build: Record<string, Profile>;
+  submit?: Record<string, { ios?: { ascAppId?: string } }>;
+};
 
 /** A profile's env with what it extends folded in, the way EAS reads it. */
 function envOf(name: string, seen: string[] = []): Record<string, string> {
@@ -81,6 +85,12 @@ describe('the store builds (eas.json)', () => {
     // An Apple ID is an email address, and it does not go in a public file either.
     expect(text).not.toMatch(/appleId|@/);
     for (const name of builds) expect(eas.build[name].environment).toMatch(/^(production|preview|development)$/);
+  });
+
+  it('names the App Store Connect app a production build is sent to, so it goes with no one at the keyboard', () => {
+    // The app's Apple ID in App Store Connect, public once it is listed. EAS Submit refuses to send
+    // a build in --non-interactive mode without it.
+    expect(eas.submit?.production?.ios?.ascAppId).toMatch(/^\d{9,12}$/);
   });
 
   it('builds a store bundle for production, and lets EAS keep the build numbers', () => {
