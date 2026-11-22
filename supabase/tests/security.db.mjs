@@ -49,6 +49,9 @@ const CALLABLE_BY = {
   stripe_webhook_secret: ['service_role'],
   company_billing: ['authenticated'],
   submit_contact_request: ['anon', 'authenticated'],
+  // Crew passcodes (migration 20261122000100): the server key keeps one. Checking one, the passcode
+  // rule and the sign-in password are for the sign-in functions inside the database alone.
+  crew_keep_passcode: ['service_role'],
   is_member: ['authenticated'],
   is_supervisor: ['authenticated'],
   // The row level security policies call these as the signed-in account.
@@ -70,6 +73,10 @@ const SECURITY_DEFINER = [
   'company_by_code',
   'company_has_access',
   'create_company',
+  'crew_check_passcode',
+  'crew_keep_passcode',
+  'crew_login_password',
+  'crew_passcode_problem',
   'deny_join_request',
   'is_last_supervisor',
   'is_member',
@@ -103,6 +110,8 @@ const TABLES = [
   'contact_requests',
   'contact_sender_key',
   'contact_senders',
+  'crew_key',
+  'crew_logins',
   'join_holds',
   'join_requests',
   'notifications',
@@ -143,6 +152,9 @@ const AUTHENTICATED = {
   // The contact form's limit on each sender, kept by submit_contact_request alone.
   contact_senders: { table: [], insert: [], update: [] },
   contact_sender_key: { table: [], insert: [], update: [] },
+  // Crew passcodes: the digests and counts, and their key, kept by the crew functions alone.
+  crew_logins: { table: [], insert: [], update: [] },
+  crew_key: { table: [], insert: [], update: [] },
 };
 const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
 
