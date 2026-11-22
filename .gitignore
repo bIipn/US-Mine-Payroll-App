@@ -32,6 +32,8 @@ yarn-error.*
 
 # local env files
 .env*.local
+# What `eas env:pull` writes for a file setting (an Apple key, say). Never committed or sent in a build.
+.eas/.env/
 
 # typescript
 *.tsbuildinfo
