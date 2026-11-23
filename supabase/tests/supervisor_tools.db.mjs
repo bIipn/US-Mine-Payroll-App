@@ -16,7 +16,10 @@ import { adminDeletes, b64, ENV, json, PUBLISHABLE_KEY as PUBLISHABLE, SECRET_KE
 
 const FUNCTION = new URL('../functions/supervisor-tools/', import.meta.url);
 const { ALLOWED_ORIGIN, INVITE_LINK, MAX_BODY_BYTES, makeHandler } = await import(new URL('handler.ts', FUNCTION));
-const { CALL_TIMEOUT_MS } = await import(new URL('../functions/_shared/http.ts', import.meta.url));
+const { CALL_TIMEOUT_MS, DASHBOARD_CORS, DASHBOARD_ORIGIN, UUID, dashboardGate, tokenAndBody } = await import(new URL('../functions/_shared/http.ts', import.meta.url));
+const { settingsFrom } = await import(new URL('../functions/_shared/server.ts', import.meta.url));
+/** delete-account, the other function the dashboard calls, which shares the dashboard's gate. */
+const deleteAccount = await import(new URL('../functions/delete-account/handler.ts', import.meta.url));
 
 const ENDPOINT = `${SUPABASE_URL}/functions/v1/supervisor-tools`;
 /** The one database function supervisor-tools calls with the server key: it calls the others as the supervisor. */
@@ -287,6 +290,101 @@ describe('the request', () => {
   });
 });
 
+describe('what the dashboard’s functions share', () => {
+  it('the dashboard’s gate refuses another site’s page in the function’s own words, answers a preflight, refuses any method but POST, and puts CORS on what it lets through for the dashboard alone', async () => {
+    assert.equal(DASHBOARD_ORIGIN, 'https://app.minemuster.com');
+    assert.equal(INVITE_LINK, `${DASHBOARD_ORIGIN}/?invited=1`);
+    const logs = [];
+    const gate = (method, origin) => dashboardGate(new Request(ENDPOINT, { method, headers: origin ? { Origin: origin } : {} }), 'Use the office dashboard.', (code) => logs.push(code));
+
+    const refused = gate('POST', 'https://example.test');
+    assert.ok(refused instanceof Response);
+    assert.deepEqual([refused.status, await refused.json()], [403, { error: 'origin_not_allowed', message: 'Use the office dashboard.' }]);
+    assert.equal(refused.headers.get('access-control-allow-origin'), null);
+    assert.deepEqual(logs, ['origin_not_allowed']);
+    const preflight = gate('OPTIONS', DASHBOARD_ORIGIN);
+    assert.equal(preflight.status, 204);
+    assert.deepEqual(Object.fromEntries(preflight.headers), Object.fromEntries(new Headers(DASHBOARD_CORS)));
+    const get = gate('GET', DASHBOARD_ORIGIN);
+    assert.deepEqual([get.status, (await get.json()).error, get.headers.get('allow'), get.headers.get('access-control-allow-origin')], [405, 'method_not_allowed', 'POST, OPTIONS', DASHBOARD_ORIGIN]);
+
+    // What it lets through gets a responder: JSON, with the CORS headers for the dashboard and none for a
+    // request with no Origin, which is no web page's.
+    for (const [origin, cors] of [
+      [DASHBOARD_ORIGIN, DASHBOARD_ORIGIN],
+      [null, null],
+    ]) {
+      const respond = gate('POST', origin);
+      assert.equal(typeof respond, 'function');
+      const answer = respond({ status: 409, body: { error: 'row_taken' }, headers: { 'Retry-After': '1' } });
+      assert.deepEqual([answer.status, await answer.json(), answer.headers.get('content-type'), answer.headers.get('retry-after')], [409, { error: 'row_taken' }, 'application/json', '1']);
+      assert.equal(answer.headers.get('access-control-allow-origin'), cors);
+    }
+    assert.equal(logs.length, 1);
+  });
+
+  it('delete-account and supervisor-tools answer the dashboard’s gate alike, but for their own words', async () => {
+    assert.equal(deleteAccount.ALLOWED_ORIGIN, DASHBOARD_ORIGIN);
+    assert.equal(ALLOWED_ORIGIN, DASHBOARD_ORIGIN);
+    assert.equal(deleteAccount.MAX_BODY_BYTES, MAX_BODY_BYTES);
+    const fetch = async () => assert.fail('nothing is asked of a request the gate or the start turns back');
+    const [ours, theirs] = [makeHandler, deleteAccount.makeHandler].map((make) => make({ env: (name) => ENV[name], fetch, log: () => {} }));
+    const requests = [
+      ['OPTIONS', { Origin: DASHBOARD_ORIGIN, 'Access-Control-Request-Method': 'POST' }],
+      ['OPTIONS', { Origin: 'https://example.test', 'Access-Control-Request-Method': 'POST' }],
+      ['POST', { Origin: 'https://example.test', Authorization: 'Bearer a.b.c' }],
+      ['GET', { Origin: DASHBOARD_ORIGIN }],
+      ['PUT', {}],
+      ['POST', { Origin: DASHBOARD_ORIGIN }],
+      ['POST', { Origin: DASHBOARD_ORIGIN, Authorization: 'Bearer a.b.c', 'Content-Length': String(MAX_BODY_BYTES + 1) }],
+    ];
+    for (const [i, [method, headers]] of requests.entries()) {
+      const make = () => new Request(ENDPOINT, { method, headers, body: method === 'POST' ? '{}' : undefined });
+      const [a, b] = [await ours(make()), await theirs(make())];
+      const [bodyA, bodyB] = [await a.text(), await b.text()];
+      assert.deepEqual([a.status, Object.fromEntries(a.headers)], [b.status, Object.fromEntries(b.headers)], `request ${i}`);
+      // Another site's page is told where to go, in each function's own words; every other answer is the same.
+      if (a.status === 403) assert.deepEqual([JSON.parse(bodyA).error, JSON.parse(bodyB).error], ['origin_not_allowed', 'origin_not_allowed']);
+      else assert.equal(bodyA, bodyB, `request ${i}`);
+    }
+  });
+
+  it('the start both share: 401 without a token, 413 past the limit with no more read, else the token and the text; and the settings or what is missing', async () => {
+    const logs = [];
+    const said = (code) => logs.push(code);
+    const request = (headers, body) => new Request(ENDPOINT, { method: 'POST', headers, body });
+    const token = { Authorization: 'Bearer a.b.c' };
+    assert.deepEqual(await tokenAndBody(request({}, '{}'), 10, said), { refused: { status: 401, body: { error: 'signed_out', message: 'Sign in first.' } } });
+    assert.deepEqual(await tokenAndBody(request({ Authorization: 'Basic a.b.c' }, '{}'), 10, said), { refused: { status: 401, body: { error: 'signed_out', message: 'Sign in first.' } } });
+    assert.deepEqual(logs, [], 'a request with no token is not logged');
+    for (const body of ['{"x":"12345678"}', new Uint8Array(11).fill(32)]) {
+      assert.deepEqual(await tokenAndBody(request(token, body), 10, said), { refused: { status: 413, body: { error: 'too_large', message: 'The body is at most 10 bytes.' } } });
+    }
+    assert.deepEqual(logs, ['too_large', 'too_large']);
+    // At the limit exactly, it is read.
+    assert.deepEqual(await tokenAndBody(request(token, '{"x":"12"}'), 10, said), { token: 'a.b.c', text: '{"x":"12"}' });
+    // Bytes that are not UTF-8, or a length that is not a number: the token, and no text, for the function to turn back.
+    assert.deepEqual(await tokenAndBody(request(token, new Uint8Array([0x7b, 0xff, 0x7d])), 10, said), { token: 'a.b.c', text: null });
+    assert.deepEqual(await tokenAndBody(request({ ...token, 'Content-Length': 'lots' }, '{}'), 10, said), { token: 'a.b.c', text: null });
+    assert.equal(logs.length, 2);
+
+    // A uuid in either case, and nothing else.
+    const id = randomUUID();
+    assert.ok(UUID.test(id) && UUID.test(id.toUpperCase()));
+    for (const junk of ['', 'not-a-uuid', `{${id}}`, `${id}0`, ` ${id}`, id.replace(/-/g, '')]) assert.ok(!UUID.test(junk), `junk ${junk.length}`);
+
+    // The project's address and keys; with one missing, none, and the names of the settings to look at.
+    assert.deepEqual(settingsFrom((name) => ENV[name], said), { server: { url: SUPABASE_URL, key: SECRET_KEY }, publishable: PUBLISHABLE });
+    for (const missing of ['SUPABASE_URL', 'SUPABASE_SECRET_KEYS', 'SUPABASE_PUBLISHABLE_KEYS']) {
+      logs.length = 0;
+      assert.equal(settingsFrom((name) => (name === missing ? undefined : ENV[name]), said), null);
+      assert.deepEqual(logs, [
+        'not set up: SUPABASE_URL, the server key (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY) or the publishable key (SUPABASE_PUBLISHABLE_KEYS or SUPABASE_ANON_KEY) is missing',
+      ]);
+    }
+  });
+});
+
 describe('invite', () => {
   it('invite answers sent whether or not the email has an account, and asks Auth to invite only a new email', async () => {
     // A new email is one no confirmed account has: an address with no account, or one whose account was never
@@ -500,24 +598,54 @@ describe('resend', () => {
 
 describe('the same answer', () => {
   it('invite and resend answer sent for every address and whatever Auth answers, and the invitation stays', async () => {
-    const { send, auth } = handler();
+    const { send, auth, logged } = handler();
     const company = await startCompany(db, { name: 'Test Pit E' });
     const owner = () => auth.tokenFor(company.owner);
-    // What the address is, the call made to answer otherwise than it would, and whether Auth's invite is asked.
+    // What the address is, the call made to answer otherwise than it would, whether Auth's invite is asked, and
+    // what the log says: the answer is the same, and the log, never seen by the inviter, says what happened,
+    // by its code.
     const cases = [
-      { what: 'no account', address: 'none', asked: true },
-      { what: 'an unconfirmed account', address: 'unconfirmed', asked: true },
-      { what: 'a confirmed account', address: 'confirmed', asked: false },
-      { what: 'Auth answering 429', address: 'none', route: 'invite', reply: () => json(429, TOO_MANY), asked: true },
-      { what: 'Auth answering 500', address: 'none', route: 'invite', reply: () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Error sending invite email' }), asked: true },
-      { what: 'Auth giving no answer', address: 'none', route: 'invite', reply: NO_ANSWER, asked: true },
-      { what: 'Auth’s own refusal of a confirmed address', address: 'none', route: 'invite', reply: () => json(422, { code: 422, error_code: 'email_exists', msg: 'A user with this email address has already been registered' }), asked: true },
-      { what: 'the account not found out', address: 'unconfirmed', route: 'rpc:account_for_email', reply: () => json(500, { code: 'XX000', message: 'internal error', details: null, hint: null }), asked: false },
-      { what: 'the account found out as nothing this can read', address: 'none', route: 'rpc:account_for_email', reply: () => json(200, { user_id: null }), asked: false },
+      { what: 'no account', address: 'none', asked: true, log: 'sent, with the invite email, to an address with no account' },
+      { what: 'an unconfirmed account', address: 'unconfirmed', asked: true, log: 'sent, with the invite email, to an address with an account not confirmed' },
+      { what: 'a confirmed account', address: 'confirmed', asked: false, log: "sent, with no invite email: the address's account is confirmed, and the invitation waits on the dashboard" },
+      { what: 'Auth answering 429', address: 'none', route: 'invite', reply: () => json(429, TOO_MANY), asked: true, log: 'sent, but the invite email answered 429 over_email_send_rate_limit' },
+      {
+        what: 'Auth answering 500',
+        address: 'none',
+        route: 'invite',
+        reply: () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Error sending invite email' }),
+        asked: true,
+        log: 'sent, but the invite email answered 500 unexpected_failure',
+      },
+      { what: 'Auth giving no answer', address: 'none', route: 'invite', reply: NO_ANSWER, asked: true, log: 'sent, but the invite email got no answer' },
+      {
+        what: 'Auth’s own refusal of a confirmed address',
+        address: 'none',
+        route: 'invite',
+        reply: () => json(422, { code: 422, error_code: 'email_exists', msg: 'A user with this email address has already been registered' }),
+        asked: true,
+        log: 'sent, but the invite email answered 422 email_exists',
+      },
+      {
+        what: 'the account not found out',
+        address: 'unconfirmed',
+        route: 'rpc:account_for_email',
+        reply: () => json(500, { code: 'XX000', message: 'internal error', details: null, hint: null }),
+        asked: false,
+        log: 'sent, with no invite email: account_for_email answered 500 XX000',
+      },
+      {
+        what: 'the account found out as nothing this can read',
+        address: 'none',
+        route: 'rpc:account_for_email',
+        reply: () => json(200, { user_id: null }),
+        asked: false,
+        log: 'sent, with no invite email: account_for_email answered something this cannot read',
+      },
     ];
     const answers = [];
     for (const action of ['invite', 'resend']) {
-      for (const { what, address, route, reply, asked } of cases) {
+      for (const { what, address, route, reply, asked, log } of cases) {
         const label = `${action}, ${what}`;
         const email = newAddress('pat');
         if (address !== 'none') await accountWith(email, { confirmed: address === 'confirmed' });
@@ -526,10 +654,12 @@ describe('the same answer', () => {
         const made = action === 'resend' ? await db.as(company.owner).call('invite_supervisor', { p_roster_id: rowId, p_email: email }) : null;
         if (route) auth.when(route, reply);
         const calls = auth.calls.length;
+        const lines = logged.length;
         const answer = await send(owner(), action === 'invite' ? invite(rowId, email) : resend(made.invitation_id));
         if (route) auth.when(route, null);
         answers.push([label, answer]);
         assert.equal(invitesOf(auth.calls.slice(calls)), asked ? 1 : 0, label);
+        assert.deepEqual(logged.slice(lines), [`supervisor-tools: ${action} ${log}`], label);
         // The invitation is open, for the address, either way: Send again sends it once more.
         const open = await openOn(rowId);
         assert.ok(open !== null && open.email === email, label);
@@ -634,20 +764,27 @@ describe('delete_crew_sign_in', () => {
   });
 
   it('delete_crew_sign_in answers 500 try_again when the admin delete fails, and deleted when the account is gone already', async () => {
-    const { send, auth } = handler();
+    const { send, auth, logged } = handler();
     const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }, { first: 'Kit', last: 'Marlow' }] });
     const riley = await crewMember(company, 'Riley', 'Quinn');
     const kit = await crewMember(company, 'Kit', 'Marlow');
     const owner = () => auth.tokenFor(company.owner);
-    for (const [i, failure] of [
-      () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error deleting user' }),
-      NO_ANSWER,
-      () => json(504, { message: 'The upstream server is timing out' }),
-      () => json(404, { message: 'no Route matched with those values' }),
+    /** What a delete is answered, and what it logs, by its code. */
+    const deleting = async (name) => {
+      const lines = logged.length;
+      const answer = await send(owner(), deleteSignIn(company.rows[name]));
+      return { answer, said: logged.slice(lines) };
+    };
+    for (const [i, [failure, log]] of [
+      [() => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error deleting user' }), 'the admin delete answered 500 unexpected_failure'],
+      [NO_ANSWER, 'the admin delete got no answer'],
+      [() => json(504, { message: 'The upstream server is timing out' }), 'the admin delete answered 504'],
+      [() => json(404, { message: 'no Route matched with those values' }), 'the admin delete answered 404'],
     ].entries()) {
       auth.when('admin_delete', failure);
-      const answer = await send(owner(), deleteSignIn(company.rows['Riley J Quinn']));
+      const { answer, said: lines } = await deleting('Riley J Quinn');
       assert.deepEqual([answer.status, answer.body.error], [500, 'try_again'], `failure ${i}`);
+      assert.deepEqual(lines, [`supervisor-tools: delete_crew_sign_in: ${log}`], `failure ${i}`);
       assert.ok(await accountExists(riley));
     }
     // Deleted meanwhile, by the person themselves: Supabase Auth has no such account, and the sign-in is gone all the same.
@@ -655,12 +792,13 @@ describe('delete_crew_sign_in', () => {
       await db.admin('delete from auth.users where id = $1', [id]);
       return null;
     });
-    const gone = await send(owner(), deleteSignIn(company.rows['Kit Marlow']));
-    assert.deepEqual([gone.status, gone.body], [200, DELETED]);
+    const gone = await deleting('Kit Marlow');
+    assert.deepEqual([gone.answer.status, gone.answer.body, gone.said], [200, DELETED, ['supervisor-tools: delete_crew_sign_in deleted (Supabase Auth had no such account any more)']]);
     assert.equal(await accountExists(kit), false);
     auth.when('admin_delete', null);
     // With nothing in the way, it goes through.
-    assert.deepEqual((await send(owner(), deleteSignIn(company.rows['Riley J Quinn']))).body, DELETED);
+    const done = await deleting('Riley J Quinn');
+    assert.deepEqual([done.answer.body, done.said], [DELETED, ['supervisor-tools: delete_crew_sign_in deleted']]);
     assert.equal(await accountExists(riley), false);
   });
 });
@@ -676,58 +814,87 @@ describe('the calls it makes', () => {
   });
 
   it('answers by what PostgREST and Supabase Auth say: 401 for a token turned down, 500 for anything it does not know', async () => {
-    const { send, auth } = handler();
+    const { send, auth, logged } = handler();
     const company = await startCompany(db, { roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }, { first: 'Riley J', last: 'Quinn' }] });
     const riley = await crewMember(company, 'Riley', 'Quinn');
     const owner = () => auth.tokenFor(company.owner);
     const row = company.rows['Ana Diaz'];
     const rileyRow = company.rows['Riley J Quinn'];
+    /** A request with a test's answer in place of a route's, and what it logs. */
+    const asking = async (route, reply, body) => {
+      auth.when(route, reply);
+      const lines = logged.length;
+      const answer = await send(owner(), body);
+      auth.when(route, null);
+      return { answer, said: logged.slice(lines) };
+    };
 
     // Supabase Auth turning the request down with no reason of its own, such as the gateway refusing the key, is a
     // setup problem; out of reach, it is try_again.
-    auth.when('user', () => json(401, { message: 'Invalid API key', hint: 'Double check your Supabase `anon` or `service_role` API key.' }));
-    const refused = await send(owner(), resend(nobody()));
-    assert.deepEqual([refused.status, refused.body.error], [500, 'not_set_up']);
-    auth.when('user', () => json(503, { message: 'upstream connect error' }));
-    const down = await send(owner(), resend(nobody()));
-    assert.deepEqual([down.status, down.body.error], [500, 'try_again']);
-    auth.when('user', null);
+    const refused = await asking('user', () => json(401, { message: 'Invalid API key', hint: 'Double check your Supabase `anon` or `service_role` API key.' }), resend(nobody()));
+    assert.deepEqual([refused.answer.status, refused.answer.body.error], [500, 'not_set_up']);
+    assert.deepEqual(refused.said, ['supervisor-tools: resend: auth turned the request down with no reason of its own (401): is the publishable key right?']);
+    const down = await asking('user', () => json(503, { message: 'upstream connect error' }), resend(nobody()));
+    assert.deepEqual([down.answer.status, down.answer.body.error, down.said], [500, 'try_again', ['supervisor-tools: resend: auth answered 503']]);
 
     // A token PostgREST turns down (it expired since Auth was asked), and the database's 42501, are signed out.
-    for (const [route, body] of [
-      ['rpc:invite_supervisor', invite(row, newAddress('ana'))],
-      ['rpc:resend_supervisor_invitation', resend(nobody())],
-      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow)],
+    for (const [action, fn, body] of [
+      ['invite', 'invite_supervisor', invite(row, newAddress('ana'))],
+      ['resend', 'resend_supervisor_invitation', resend(nobody())],
+      ['delete_crew_sign_in', 'crew_sign_in_to_delete', deleteSignIn(rileyRow)],
     ]) {
-      for (const reply of [() => json(401, { code: 'PGRST303', message: 'JWT expired', details: null, hint: null }), () => json(403, { code: '42501', message: 'Sign in first.', details: null, hint: null })]) {
-        auth.when(route, reply);
-        const answer = await send(owner(), body);
-        auth.when(route, null);
-        assert.deepEqual([answer.status, answer.body.error], [401, 'signed_out'], route);
+      for (const [reply, code] of [
+        [() => json(401, { code: 'PGRST303', message: 'JWT expired', details: null, hint: null }), '401 PGRST303'],
+        [() => json(403, { code: '42501', message: 'Sign in first.', details: null, hint: null }), '403 42501'],
+      ]) {
+        const { answer, said: lines } = await asking(`rpc:${fn}`, reply, body);
+        assert.deepEqual([answer.status, answer.body.error], [401, 'signed_out'], fn);
+        assert.deepEqual(lines, [`supervisor-tools: ${action} signed_out (${fn} answered ${code})`]);
       }
     }
 
-    // What the database answers that this does not know is try_again, and nothing is sent or deleted.
+    // What the database answers that this does not know is try_again, and nothing is sent or deleted. The log
+    // says what it answered, by its codes.
     const internal = () => json(500, { code: 'XX000', message: 'internal error', details: null, hint: null });
-    for (const [i, [route, body, reply]] of [
-      ['rpc:invite_supervisor', invite(row, newAddress('ana')), internal],
-      ['rpc:invite_supervisor', invite(row, newAddress('ana')), NO_ANSWER],
-      ['rpc:invite_supervisor', invite(row, newAddress('ana')), () => json(404, { code: 'PGRST202', message: 'Could not find the function', details: null, hint: null })],
-      ['rpc:invite_supervisor', invite(row, newAddress('ana')), () => json(409, { code: 'PT409', message: 'Something new.', details: null, hint: 'something_new' })],
+    const unread = 'answered something this cannot read';
+    for (const [i, [route, body, reply, log]] of [
+      ['rpc:invite_supervisor', invite(row, newAddress('ana')), internal, 'invite: invite_supervisor answered 500 XX000'],
+      ['rpc:invite_supervisor', invite(row, newAddress('ana')), NO_ANSWER, 'invite: invite_supervisor got no answer'],
+      [
+        'rpc:invite_supervisor',
+        invite(row, newAddress('ana')),
+        () => json(404, { code: 'PGRST202', message: 'Could not find the function', details: null, hint: null }),
+        'invite: invite_supervisor answered 404 PGRST202',
+      ],
+      [
+        'rpc:invite_supervisor',
+        invite(row, newAddress('ana')),
+        () => json(409, { code: 'PT409', message: 'Something new.', details: null, hint: 'something_new' }),
+        'invite: invite_supervisor answered 409 PT409 something_new',
+      ],
       // A hint of another action's refusals.
-      ['rpc:invite_supervisor', invite(row, newAddress('ana')), () => json(409, { code: 'PT409', message: 'That invitation has expired.', details: null, hint: 'invitation_closed' })],
-      ['rpc:invite_supervisor', invite(row, newAddress('ana')), () => json(200, { invitation_id: randomUUID(), company_name: 'Test Pit A' })],
-      ['rpc:resend_supervisor_invitation', resend(nobody()), internal],
-      ['rpc:resend_supervisor_invitation', resend(nobody()), () => json(200, { email: newAddress('ana') })],
-      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), internal],
-      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), () => json(409, { code: 'PT409', message: 'That roster row is taken.', details: null, hint: 'row_taken' })],
-      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), () => json(200, 'not an account')],
-      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), () => json(204)],
+      [
+        'rpc:invite_supervisor',
+        invite(row, newAddress('ana')),
+        () => json(409, { code: 'PT409', message: 'That invitation has expired.', details: null, hint: 'invitation_closed' }),
+        'invite: invite_supervisor answered 409 PT409 invitation_closed',
+      ],
+      ['rpc:invite_supervisor', invite(row, newAddress('ana')), () => json(200, { invitation_id: randomUUID(), company_name: 'Test Pit A' }), `invite: invite_supervisor ${unread}`],
+      ['rpc:resend_supervisor_invitation', resend(nobody()), internal, 'resend: resend_supervisor_invitation answered 500 XX000'],
+      ['rpc:resend_supervisor_invitation', resend(nobody()), () => json(200, { email: newAddress('ana') }), `resend: resend_supervisor_invitation ${unread}`],
+      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), internal, 'delete_crew_sign_in: crew_sign_in_to_delete answered 500 XX000'],
+      [
+        'rpc:crew_sign_in_to_delete',
+        deleteSignIn(rileyRow),
+        () => json(409, { code: 'PT409', message: 'That roster row is taken.', details: null, hint: 'row_taken' }),
+        'delete_crew_sign_in: crew_sign_in_to_delete answered 409 PT409 row_taken',
+      ],
+      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), () => json(200, 'not an account'), `delete_crew_sign_in: crew_sign_in_to_delete ${unread}`],
+      ['rpc:crew_sign_in_to_delete', deleteSignIn(rileyRow), () => json(204), `delete_crew_sign_in: crew_sign_in_to_delete ${unread}`],
     ].entries()) {
-      auth.when(route, reply);
-      const answer = await send(owner(), body);
-      auth.when(route, null);
+      const { answer, said: lines } = await asking(route, reply, body);
       assert.deepEqual([answer.status, answer.body], [500, { error: 'try_again', message: 'That did not go through just now. Try again in a few minutes.' }], `answer ${i}`);
+      assert.deepEqual(lines, [`supervisor-tools: ${log}`], `answer ${i}`);
     }
     assert.ok(!auth.calls.some((c) => c.path === '/auth/v1/invite' || c.path === '/rest/v1/rpc/account_for_email'));
     assert.deepEqual(adminDeletes(auth.calls), []);
@@ -784,7 +951,12 @@ describe('what it says', () => {
     const confirmed = newAddress('lee');
     await accountWith(confirmed);
     const answers = [];
-    const run = async (token, body, options) => answers.push(await send(token, body, options));
+    /** A request, and something said of it, unless it has no token: that is turned back before anything, as delete-account turns one back, unlogged. */
+    const run = async (token, body, options) => {
+      const lines = logged.length;
+      answers.push(await send(token, body, options));
+      if (token) assert.ok(logged.length > lines, `something is said of request ${answers.length}`);
+    };
     const failing = async (route, reply, work) => {
       auth.when(route, reply);
       await work();
@@ -815,7 +987,7 @@ describe('what it says', () => {
     await run(null, invite(row, newAddress('ana')));
     await run(owner(), { ...invite(row, newAddress('ana')), user_id: company.owner });
     await run(owner(), invite(row, newAddress('ana')), { origin: 'https://example.test' });
-    assert.ok(logged.length >= answers.length, 'something is said of each request');
+    assert.equal(answers.length, 19);
 
     // Over every test in this file, this one last: no log holds anything any test sent (the addresses typed, the
     // ids, the tokens), nor any token the stand-ins minted, nor a key, nor any account's, company's, row's or

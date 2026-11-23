@@ -1,9 +1,11 @@
 // What MineMuster's edge functions share about the requests they take and the calls they make: a
-// request's body, read no further than a limit, and its bearer token; the office dashboard's origin and
-// the CORS headers of an answer to it; and the calls to the database and to Supabase Auth, each of which
+// request's body, read no further than a limit, and its bearer token; the office dashboard's gate (its
+// origin, the CORS headers of an answer to it, and the start of a request it sends), which delete-account
+// and supervisor-tools both go through; and the calls to the database and to Supabase Auth, each of which
 // counts as failed when it has no answer within CALL_TIMEOUT_MS. Supabase leaves a folder named _shared
-// out of the functions it deploys, and bundles what a function imports from it. Nothing here writes a
-// log; codeOf picks out what of an answer a log may hold.
+// out of the functions it deploys, and bundles what a function imports from it. Nothing here writes a log
+// but through the `said` a function hands it, as a code; codeOf picks out what of an answer a log may
+// hold.
 
 import { keyHeaders, type Server } from './server.ts';
 
@@ -29,6 +31,57 @@ export const DASHBOARD_CORS: Record<string, string> = {
 
 /** A code from an answer, for a log (Supabase Auth's error_code, the database's SQLSTATE), only when it looks like one. */
 export const codeOf = (value: unknown): string => (typeof value === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(value) ? ` ${value}` : '');
+
+/** A uuid, in either case. */
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An answer, before it is made a Response: its status, its JSON body, and any headers of its own. */
+export interface Reply {
+  status: number;
+  body: Json;
+  headers?: Record<string, string>;
+}
+
+/** A Reply made a Response: JSON, with the dashboard's CORS headers when the request came from the dashboard. */
+export type Respond = (reply: Reply) => Response;
+
+/**
+ * The office dashboard's gate, for a function the dashboard calls from a browser. A request from any other
+ * site's page (an Origin that is not the dashboard's) is 403 origin_not_allowed, in the function's own
+ * words, and logged, before anything is asked; one with no Origin is no web page's, and goes on. A
+ * browser's preflight (OPTIONS) is 204 with the CORS headers, and any other method but POST is 405. The
+ * answer is that Response, or, for a request that goes on, the responder for all the function answers it.
+ */
+export function dashboardGate(request: Request, refusalWords: string, said: (code: string) => void): Response | Respond {
+  const origin = request.headers.get('origin');
+  const fromDashboard = origin === DASHBOARD_ORIGIN;
+  const respond: Respond = ({ status, body, headers }) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...(fromDashboard ? DASHBOARD_CORS : {}), ...headers } });
+  if (origin && !fromDashboard) {
+    said('origin_not_allowed');
+    return respond({ status: 403, body: { error: 'origin_not_allowed', message: refusalWords } });
+  }
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: DASHBOARD_CORS });
+  if (request.method !== 'POST') return respond({ status: 405, body: { error: 'method_not_allowed', message: 'Send POST.' }, headers: { Allow: 'POST, OPTIONS' } });
+  return respond;
+}
+
+/**
+ * The start of a request made with a person's token: the bearer token, then the body, read no further than
+ * maxBytes. With no token it is 401 signed_out, and nothing is read; a body said to be larger, or found
+ * larger while it is read, is 413 too_large, logged, and no more of it is read. Otherwise the token and the
+ * body's text, null when it is not UTF-8 or its length is not a number, for the function to read.
+ */
+export async function tokenAndBody(request: Request, maxBytes: number, said: (code: string) => void): Promise<{ refused: Reply } | { token: string; text: string | null }> {
+  const token = bearerOf(request.headers.get('authorization'));
+  if (!token) return { refused: { status: 401, body: { error: 'signed_out', message: 'Sign in first.' } } };
+  const text = await readCapped(request, maxBytes);
+  if (text === 'too_large') {
+    said('too_large');
+    return { refused: { status: 413, body: { error: 'too_large', message: `The body is at most ${maxBytes} bytes.` } } };
+  }
+  return { token, text };
+}
 
 /**
  * A call that counts as failed once it has had no answer for CALL_TIMEOUT_MS: its response, or null when

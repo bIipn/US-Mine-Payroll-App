@@ -40,17 +40,17 @@
 //
 // It logs what happened as a code: never a token, a key, an email or an id.
 
-import { publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
+import { settingsFrom, type Env, type Server } from '../_shared/server.ts';
 import {
-  bearerOf,
   callFunction,
-  DASHBOARD_CORS as CORS,
+  dashboardGate,
   DASHBOARD_ORIGIN,
   deleteAuthUser,
   jsonOf,
   objectOf,
   personHeaders,
-  readCapped,
+  tokenAndBody,
+  UUID,
   whoseToken,
   type Called,
   type Fetch,
@@ -73,7 +73,6 @@ export const MAX_CLOSE = 20;
 /** The largest body read, in bytes. */
 export const MAX_BODY_BYTES = 16_384;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Statuses a gateway gives when it did not hear from the service behind it: the request may still have been carried out. */
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
@@ -202,36 +201,23 @@ export function makeHandler(deps: DeleteDeps): (request: Request) => Promise<Res
   const whose = (server: Server, publishable: string, token: string) => whoseToken(deps.fetch, server, publishable, token);
 
   return async (request: Request): Promise<Response> => {
-    const origin = request.headers.get('origin');
-    const fromDashboard = origin === ALLOWED_ORIGIN;
-    const answer = (status: number, body: Json, headers: Record<string, string> = {}) =>
-      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...(fromDashboard ? CORS : {}), ...headers } });
     const said = (code: string) => log(`delete-account: ${code}`);
+    // 1. The dashboard's gate, which supervisor-tools goes through too.
+    const gate = dashboardGate(request, 'Delete your account in the MineMuster app or on the office dashboard.', said);
+    if (gate instanceof Response) return gate;
+    const answer = (status: number, body: Json, headers: Record<string, string> = {}) => gate({ status, body, headers });
 
-    if (origin && !fromDashboard) {
-      said('origin_not_allowed');
-      return answer(403, { error: 'origin_not_allowed', message: 'Delete your account in the MineMuster app or on the office dashboard.' });
-    }
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
-    if (request.method !== 'POST') return answer(405, { error: 'method_not_allowed', message: 'Send POST.' }, { Allow: 'POST, OPTIONS' });
-
-    const token = bearerOf(request.headers.get('authorization'));
-    if (!token) return answer(401, { error: 'signed_out', message: 'Sign in first.' });
-    const text = await readCapped(request, MAX_BODY_BYTES);
-    if (text === 'too_large') {
-      said('too_large');
-      return answer(413, { error: 'too_large', message: `The body is at most ${MAX_BODY_BYTES} bytes.` });
-    }
+    // 2 and 3. The token, then the body, read no further than its limit.
+    const asked = await tokenAndBody(request, MAX_BODY_BYTES, said);
+    if ('refused' in asked) return gate(asked.refused);
+    const { token, text } = asked;
     const close = text === null ? null : readBody(text);
     if (!close) return answer(400, { error: 'bad_request', message: 'The body is {} or { close: [{ company_id, name }] }, and names no account.' });
 
-    const server = serverFrom(deps.env);
-    const publishable = publishableKeyFrom(deps.env);
+    const settings = settingsFrom(deps.env, said);
     const notSetUp = () => answer(500, { error: 'not_set_up', message: 'Account deletion is not set up on this server yet.' });
-    if (!server || !publishable) {
-      said('not set up: SUPABASE_URL, the server key (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY) or the publishable key (SUPABASE_PUBLISHABLE_KEYS or SUPABASE_ANON_KEY) is missing');
-      return notSetUp();
-    }
+    if (!settings) return notSetUp();
+    const { server, publishable } = settings;
     const tryAgain = (closed: string[]) => answer(500, { error: 'try_again', message: 'The account could not be deleted just now. Try again in a few minutes.', closed });
     const signedOut = () => answer(401, { error: 'signed_out', message: 'This sign-in is signed out. Sign in again.' });
     const alreadyDeleted = () => answer(410, { error: 'already_deleted', message: 'This sign-in is deleted already.' });

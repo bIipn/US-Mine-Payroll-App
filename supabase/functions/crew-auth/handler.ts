@@ -56,7 +56,7 @@
 // It logs what happened as a code: never a name, a passcode, a reset code, a company code, an address,
 // an email, a token, a key or an id.
 
-import { keyHeaders, publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
+import { keyHeaders, settingsFrom, type Env, type Server } from '../_shared/server.ts';
 import { bearerOf, callFunction, callWithin, codeOf, deleteAuthUser, jsonOf, objectOf, personHeaders, readCapped, whoseToken, type Fetch } from '../_shared/http.ts';
 
 export interface CrewDeps {
@@ -554,12 +554,9 @@ export function makeHandler(deps: CrewDeps): (request: Request) => Promise<Respo
       return answer(400, { error: 'bad_request', message: 'The body is { action, ... } with the fields that action takes, each of them text.' });
     }
 
-    const server = serverFrom(deps.env);
-    const publishable = publishableKeyFrom(deps.env);
-    if (!server || !publishable) {
-      said('not set up: SUPABASE_URL, the server key (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY) or the publishable key (SUPABASE_PUBLISHABLE_KEYS or SUPABASE_ANON_KEY) is missing');
-      return notSetUp();
-    }
+    const settings = settingsFrom(deps.env, said);
+    if (!settings) return notSetUp();
+    const { server, publishable } = settings;
 
     const { action, fields } = ask;
     if (action === 'confirm') return confirm(server, publishable, fields, request);

@@ -7,10 +7,11 @@
 // (migrations 20261122000100 and 20261122000200): its function runs as the supervisor, with their own
 // token, and only once it has said yes does this function call Supabase Auth.
 //
-//  1. OPTIONS is a browser's preflight, answered 204 for the office dashboard's origin alone. A request
-//     from any other site's page is 403 origin_not_allowed, before anything is asked; one with no Origin
-//     is no web page's, and is taken as delete-account takes it. Any method but POST is 405.
-//  2. Without a bearer token: 401 signed_out.
+//  1. The office dashboard's gate (dashboardGate in ../_shared/http.ts, which delete-account goes through
+//     too): OPTIONS is a browser's preflight, answered 204 for the dashboard's origin alone. A request from
+//     any other site's page is 403 origin_not_allowed, before anything is asked; one with no Origin is no
+//     web page's, and goes on. Any method but POST is 405.
+//  2. Without a bearer token: 401 signed_out, unlogged, as delete-account answers one (tokenAndBody).
 //  3. The body is JSON: { action: 'invite', roster_id, email }, { action: 'resend', invitation_id } or
 //     { action: 'delete_crew_sign_in', roster_id }, every field text, each id a uuid, and no other field.
 //     A body said to be larger than 16 KB (delete-account's limit, the other function the dashboard
@@ -46,22 +47,23 @@
 // Every answer but sent, deleted and a preflight's carries error, a code, and message, plain words. It logs
 // what happened as a code: never an email, a name, a token, a key or an id.
 
-import { keyHeaders, publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
+import { keyHeaders, settingsFrom, type Env, type Server } from '../_shared/server.ts';
 import {
-  bearerOf,
   callFunction,
   callWithin,
   codeOf,
-  DASHBOARD_CORS,
+  dashboardGate,
   DASHBOARD_ORIGIN,
   deleteAuthUser,
   jsonOf,
   objectOf,
   personHeaders,
-  readCapped,
+  tokenAndBody,
+  UUID,
   whoseToken,
   type Called,
   type Fetch,
+  type Reply,
 } from '../_shared/http.ts';
 
 export interface SupervisorDeps {
@@ -73,7 +75,7 @@ export interface SupervisorDeps {
 /** The office dashboard: the one web page that may call this from a browser. */
 export const ALLOWED_ORIGIN = DASHBOARD_ORIGIN;
 /** Where the invite email's link lands: the dashboard, which reads the link, signs the person in and shows the invitation. */
-export const INVITE_LINK = 'https://app.minemuster.com/?invited=1';
+export const INVITE_LINK = `${DASHBOARD_ORIGIN}/?invited=1`;
 /** The largest body read, in bytes. */
 export const MAX_BODY_BYTES = 16_384;
 
@@ -91,7 +93,6 @@ const FIELDS: Record<Action, readonly string[]> = {
 };
 /** The fields that are ids, and so uuids. */
 const IDS = new Set(['roster_id', 'invitation_id']);
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The database function each action calls as the supervisor. */
 const FUNCTIONS: Record<Action, string> = {
@@ -118,14 +119,7 @@ const CONFLICTS: Record<Action, Readonly<Record<string, string>>> = {
 const BODY_WORDS = 'The body is { action, ... } with the fields that action takes, each of them text and each id a uuid.';
 const EMAIL_WORDS = 'Type the email address to send the invitation to.';
 
-/** An answer, before it is made a Response. */
-interface Reply {
-  status: number;
-  body: Json;
-  headers?: Record<string, string>;
-}
-
-const reply = (status: number, body: Json, headers?: Record<string, string>): Reply => ({ status, body, headers });
+const reply = (status: number, body: Json): Reply => ({ status, body });
 
 const SENT = reply(200, { status: 'sent' });
 const DELETED = reply(200, { status: 'deleted' });
@@ -263,30 +257,20 @@ export function makeHandler(deps: SupervisorDeps): (request: Request) => Promise
     return TRY_AGAIN;
   }
 
-  /** What a request asks, answered, once it has come from where it may and by POST. */
+  /** What a request asks, answered, once it has come through the dashboard's gate. */
   async function handle(request: Request): Promise<Reply> {
-    const token = bearerOf(request.headers.get('authorization'));
-    if (!token) {
-      said('signed_out (no token)');
-      return reply(401, { error: 'signed_out', message: 'Sign in first.' });
-    }
-    const text = await readCapped(request, MAX_BODY_BYTES);
-    if (text === 'too_large') {
-      said('too_large');
-      return reply(413, { error: 'too_large', message: `The body is at most ${MAX_BODY_BYTES} bytes.` });
-    }
+    const asked = await tokenAndBody(request, MAX_BODY_BYTES, said);
+    if ('refused' in asked) return asked.refused;
+    const { token, text } = asked;
     const ask = text === null ? null : readAsk(text);
     if (!ask) {
       said('bad_request');
       return reply(400, { error: 'bad_request', message: BODY_WORDS });
     }
 
-    const server = serverFrom(deps.env);
-    const publishable = publishableKeyFrom(deps.env);
-    if (!server || !publishable) {
-      said('not set up: SUPABASE_URL, the server key (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY) or the publishable key (SUPABASE_PUBLISHABLE_KEYS or SUPABASE_ANON_KEY) is missing');
-      return NOT_SET_UP;
-    }
+    const settings = settingsFrom(deps.env, said);
+    if (!settings) return NOT_SET_UP;
+    const { server, publishable } = settings;
 
     const { action, fields } = ask;
     const who = await whoseToken(deps.fetch, server, publishable, token);
@@ -309,17 +293,8 @@ export function makeHandler(deps: SupervisorDeps): (request: Request) => Promise
   }
 
   return async (request: Request): Promise<Response> => {
-    const origin = request.headers.get('origin');
-    const fromDashboard = origin === ALLOWED_ORIGIN;
-    const respond = ({ status, body, headers }: Reply) =>
-      new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...(fromDashboard ? DASHBOARD_CORS : {}), ...headers } });
-
-    if (origin && !fromDashboard) {
-      said('origin_not_allowed');
-      return respond(reply(403, { error: 'origin_not_allowed', message: 'Invite supervisors and delete crew sign-ins on the office dashboard.' }));
-    }
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: DASHBOARD_CORS });
-    if (request.method !== 'POST') return respond(reply(405, { error: 'method_not_allowed', message: 'Send POST.' }, { Allow: 'POST, OPTIONS' }));
-    return respond(await handle(request));
+    const gate = dashboardGate(request, 'Invite supervisors and delete crew sign-ins on the office dashboard.', said);
+    if (gate instanceof Response) return gate;
+    return gate(await handle(request));
   };
 }

@@ -49,6 +49,24 @@ export function publishableKeyFrom(env: Env): string | null {
   return key || null;
 }
 
+/** The project's address and both of its keys, as a function called with a person's token needs them. */
+export interface Settings {
+  server: Server;
+  publishable: string;
+}
+
+/**
+ * The project's address, its server key and its publishable key, or null when any of them is missing: then
+ * `said` is told which settings to look at, by their names.
+ */
+export function settingsFrom(env: Env, said: (code: string) => void): Settings | null {
+  const server = serverFrom(env);
+  const publishable = publishableKeyFrom(env);
+  if (server && publishable) return { server, publishable };
+  said('not set up: SUPABASE_URL, the server key (SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY) or the publishable key (SUPABASE_PUBLISHABLE_KEYS or SUPABASE_ANON_KEY) is missing');
+  return null;
+}
+
 /** The headers PostgREST and Supabase Auth take the server key in: a secret key as apikey only, a legacy JWT as both. */
 export function keyHeaders(key: string): Record<string, string> {
   const headers: Record<string, string> = { apikey: key };
