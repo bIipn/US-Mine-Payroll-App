@@ -2,7 +2,13 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 export type RootStackParamList = {
+  /** Signing in with an account kept on this phone: the first screen of a build with no server. */
   Auth: undefined;
+  /**
+   * Signing in to the company: its code, then a name and a passcode, or an email and a password. The
+   * first screen of a build that names a server, and only in one.
+   */
+  CompanySignIn: undefined;
   /** The tabs. Pass `screen` to land on one of them. */
   Main: NavigatorScreenParams<TabParamList> | undefined;
   Inspection: { equipmentId: string };

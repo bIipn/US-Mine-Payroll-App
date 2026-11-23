@@ -328,6 +328,19 @@ describe('crew sign-in by passcode', () => {
     stop();
     expect(heard).toEqual([SAM, SAM, AVERY_ACCOUNT]);
   });
+
+  it('signOutOtherSessions signs the account’s other sessions out and keeps this phone’s', async () => {
+    mockAuth.signOut.mockResolvedValueOnce({ error: null });
+    expect(await server.signOutOtherSessions()).toEqual({ ok: true });
+    // Others only: supabase-js keeps the session on the phone for this scope, and nothing else is asked.
+    expect(mockAuth.signOut.mock.calls).toEqual([[{ scope: 'others' }]]);
+    expect(mockAuth.setSession).not.toHaveBeenCalled();
+    // With no signal, or turned down, the person is still signed in here, and the phone says why it could not.
+    mockAuth.signOut.mockResolvedValueOnce({ error: offline });
+    expect(await server.signOutOtherSessions()).toEqual({ ok: false, error: 'The company server could not be reached. Check your signal and try again.' });
+    mockAuth.signOut.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await server.signOutOtherSessions()).toEqual({ ok: false, error: 'The company server could not be reached. Check your signal and try again.' });
+  });
 });
 
 describe('the company', () => {
@@ -464,21 +477,6 @@ describe('reading the company’s records', () => {
     expect(await server.companyTransport('c-a').companyRow!()).toEqual({ name: 'Test Pit A', state: 'NV', pay: null });
     expect(mockReads[0].table).toBe('companies');
     expect(mockReads[0].calls).toEqual([['select', ['name,state,pay_period']], ['eq', ['id', 'c-a']], ['maybeSingle', []]]);
-  });
-});
-
-describe('checking the company sign-in’s password', () => {
-  it('says whether it is right, and asks for signal when the server cannot be reached', async () => {
-    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: sessionOf(AVERY), user: AVERY }, error: null });
-    expect(await server.checkPassword('avery@example.com', 'right-password')).toEqual({ ok: true });
-    expect(mockAuth.signInWithPassword).toHaveBeenCalledWith({ email: 'avery@example.com', password: 'right-password' });
-    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: { name: 'AuthApiError', code: 'invalid_credentials', status: 400, message: 'Invalid login credentials' } });
-    expect(await server.checkPassword('avery@example.com', 'wrong')).toEqual({ ok: false, error: 'That is not the password for avery@example.com. Try again.' });
-    mockAuth.signInWithPassword.mockResolvedValueOnce({ data: { session: null, user: null }, error: offline });
-    expect(await server.checkPassword('avery@example.com', 'x')).toEqual({
-      ok: false,
-      error: 'Making a supervisor’s account needs signal once, to check your company sign-in. Try again when you have signal.',
-    });
   });
 });
 
@@ -849,10 +847,10 @@ describe('staying signed in', () => {
     }
 
     // Nothing signs the phone out by itself. The client's sign-out, and taking the session off the
-    // phone, are made by server.signOut alone ...
+    // phone, are made by server.signOut alone. The one other call of the client's sign-out is for the
+    // account's other sessions only, which keeps this phone's ...
     const serverFile = `${src}/services/server.ts`;
-    const clientCalls = callers(serverFile, /\bauth\.(\w+)\(/g);
-    expect(clientCalls.filter((call) => call.endsWith(' signOut'))).toEqual(['signOut signOut']);
+    expect(callers(serverFile, /\bauth\.signOut\(([^)]*)\)/g)).toEqual(["signOut { scope: 'local' }", "signOutOtherSessions { scope: 'others' }"]);
     expect(callers(serverFile, /(?<!function )\bforgetSession\(/g)).toEqual(['signOut']);
     const rel = (file: string) => file.slice(src.length + 1);
     expect(appFiles(src).filter((file) => /\bauth\.signOut\(/.test(fs.readFileSync(file, 'utf8'))).map(rel)).toEqual(['services/server.ts']);
@@ -864,6 +862,11 @@ describe('staying signed in', () => {
       'services/connection.ts disconnect',
       // The sign-in is deleted.
       'services/connection.ts forgetDeletedSignIn',
+    ]);
+    // ... and the account's other sessions are signed out only by the company sign-in screen, once a
+    // passcode reset could not do it on the server (R19).
+    expect(appFiles(src).flatMap((file) => callers(file, /\b(?:server|link)\??\.signOutOtherSessions\(/g).map((fn) => `${rel(file)} ${fn}`))).toEqual([
+      'screens/auth/CompanySignInScreen.tsx CompanySignInScreen',
     ]);
   });
 });

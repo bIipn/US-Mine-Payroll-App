@@ -1,13 +1,12 @@
 import { useNavigation } from '@react-navigation/native';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { Building2, CloudCheck, CloudUpload, Eye, EyeOff, LogIn, LogOut, RotateCcw, Users, UserX, WifiOff } from '../../components/icons';
-import { Button, Divider, Field, IconButton, Notice, Panel, Page, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
+import { Button, Field, IconButton, Notice, Panel, Page, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { companyAccountView, signInIsTheirs } from '../../domain/access';
 import { keepsTime } from '../../domain/company';
-import { otherCompany } from '../../domain/server';
 import {
   checkEmail,
   checkJoinCode,
@@ -32,6 +31,7 @@ import { syncNow, useSyncStatus } from '../../services/sync';
 import { useMe, useStore } from '../../store/useStore';
 import { color, font, space } from '../../theme/theme';
 import { fmtDate, fmtTime } from '../../util/format';
+import { CompanyChoice, EmailSignIn, useConnectCompany, Waiting } from '../auth/ServerSignIn';
 
 type Mode = 'signin' | 'signup';
 
@@ -79,33 +79,28 @@ export function CompanyAccountScreen({ navigation }: ScreenProps<'CompanyAccount
   );
 }
 
-function Waiting({ text }: { text: string }) {
-  return (
-    <View style={styles.loading}>
-      <ActivityIndicator color={color.ink} />
-      <Txt v="small" c={color.silica}>{text}</Txt>
-    </View>
-  );
-}
-
-/** Signed out: sign in, or make an account. */
+/**
+ * Signed out: sign in, which is the company sign-in screen's own email sign-in (ServerSignIn), or make
+ * an account.
+ */
 function SignInForm() {
   const linked = useStore((s) => s.connectedCompany);
   const [mode, setMode] = useState<Mode>('signin');
-  // A phone that is connected signs back in as the account that joined, so its address is filled in.
-  const [address, setAddress] = useState(linked?.email ?? '');
+  // Making an account: its address, its password, and the address the link to confirm it went to.
+  const [address, setAddress] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sentTo, setSentTo] = useState<{ email: string; why: 'confirm' | 'reset' } | null>(null);
-  const [busy, setBusy] = useState<'submit' | 'reset' | 'resend' | null>(null);
+  const [confirmTo, setConfirmTo] = useState<string | null>(null);
+  const [resendError, setResendError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'submit' | 'resend' | null>(null);
   if (!server) return null;
   const link = server;
   // Connected to a company: only the account on its roster sends its records, so there is no new account to make here.
   const signUp = mode === 'signup' && !linked;
 
-  const submit = async () => {
-    const problem = checkEmail(address) ?? checkPassword(password, signUp);
+  const create = async () => {
+    const problem = checkEmail(address) ?? checkPassword(password, true);
     if (problem) {
       haptic.error();
       setError(problem);
@@ -113,18 +108,6 @@ function SignInForm() {
     }
     setBusy('submit');
     setError(null);
-    if (!signUp) {
-      const result = await link.signIn(address, password);
-      setBusy(null);
-      if (!result.ok) {
-        haptic.error();
-        setError(result.error);
-        return;
-      }
-      haptic.success();
-      setPassword('');
-      return;
-    }
     const result = await link.signUp(address, password);
     setBusy(null);
     if (!result.ok) {
@@ -136,44 +119,24 @@ function SignInForm() {
     setPassword('');
     if (result.confirm) {
       // No session until the email is confirmed: the person signs in after opening the link.
-      setSentTo({ email: address.trim().toLowerCase(), why: 'confirm' });
+      setConfirmTo(address.trim().toLowerCase());
       setMode('signin');
     }
   };
 
-  const forgot = async () => {
-    const problem = checkEmail(address);
-    if (problem) {
-      haptic.error();
-      setError('Enter your email above, then tap Forgot password.');
-      return;
-    }
-    setBusy('reset');
-    setError(null);
-    const result = await link.resetPassword(address);
-    setBusy(null);
-    if (!result.ok) {
-      haptic.error();
-      setError(result.error);
-      return;
-    }
-    haptic.success();
-    setSentTo({ email: address.trim().toLowerCase(), why: 'reset' });
-  };
-
   const resend = async () => {
-    if (!sentTo) return;
+    if (!confirmTo) return;
     setBusy('resend');
-    setError(null);
-    const result = await link.resendConfirmation(sentTo.email);
+    setResendError(null);
+    const result = await link.resendConfirmation(confirmTo);
     setBusy(null);
     if (!result.ok) {
       haptic.error();
-      setError(result.error);
+      setResendError(result.error);
       return;
     }
     haptic.success();
-    useStore.getState().showToast(`Sent the link to ${sentTo.email} again.`, 'info');
+    useStore.getState().showToast(`Sent the link to ${confirmTo} again.`, 'info');
   };
 
   return (
@@ -193,19 +156,12 @@ function SignInForm() {
           </Txt>
         </View>
       )}
-      {sentTo ? (
+      {confirmTo ? (
         <View testID="server-confirm" style={{ gap: space.sm }}>
-          <Notice
-            tone="info"
-            title={sentTo.why === 'confirm' ? 'Check your email' : 'Check your email for the link'}
-            body={
-              sentTo.why === 'confirm'
-                ? `We sent a link to ${sentTo.email}. Open it, then come back here and sign in with the same password.`
-                : `We sent a link to ${sentTo.email} to set a new password. Set it in the browser, then sign in here with it.`
-            }
-          />
-          {sentTo.why === 'confirm' ? (
-            <Button testID="server-resend" label="Send the link again" kind="quiet" size="md" loading={busy === 'resend'} onPress={() => void resend()} style={styles.tall} />
+          <Notice tone="info" title="Check your email" body={`We sent a link to ${confirmTo}. Open it, then come back here and sign in with the same password.`} />
+          <Button testID="server-resend" label="Send the link again" kind="quiet" size="md" loading={busy === 'resend'} onPress={() => void resend()} style={styles.tall} />
+          {resendError ? (
+            <Txt v="smallStrong" c={color.red} testID="server-resend-error" accessibilityLiveRegion="polite">{resendError}</Txt>
           ) : null}
         </View>
       ) : null}
@@ -225,53 +181,51 @@ function SignInForm() {
               ]}
             />
           )}
-          <Field
-            testID="server-email"
-            label="Email"
-            value={address}
-            onChangeText={(text) => {
-              setAddress(text);
-              setError(null);
-            }}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoComplete="email"
-            autoCorrect={false}
-          />
-          <Field
-            testID="server-password"
-            label="Password"
-            value={password}
-            onChangeText={(text) => {
-              setPassword(text);
-              setError(null);
-            }}
-            secureTextEntry={!show}
-            autoCapitalize="none"
-            autoComplete={signUp ? 'new-password' : 'current-password'}
-            hint={signUp ? 'At least 8 characters.' : undefined}
-            onSubmitEditing={() => void submit()}
-            right={
-              <IconButton
-                icon={show ? EyeOff : Eye}
-                label={show ? 'Hide password' : 'Show password'}
-                onPress={() => setShow((v) => !v)}
-                tint={color.silica}
+          {signUp ? (
+            <>
+              <Field
+                testID="server-email"
+                label="Email"
+                value={address}
+                onChangeText={(text) => {
+                  setAddress(text);
+                  setError(null);
+                }}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoComplete="email"
+                autoCorrect={false}
               />
-            }
-          />
-          {error ? (
-            <Txt v="smallStrong" c={color.red} testID="server-error" accessibilityLiveRegion="polite">{error}</Txt>
-          ) : null}
-          <Button
-            testID="server-submit"
-            label={signUp ? 'Create account' : 'Sign in'}
-            icon={LogIn}
-            loading={busy === 'submit'}
-            onPress={() => void submit()}
-          />
-          {signUp ? null : (
-            <Button testID="server-forgot" label="Forgot password?" kind="quiet" size="md" loading={busy === 'reset'} onPress={() => void forgot()} style={styles.tall} />
+              <Field
+                testID="server-password"
+                label="Password"
+                value={password}
+                onChangeText={(text) => {
+                  setPassword(text);
+                  setError(null);
+                }}
+                secureTextEntry={!show}
+                autoCapitalize="none"
+                autoComplete="new-password"
+                hint="At least 8 characters."
+                onSubmitEditing={() => void create()}
+                right={
+                  <IconButton
+                    icon={show ? EyeOff : Eye}
+                    label={show ? 'Hide password' : 'Show password'}
+                    onPress={() => setShow((v) => !v)}
+                    tint={color.silica}
+                  />
+                }
+              />
+              {error ? (
+                <Txt v="smallStrong" c={color.red} testID="server-error" accessibilityLiveRegion="polite">{error}</Txt>
+              ) : null}
+              <Button testID="server-submit" label="Create account" icon={LogIn} loading={busy === 'submit'} onPress={() => void create()} />
+            </>
+          ) : (
+            // A phone that is connected signs back in as the account that joined, so its address is filled in.
+            <EmailSignIn email={linked?.email ?? address} />
           )}
         </View>
       </Panel>
@@ -285,10 +239,10 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
   const me = useMe();
   // A request another account made on this phone is theirs to check on, not this one's.
   const asked = useStore((s) => (s.joinAsked && s.joinAsked.accountId === accountId ? s.joinAsked : null));
-  const held = useStore((s) => s.settings.company.name);
   const online = useSyncStatus((s) => s.online);
-  const [sure, setSure] = useState<ServerCompany | null>(null);
-  const { connectCompany, setJoinAsked, showToast } = useStore.getState();
+  const { setJoinAsked } = useStore.getState();
+  // Connecting to one of the account's companies, as the company sign-in screen does (ServerSignIn).
+  const connector = useConnectCompany({ id: accountId, email });
   const [companies, setCompanies] = useState<ServerCompany[] | null>(null);
   const [listProblem, setListProblem] = useState<string | null>(null);
   const [waiting, setWaiting] = useState<WaitingRequest[]>([]);
@@ -296,7 +250,6 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
   const [first, setFirst] = useState(asked?.firstName ?? me?.firstName ?? '');
   const [last, setLast] = useState(asked?.lastName ?? me?.lastName ?? '');
   const [error, setError] = useState<string | null>(null);
-  const [connectError, setConnectError] = useState<string | null>(null);
   // A request still waiting from an earlier visit is shown until it is checked again.
   const [answer, setAnswer] = useState<(JoinAnswer & { code: string }) | null>(
     asked ? { status: 'pending', companyName: asked.companyName, reason: asked.reason, code: asked.code } : null,
@@ -323,24 +276,6 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
 
   if (!server) return null;
   const link = server;
-
-  /** Send to this company from now on. One with another name than the phone holds is asked about first. */
-  const connect = (company: ServerCompany, confirmed = false): boolean => {
-    if (!confirmed && otherCompany(held, company.name)) {
-      setSure(company);
-      return false;
-    }
-    setSure(null);
-    const result = connectCompany(company, { id: accountId, email });
-    if (!result.ok) {
-      haptic.error();
-      setConnectError(result.error);
-      return false;
-    }
-    haptic.success();
-    showToast(`Connected to ${company.name}. This phone sends its records there.`);
-    return true;
-  };
 
   /** What was typed changed: an answer about the old code or name no longer stands. */
   const edited = () => {
@@ -401,7 +336,7 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
       setError('You are on the roster, but this phone could not find the company. Tap Join company again.');
       return;
     }
-    if (!connect(company)) setError(null);
+    if (!connector.connect(company)) setError(null);
   };
 
   const words = answer && !joinedAnswer(answer) ? joinWords(answer) : null;
@@ -415,29 +350,7 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
           <Button testID="server-companies-retry" label="Try again" icon={RotateCcw} kind="outline" size="md" onPress={() => setTries((n) => n + 1)} style={styles.noticeButton} />
         </Notice>
       ) : null}
-      {companies && companies.length ? (
-        <Panel title="Your companies" flush>
-          {connectError ? (
-            <View style={styles.panelNotice} testID="server-connect-error">
-              <Notice tone="bo" title="This phone cannot connect there" body={connectError} />
-            </View>
-          ) : null}
-          {companies.map((company, i) => (
-            <View key={company.id}>
-              {i || connectError ? <Divider inset={space.lg} /> : null}
-              <Row
-                testID={`server-company-${company.id}`}
-                left={<Building2 color={color.ink} size={24} />}
-                title={`Connect to ${company.name}`}
-                titleLines={3}
-                sub={`${roleWords(company.role)} on its roster`}
-                chevron
-                onPress={() => connect(company)}
-              />
-            </View>
-          ))}
-        </Panel>
-      ) : null}
+      {companies && companies.length ? <CompanyChoice companies={companies} error={connector.error} onPick={(company) => connector.connect(company)} /> : null}
 
       <Panel title="Join your company">
         <View style={{ gap: space.lg }}>
@@ -514,13 +427,7 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
       {/* Never joined: deleting the company sign-in alone, with its password, whoever is signed in to the app. */}
       <AccountRow email={email} deletes="sign_in" />
 
-      <Sheet testID="server-other-company" visible={sure != null} onClose={() => setSure(null)} title={sure ? `Send to ${sure.name}?` : undefined}>
-        <Txt v="body" c={color.inkSoft}>
-          This phone is set up for {held}. Its roster, area sheets and company settings go to {sure?.name} as well as everything people sign on it.
-        </Txt>
-        <Button testID="server-other-company-yes" label={`Send to ${sure?.name ?? ''}`} onPress={() => sure && connect(sure, true)} />
-        <Button testID="server-other-company-no" label="Cancel" kind="outline" onPress={() => setSure(null)} />
-      </Sheet>
+      {connector.ask}
     </>
   );
 }
@@ -784,12 +691,10 @@ function AccountRow({ email, deletes }: { email: string; deletes?: 'sign_in' | '
 }
 
 const styles = StyleSheet.create({
-  loading: { alignItems: 'center', gap: space.sm, paddingVertical: space.xxl },
   names: { flexDirection: 'row', gap: space.md },
   company: { flexDirection: 'row', alignItems: 'flex-start', gap: space.lg },
   tagLine: { flexDirection: 'row' },
   code: { fontFamily: font.condBold, fontSize: 40, lineHeight: 46, letterSpacing: 4, color: color.ink },
-  panelNotice: { padding: space.lg },
   noticeButton: { marginTop: space.sm, alignSelf: 'flex-start', minHeight: 56, paddingHorizontal: space.lg },
   // The quiet buttons here are a full tap target for a gloved thumb.
   tall: { minHeight: 56 },

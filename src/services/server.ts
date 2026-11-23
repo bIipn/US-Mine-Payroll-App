@@ -47,9 +47,10 @@ import { safeStorage } from './storage';
  * The session (the tokens Supabase hands back at sign-in) is kept on the
  * phone in the app's own storage, so the phone stays signed in: through a
  * restart, days with no signal and an access token that has expired, which
- * supabase-js refreshes once there is signal. Nothing here signs anyone out
- * but `signOut`. A password is sent to Supabase and a passcode to crew-auth,
- * and nowhere else; neither is ever written down on the phone.
+ * supabase-js refreshes once there is signal. Nothing here signs this phone
+ * out but `signOut`; `signOutOtherSessions` signs out only the account's other
+ * sessions, after a new passcode. A password is sent to Supabase and a passcode
+ * to crew-auth, and nowhere else; neither is ever written down on the phone.
  *
  * React Native needs no URL polyfill here: Expo's runtime puts a standard URL
  * and fetch on iOS and Android (expo/src/winter), and the browser has its own.
@@ -327,6 +328,22 @@ export async function startCrewSession(session: CrewSession): Promise<Done<{ acc
   return 'account' in kept ? { ok: true, account: kept.account } : { ok: false, error: authWords(kept.problem) };
 }
 
+/**
+ * Sign out every other session of the account signed in here, and keep this phone's, so a lost or old
+ * phone stops working once a passcode is new. crew-auth's reset does this itself; the phone does it when
+ * crew-auth could not: a reset answered with others_signed_out false, or one answered passcode_changed,
+ * and then the sign-in made with the new passcode. supabase-js keeps the session on the phone for this
+ * scope, so nobody is signed out here.
+ */
+export async function signOutOtherSessions(): Promise<Done> {
+  try {
+    const { error } = await api().auth.signOut({ scope: 'others' });
+    return error ? { ok: false, error: authWords(problemOf(error)) } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: authWords(problemOf(error)) };
+  }
+}
+
 /** Hand supabase-js a session crew-auth answered: the account it is, or what went wrong. */
 async function keepSession(session: CrewSession): Promise<{ account: ServerAccount } | { problem: ServerProblem }> {
   try {
@@ -597,24 +614,5 @@ async function deleteSignedIn(fail: (answer: DeletionAnswer) => Deletion): Promi
     return settle({ kind: 'not_known', closed: [] });
   } catch {
     return settle({ kind: 'not_known', closed: [] });
-  }
-}
-
-/**
- * Whether this is the password of the company sign-in on this phone. Making a
- * supervisor's account on a phone joined with a supervisor's sign-in needs it,
- * to show the person is the sign-in's own. The password is sent to the server
- * and dropped; the session stays the same account's.
- */
-export async function checkPassword(email: string, password: string): Promise<Done> {
-  const address = email.trim().toLowerCase();
-  const noSignal = 'Making a supervisor’s account needs signal once, to check your company sign-in. Try again when you have signal.';
-  try {
-    const { data, error } = await api().auth.signInWithPassword({ email: address, password });
-    if (!error && data.session) return { ok: true };
-    if (noAnswer(problemOf(error))) return { ok: false, error: noSignal };
-    return { ok: false, error: `That is not the password for ${address}. Try again.` };
-  } catch {
-    return { ok: false, error: noSignal };
   }
 }

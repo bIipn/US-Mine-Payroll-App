@@ -122,12 +122,6 @@ export interface SignUpInput {
   lastName: string;
   email: string;
   password: string;
-  /**
-   * No longer read. On a phone joined to its company only the person its sign-in is for has an account,
-   * and signing in to the company was the proof, so a supervisor's own needs no second password
-   * (accountHere). The sign-in screen stops sending it when its connecting branch goes.
-   */
-  companyPasswordChecked?: boolean;
 }
 
 export interface InspectionDraft {

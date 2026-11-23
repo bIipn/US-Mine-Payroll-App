@@ -44,10 +44,14 @@ import { color, font } from '../theme/theme';
 import type { RootStackParamList, ScreenProps, TabParamList } from './types';
 
 /**
- * The Company account screen is in a build only when the build names a company server and is not a
- * preview, the same way the server code is (`src/services/connection.ts`): in any other build, this is
- * dropped before bundling.
+ * The company sign-in and Company account screens are in a build only when the build names a company
+ * server and is not a preview, the same way the server code is (`src/services/connection.ts`): in any
+ * other build, these are dropped before bundling.
  */
+const CompanySignInScreen: React.ComponentType<ScreenProps<'CompanySignIn'>> | null =
+  process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_KEY && process.env.EXPO_PUBLIC_DEMO === '0'
+    ? require('../screens/auth/CompanySignInScreen').CompanySignInScreen
+    : null;
 const CompanyAccountScreen: React.ComponentType<ScreenProps<'CompanyAccount'>> | null =
   process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_KEY && process.env.EXPO_PUBLIC_DEMO === '0'
     ? require('../screens/more/CompanyAccountScreen').CompanyAccountScreen
@@ -133,11 +137,15 @@ export function RootNavigator() {
           DeleteAccount, so nobody is left on a screen of a view they are no longer in. */}
       {view === 'out' ? (
         <Stack.Group navigationKey="out">
-          <Stack.Screen name="Auth" component={AuthScreen} />
-          {/* A new phone connects to its company from the sign-in screen, so it has the company's roster first. */}
-          {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="CompanyAccount" component={CompanyAccountScreen} /> : null}
-          {/* A company sign-in with no account on this phone is deleted from there too. */}
-          {CAN_CONNECT && CompanyAccountScreen ? <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} /> : null}
+          {/* A build that names a server signs in to the company, which opens the person's own account by
+              itself; any other build signs in with an account kept on the phone, as it always has. */}
+          {CAN_CONNECT && CompanySignInScreen ? (
+            <Stack.Screen name="CompanySignIn" component={CompanySignInScreen} />
+          ) : (
+            <Stack.Screen name="Auth" component={AuthScreen} />
+          )}
+          {/* A company sign-in with no account on this phone is deleted from there too: someone off the roster. */}
+          {CAN_CONNECT && CompanySignInScreen ? <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} /> : null}
         </Stack.Group>
       ) : view === 'clock_only' ? (
         <Stack.Group navigationKey="clock_only">

@@ -1,14 +1,16 @@
 // Where a person lands when their view changes under them, in a build that connects to a company server
-// (CAN_CONNECT), the build the stores get. Deleting the account on the phone ends the session, and the
-// signed-out view is the sign-in screen alone: no screen of the signed-in view is left on the stack,
-// not even DeleteAccount, which both views have. The real RootNavigator is drawn; only the screens are
-// stand-ins, each showing its own name. Everyone here is made up.
+// (CAN_CONNECT), the build the stores get. Its signed-out view opens on the company sign-in. Deleting the
+// account on the phone ends the session, and the signed-out view is the sign-in screen alone: no screen
+// of the signed-in view is left on the stack, not even DeleteAccount, which both views have. The real
+// RootNavigator is drawn; only the screens are stand-ins, each showing its own name. Everyone here is
+// made up.
 const mockScreen = (name: string) => {
   const R = require('react');
   const { Text } = require('react-native');
   return () => R.createElement(Text, null, name);
 };
 jest.mock('../../screens/auth/AuthScreen', () => ({ AuthScreen: mockScreen('Auth') }));
+jest.mock('../../screens/auth/CompanySignInScreen', () => ({ CompanySignInScreen: mockScreen('CompanySignIn') }));
 jest.mock('../../screens/clock/ClockScreen', () => ({ ClockScreen: mockScreen('Clock') }));
 jest.mock('../../screens/equipment/ChecklistCardScreen', () => ({ ChecklistCardScreen: mockScreen('ChecklistCard') }));
 jest.mock('../../screens/equipment/EndUseScreen', () => ({ EndUseScreen: mockScreen('EndUse') }));
@@ -39,8 +41,14 @@ jest.mock('../../screens/supervisor/PayrollScreen', () => ({ PayrollScreen: mock
 jest.mock('../../screens/supervisor/RosterScreen', () => ({ RosterScreen: mockScreen('Roster') }));
 jest.mock('../../screens/supervisor/SafetyLogScreen', () => ({ SafetyLogScreen: mockScreen('SafetyLog') }));
 jest.mock('../../screens/supervisor/TimeLogsScreen', () => ({ TimeLogsScreen: mockScreen('TimeLogs') }));
-// The store builds connect: CAN_CONNECT is true there. Only that constant of connection.ts is read here.
-jest.mock('../../services/connection', () => ({ CAN_CONNECT: true }));
+// The store builds connect: CAN_CONNECT is true there. Only that constant of connection.ts is read here,
+// and a test turns it off to see a build that connects to no server.
+let mockConnects = true;
+jest.mock('../../services/connection', () => ({
+  get CAN_CONNECT() {
+    return mockConnects;
+  },
+}));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 // The tab bar's icons: lucide's files are not transformed under Jest; any icon draws nothing here.
 jest.mock('../../components/icons', () => new Proxy({}, { get: (_t, name) => (name === '__esModule' ? true : () => null) }));
@@ -107,7 +115,7 @@ describe('after Delete my account deletes the account on the phone', () => {
       expect(s().deleteMyAccount({ clearPhone: false })).toEqual({ ok: true, cleared: false });
     });
     expect(s().session).toBeNull();
-    expect({ current: ref.getCurrentRoute()?.name, stack: stack() }).toEqual({ current: 'Auth', stack: ['Auth'] });
+    expect({ current: ref.getCurrentRoute()?.name, stack: stack() }).toEqual({ current: 'CompanySignIn', stack: ['CompanySignIn'] });
   });
 
   it('opens the signed-in view on its first screen after signing in again', async () => {
@@ -117,10 +125,29 @@ describe('after Delete my account deletes the account on the phone', () => {
     });
     await act(async () => ref.navigate('DeleteAccount' as never));
     await act(async () => s().signOut());
-    expect(stack()).toEqual(['Auth']);
+    expect(stack()).toEqual(['CompanySignIn']);
     await act(async () => {
       expect(s().signIn('lee@example.com', 'crusher77')).toEqual({ ok: true });
     });
     expect(stack()).toEqual(['Main']);
+  });
+});
+
+describe('the first screen', () => {
+  it('in a build with a server the first screen is the company sign-in', async () => {
+    const { ref, stack } = await mounted();
+    expect({ current: ref.getCurrentRoute()?.name, stack: stack() }).toEqual({ current: 'CompanySignIn', stack: ['CompanySignIn'] });
+  });
+
+  it('a build that connects to no server opens on the sign-in kept on the phone, as before', async () => {
+    mockConnects = false;
+    try {
+      const { ref, stack } = await mounted();
+      expect({ current: ref.getCurrentRoute()?.name, stack: stack() }).toEqual({ current: 'Auth', stack: ['Auth'] });
+      // Nothing of the company's server is a route there: no company sign-in, and no deleting a company sign-in signed out.
+      expect(ref.getRootState()?.routeNames).toEqual(['Auth']);
+    } finally {
+      mockConnects = true;
+    }
   });
 });

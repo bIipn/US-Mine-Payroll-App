@@ -23,15 +23,19 @@ describe("MineMuster's web pages in the app", () => {
     expect(WEB_PAGES.privacy).toBe('https://minemuster.com/privacy');
   });
 
-  it('are offered on the sign-in screen, on More and on Company account', () => {
-    for (const screen of ['auth/AuthScreen.tsx', 'more/MoreScreen.tsx', 'more/CompanyAccountScreen.tsx']) {
+  it('are offered on the sign-in screens, on More and on Company account', () => {
+    const signIn = ['auth/AuthScreen.tsx', 'auth/CompanySignInScreen.tsx'];
+    for (const screen of [...signIn, 'more/MoreScreen.tsx', 'more/CompanyAccountScreen.tsx']) {
       const source = fs.readFileSync(`${root}/src/screens/${screen}`, 'utf8');
       expect(source).toMatch(/<WebPageLinks\b/);
     }
-    // On the sign-in screen it is not behind a preview or a server setting: everyone sees it before signing in.
-    const auth = fs.readFileSync(`${root}/src/screens/auth/AuthScreen.tsx`, 'utf8');
-    const line = auth.split('\n').find((l) => /<WebPageLinks\b/.test(l)) ?? '';
-    expect(line.trim().startsWith('<WebPageLinks')).toBe(true);
+    // On a sign-in screen (a build with no server's, or the company sign-in of one that names a server),
+    // it is not behind a preview setting or a step of signing in: everyone sees it before signing in.
+    for (const screen of signIn) {
+      const source = fs.readFileSync(`${root}/src/screens/${screen}`, 'utf8');
+      const line = source.split('\n').find((l) => /<WebPageLinks\b/.test(l)) ?? '';
+      expect({ screen, line: line.trim().startsWith('<WebPageLinks') }).toEqual({ screen, line: true });
+    }
   });
 
   it('open in the browser, and say so when the phone cannot', async () => {

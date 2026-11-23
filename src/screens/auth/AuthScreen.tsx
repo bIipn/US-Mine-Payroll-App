@@ -1,23 +1,17 @@
-import { Building2, Eye, EyeOff, HardHat, ShieldCheck, UserX } from '../../components/icons';
-import { useNavigation } from '@react-navigation/native';
-import React, { useEffect, useRef, useState } from 'react';
+import { Eye, EyeOff, HardHat, ShieldCheck, UserX } from '../../components/icons';
+import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CompanyLogoPlate, MineMusterLogo, ProviderMark } from '../../components/Brand';
-import { Button, Divider, Field, IconButton, Notice, Row, Segmented, Sheet, Txt } from '../../components/ui';
+import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
 import { DELETED_TOAST, offRosterWords } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
-import { findOnRoster } from '../../domain/roster';
-import { receiveWords } from '../../domain/sync';
 import type { AuthProvider, Role } from '../../domain/types';
-import { CAN_CONNECT, server } from '../../services/connection';
 import { haptic } from '../../services/haptics';
-import { useSyncStatus } from '../../services/sync';
 import { useStore } from '../../store/useStore';
-import { fmtTime } from '../../util/format';
 import { color, font, radius, space } from '../../theme/theme';
 
 type Mode = 'signin' | 'signup';
@@ -36,6 +30,11 @@ const PROVIDERS: { id: Provider; name: string }[] = [
  */
 const OFFER_PROVIDERS = !SERVER;
 
+/**
+ * Signing in with an account kept on this phone, in a build that sends to no
+ * company server: a preview, or one that holds the made-up sample crew. A
+ * build that connects signs in to the company instead (CompanySignInScreen).
+ */
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
   const signIn = useStore((s) => s.signIn);
@@ -47,45 +46,10 @@ export function AuthScreen() {
   const showToast = useStore((s) => s.showToast);
   const company = useStore((s) => s.settings.company);
   const place = company.place;
-  const navigation = useNavigation();
-  // A build that connects starts with nobody on its roster: the phone connects to its company first.
-  const linked = useStore((s) => (CAN_CONNECT ? s.connectedCompany : null));
-  const receiving = useStore((s) => (CAN_CONNECT ? s.receiving : null));
-  const joinAsked = useStore((s) => (CAN_CONNECT ? s.joinAsked : null));
-  const anyone = useStore((s) => s.employees.some((e) => e.active));
-  const employees = useStore((s) => s.employees);
-  const sync = useSyncStatus();
-  const caughtUp = !!receiving?.caughtUpAt;
-  // Only while the phone is joined: once its sign-in is gone, nothing here goes by that sign-in's name.
-  const joinedAs = linked && caughtUp && receiving?.role !== 'none' ? receiving?.name ?? null : null;
-  /** A phone joined with a crew sign-in holds that person's account only: the name is theirs. */
-  const nameFixed = !!joinedAs && receiving?.role === 'employee';
 
   const [mode, setMode] = useState<Mode>('signin');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [companyPassword, setCompanyPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
-  // Once the roster has come and nobody has an account here, the account is made first, under the sign-in's name.
-  const prefilled = useRef(false);
-  useEffect(() => {
-    if (!joinedAs || prefilled.current) return;
-    prefilled.current = true;
-    setMode('signup');
-    setFirstName(joinedAs.firstName);
-    setLastName(joinedAs.lastName);
-  }, [joinedAs]);
-  /** A supervisor's own account on a phone joined with their supervisor's sign-in needs that sign-in's password, checked once. */
-  const typed = findOnRoster(employees.filter((e) => e.active), firstName, lastName);
-  const typedPerson = typed && 'person' in typed ? typed.person : null;
-  const needsCompanyPassword =
-    mode === 'signup' &&
-    !!linked?.email &&
-    receiving?.role === 'supervisor' &&
-    typedPerson?.role === 'supervisor' &&
-    !!receiving.name &&
-    !!findOnRoster([typedPerson], receiving.name.firstName, receiving.name.lastName);
   const [email, setEmailText] = useState('');
   const [password, setPasswordText] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -108,7 +72,7 @@ export function AuthScreen() {
   });
   const offRosterSheet = offRosterWords({
     email: email.trim().toLowerCase(),
-    company: company.name || linked?.name || '',
+    company: company.name,
     keepsTime: keepsTime(company),
     hasRate: typedHasRate,
   });
@@ -124,9 +88,7 @@ export function AuthScreen() {
       if (mode === 'signup') showToast(result.note ?? 'Account created. You are signed in.', result.note ? 'warn' : 'ok');
     } else {
       haptic.error();
-      // On a phone joined to a company, a new person is added in the office.
-      const notFound = linked && /couldn't find/.test(result.error);
-      setError(notFound ? `${result.error} If you are new, ask the office to add you on the dashboard’s Roster page. This phone gets it the next time it has signal.` : result.error);
+      setError(result.error);
     }
   };
 
@@ -136,23 +98,7 @@ export function AuthScreen() {
       setOffRoster(!result.ok && 'offRoster' in result);
       return finish(result);
     }
-    if (!needsCompanyPassword) return finish(signUp({ firstName, lastName, email, password }));
-    // The company sign-in's password is checked once with the server and dropped; it is never kept here.
-    if (busyRef.current || !server || !linked?.email) return;
-    if (!companyPassword) return setError(`Enter the password of this phone’s company sign-in, ${linked.email}.`);
-    busyRef.current = true;
-    setBusy(true);
-    void server.checkPassword(linked.email, companyPassword).then((checked) => {
-      busyRef.current = false;
-      setBusy(false);
-      setCompanyPassword('');
-      if (!checked.ok) {
-        haptic.error();
-        setError(checked.error);
-        return;
-      }
-      finish(signUp({ firstName, lastName, email, password, companyPasswordChecked: true }));
-    });
+    finish(signUp({ firstName, lastName, email, password }));
   };
 
   const continueWithProvider = () => {
@@ -195,36 +141,6 @@ export function AuthScreen() {
         </View>
 
         <View style={styles.form}>
-          {CAN_CONNECT ? (
-            <ConnectPanel
-              linked={linked?.name ?? null}
-              joinAsked={joinAsked?.companyName ?? (joinAsked ? 'your company' : null)}
-              joinedAs={joinedAs}
-              company={company.name || linked?.name || ''}
-              anyone={anyone}
-              second={
-                linked
-                  ? receiveWords(
-                      {
-                        connected: true,
-                        online: sync.online,
-                        role: receiving?.role ?? null,
-                        caughtUpAt: receiving?.caughtUpAt ?? null,
-                        closed: sync.trouble === 'closed',
-                        unreadable: receiving?.unreadable.length ?? 0,
-                        notTaken: 0,
-                        company: linked.name,
-                        email: linked.email ?? null,
-                      },
-                      fmtTime,
-                    )
-                  : null
-              }
-              onConnect={() => navigation.navigate('CompanyAccount')}
-            />
-          ) : null}
-          {CAN_CONNECT && !anyone ? null : (
-          <>
           <Segmented
             testID="auth-mode"
             value={mode}
@@ -241,10 +157,10 @@ export function AuthScreen() {
           {mode === 'signup' ? (
             <View style={styles.nameRow}>
               <View style={{ flex: 1 }}>
-                <Field testID="first-name" label="First name" value={firstName} onChangeText={setFirstName} autoCapitalize="words" autoComplete="given-name" editable={!nameFixed} />
+                <Field testID="first-name" label="First name" value={firstName} onChangeText={setFirstName} autoCapitalize="words" autoComplete="given-name" />
               </View>
               <View style={{ flex: 1 }}>
-                <Field testID="last-name" label="Last name" value={lastName} onChangeText={setLastName} autoCapitalize="words" autoComplete="family-name" editable={!nameFixed} />
+                <Field testID="last-name" label="Last name" value={lastName} onChangeText={setLastName} autoCapitalize="words" autoComplete="family-name" />
               </View>
             </View>
           ) : null}
@@ -267,7 +183,7 @@ export function AuthScreen() {
             secureTextEntry={!showPassword}
             autoCapitalize="none"
             autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-            hint={mode === 'signup' ? (linked ? 'A password for MineMuster on this phone, at least 8 characters.' : 'At least 8 characters.') : undefined}
+            hint={mode === 'signup' ? 'At least 8 characters.' : undefined}
             onSubmitEditing={submit}
             right={
               <IconButton
@@ -279,19 +195,6 @@ export function AuthScreen() {
             }
           />
 
-          {needsCompanyPassword && linked?.email ? (
-            <Field
-              testID="company-password"
-              label={`Company sign-in password for ${linked.email}`}
-              value={companyPassword}
-              onChangeText={setCompanyPassword}
-              secureTextEntry
-              autoCapitalize="none"
-              autoComplete="off"
-              hint="Checked once with the company’s server to show this is you. It is not kept on this phone."
-            />
-          ) : null}
-
           {error ? (
             <View style={styles.error} accessibilityLiveRegion="polite">
               <Txt v="smallStrong" c={color.red} testID="auth-error">{error}</Txt>
@@ -302,15 +205,7 @@ export function AuthScreen() {
             <Button testID="auth-delete-account" label={offRosterSheet.button} icon={UserX} kind="outline" size="md" onPress={() => setAskingDelete(true)} />
           ) : null}
 
-          <Button
-            testID="auth-submit"
-            label={mode === 'signin' ? 'Sign in' : 'Create account'}
-            size="lg"
-            kind="yellow"
-            loading={busy}
-            disabled={busy}
-            onPress={submit}
-          />
+          <Button testID="auth-submit" label={mode === 'signin' ? 'Sign in' : 'Create account'} size="lg" kind="yellow" onPress={submit} />
 
           {OFFER_PROVIDERS ? (
             <View style={styles.or}>
@@ -344,8 +239,6 @@ export function AuthScreen() {
               Only people on the company’s roster can create an account. Use your name the way payroll has it.
             </Txt>
           </View>
-          </>
-          )}
         </View>
 
         {DEMO_MODE && SAMPLE_CREW ? (
@@ -495,57 +388,3 @@ const styles = StyleSheet.create({
   },
 });
 
-/**
- * In a build that connects: the way to connect a new phone to its company, and
- * then where the company's roster stands, before anyone makes an account.
- */
-function ConnectPanel({ linked, joinAsked, joinedAs, company, anyone, second, onConnect }: {
-  linked: string | null;
-  joinAsked: string | null;
-  joinedAs: { firstName: string; lastName: string } | null;
-  company: string;
-  anyone: boolean;
-  second: { line: string; warn: boolean } | null;
-  onConnect: () => void;
-}) {
-  if (!linked) {
-    return (
-      <View style={{ gap: space.md }} testID="auth-connect">
-        <Notice
-          tone="info"
-          icon={Building2}
-          title="New phone?"
-          body="Connect this phone to your company first, so it has the company’s roster. Then make your account under your own name."
-        />
-        {joinAsked ? (
-          <Notice tone="warn" title={`Your request to join ${joinAsked} waits for a supervisor.`} body="Check on it under Connect to your company." />
-        ) : null}
-        <Button testID="auth-connect-button" label="Connect to your company" icon={Building2} kind={anyone ? 'outline' : 'yellow'} onPress={onConnect} />
-        {anyone ? null : <Txt v="small" c={color.inkSoft}>Once this phone has your company’s roster, you make your account here.</Txt>}
-      </View>
-    );
-  }
-  if (second?.warn) return <Notice tone="bo" title={second.line} />;
-  if (!anyone) {
-    const getting = second && !/last came/.test(second.line);
-    return (
-      <View testID="auth-getting">
-        <Notice
-          tone="info"
-          title={getting ? 'Getting your company’s roster, fleet and area sheets.' : 'Nothing came from the company.'}
-          body={getting ? (second?.line.startsWith('No signal') ? second.line : undefined) : 'Ask the office to check the company’s roster on the dashboard.'}
-        />
-      </View>
-    );
-  }
-  if (!joinedAs) return null;
-  return (
-    <View testID="auth-joined-as">
-      <Notice
-        tone="ok"
-        title={`${company}’s roster is on this phone. You joined as ${joinedAs.firstName} ${joinedAs.lastName}.`}
-        body="If that is not you, tell your supervisor now. Make your account under your own name."
-      />
-    </View>
-  );
-}
