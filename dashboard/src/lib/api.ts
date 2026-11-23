@@ -4,7 +4,7 @@ import type { Change } from '@app/domain/sync';
 import type { Role } from '@app/domain/types';
 
 import { billingAnswer, type BillingView } from './billing';
-import { authProblem, companyLimitWords, dataProblem, isNotFound, isTooMany, Problem, toolProblem } from './errors';
+import { acceptProblem, authProblem, companyLimitWords, dataProblem, isNotFound, isTooMany, ownProblem, Problem, toolProblem } from './errors';
 import type { Deletion, VersionRow } from './history';
 import type {
   CompanyChoice,
@@ -16,6 +16,7 @@ import type {
   RecordRow,
   RosterRow,
   RosterSignIn,
+  SupervisorInvitation,
 } from './server';
 import { inviteAddress } from './signIns';
 import { supabase } from './supabase';
@@ -329,6 +330,32 @@ export const resendInvitation = (invitationId: string) =>
 /** Delete the passcode sign-in on a row for good. The row and its records stay with the company. */
 export const deleteCrewSignIn = (rosterId: string) =>
   supervisorTools({ action: 'delete_crew_sign_in', roster_id: rosterId }, 'deleted', 'No answer came back, so it is not known whether the sign-in was deleted. Look at the row, which has been refreshed, to see whether it still shows a passcode.');
+
+// ---- Invitations to supervise, for the person invited ---------------------------------------------
+
+/** The open invitations to supervise sent to this account's confirmed email, oldest first. A server without them yet has none. */
+export async function myInvitations(): Promise<SupervisorInvitation[]> {
+  const { data, error } = await supabase.rpc('my_supervisor_invitations');
+  if (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'PGRST202' || code === '42883') return [];
+    throw ownProblem(error, 'Finding your invitations');
+  }
+  return (Array.isArray(data) ? data : data ? [data] : []) as SupervisorInvitation[];
+}
+
+/**
+ * Accept an invitation to supervise: the server puts this account, signed in as `email`, on the roster row the
+ * invitation is for, as a supervisor. The answer is the company it was for. A refusal is worded for the person
+ * invited (acceptProblem).
+ */
+export async function acceptInvitation(invitation: SupervisorInvitation, email: string): Promise<{ companyId: string; companyName: string }> {
+  const { data, error } = await supabase.rpc('accept_supervisor_invitation', { p_invitation_id: invitation.id });
+  if (error) throw acceptProblem(error, invitation.company_name, email);
+  const answer = (Array.isArray(data) ? data[0] : data) as { company_id?: unknown; company_name?: unknown } | null | undefined;
+  if (typeof answer?.company_id !== 'string') throw new Problem('The server did not say the invitation was accepted. Reload the page to see whether it was.');
+  return { companyId: answer.company_id, companyName: typeof answer.company_name === 'string' ? answer.company_name : invitation.company_name };
+}
 
 // ---- Join requests ------------------------------------------------------------------------
 

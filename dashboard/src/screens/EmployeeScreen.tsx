@@ -4,7 +4,10 @@ import type { CompanyChoice } from '../lib/server';
 import { Notice, SelectField } from '../ui/kit';
 import { TopBand } from './NoCompanyScreen';
 
-/** Someone on the crew who signs in here sees their company, and that the dashboard is for supervisors. */
+/**
+ * Someone on the crew who signs in here sees their company, and that the dashboard is for supervisors. The crew
+ * use the app, where they sign in with the company code, their name and a passcode.
+ */
 export function EmployeeScreen({ email, choice, companies, onPick }: {
   email: string;
   choice: CompanyChoice;
@@ -31,7 +34,9 @@ export function EmployeeScreen({ email, choice, companies, onPick }: {
             />
           ) : null}
           <Notice tone="info" title="This dashboard is for supervisors">
-            <p>Your hours, equipment checklists, pre shift exams and maintenance requests are in the MineMuster app on your phone. To send them to {choice.name}, open More → Company account in the app and sign in with this same email.</p>
+            <p>
+              Your hours, equipment checklists, pre shift exams and maintenance requests are in the MineMuster app on your phone, which sends them to {choice.name}. In the app you sign in with the company code, your name as it is on the roster, and a passcode you choose. The first time, tap Sign up on the app’s first screen. A supervisor of {choice.name} can give you the company code.
+            </p>
             <p style={{ marginTop: '0.5rem' }}>If you should be a supervisor of {choice.name}, ask one of its supervisors to make you one on the Roster page.</p>
           </Notice>
         </div>

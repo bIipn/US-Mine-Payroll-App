@@ -60,6 +60,20 @@ export interface RosterSignIn {
   invitation_lapsed: boolean;
 }
 
+/**
+ * An invitation to supervise, as `my_supervisor_invitations()` gives it to the person it was sent to: open, not
+ * expired, and one that accepting could still take.
+ */
+export interface SupervisorInvitation {
+  id: string;
+  company_id: string;
+  company_name: string;
+  /** The name on the roster row the invitation is for. */
+  first_name: string;
+  last_name: string;
+  expires_at: string;
+}
+
 export type JoinReason = 'not_on_roster' | 'already_claimed' | 'supervisor_row' | 'removed' | 'released' | 'ambiguous';
 export type RequestStatus = 'pending' | 'approved' | 'denied' | 'withdrawn';
 

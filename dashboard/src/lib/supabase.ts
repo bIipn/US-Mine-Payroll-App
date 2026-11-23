@@ -2,24 +2,86 @@ import { createClient } from '@supabase/supabase-js';
 
 import { SUPABASE_KEY, SUPABASE_URL } from './config';
 
+/** What the address said when the page opened. */
+export interface Arrival {
+  /** A link from a sign-in email brought a code, which the client below turns into a session. */
+  code: boolean;
+  /** Why the link signed nobody in: it has expired or was used already (otp_expired), or something else. */
+  error: string | null;
+  errorText: string | null;
+  /** The link was the invite email's (`?invited=1`, INVITE_LINK in supervisor-tools), whether or not it still worked. */
+  invited: boolean;
+}
+
+/** The two halves of the session an invite email's link brings. */
+export interface InviteTokens {
+  access_token: string;
+  refresh_token: string;
+}
+
 /**
- * What the address said when the page opened, read before the client below
- * looks at it: a link from an email comes back with a code to sign in with, or
- * with an error when the link has expired or was used already.
+ * Read the address a link opened the page at. The links from the sign-in emails bring a code, for the client
+ * below. The invite email's link is the one that brings a session itself, in the hash: Supabase Auth makes an
+ * invitation on the server, where no browser kept the other half of a code. That session is taken only when the
+ * address is an invitation's both ways (ruling R31): `invited=1` in the query, as the invite link has it
+ * (INVITE_LINK), and Auth's `type=invite` in the hash, with both halves of the session, no code and no error. Any
+ * other session in an address is left to the client, which turns it down, as it takes codes only. Anyone can write
+ * such an address, with a session of their own: that is why the first screen after it names the address it signed
+ * in as, with a way out.
+ *
+ * `tidied` is the address to put in place of this one, before the client is made, when an invitation's session
+ * is taken off it: the same address without it. Null when there is nothing to take off.
  */
-export const arrivedWith = (() => {
+export function readArrival(href: string): { arrival: Arrival; invite: InviteTokens | null; tidied: string | null } {
+  const url = new URL(href);
+  const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const params = new URLSearchParams(url.search);
+  for (const [k, v] of hash) params.set(k, v);
+  const arrival: Arrival = {
+    code: params.has('code'),
+    error: params.get('error_code') || params.get('error') || null,
+    errorText: params.get('error_description'),
+    invited: url.searchParams.get('invited') === '1',
+  };
+  const access = hash.get('access_token');
+  const refresh = hash.get('refresh_token');
+  if (!arrival.invited || hash.get('type') !== 'invite' || !access || !refresh || arrival.code || arrival.error) {
+    return { arrival, invite: null, tidied: null };
+  }
+  url.searchParams.delete('invited');
+  url.hash = '';
+  return { arrival, invite: { access_token: access, refresh_token: refresh }, tidied: url.toString() };
+}
+
+/** The invitation's session, held here in memory only, until App hands it to the client (takeInviteTokens). */
+let inviteTokens: InviteTokens | null = null;
+
+/**
+ * What the address said when the page opened, read before the client below looks at it: a link from an email
+ * comes back with a code to sign in with, with an invitation's session, or with an error when the link has
+ * expired or was used already. An invitation's session is taken off the address here, before the client is
+ * made: the client reads the address as it is made, and would turn the session down and leave it there.
+ */
+export const arrivedWith: Arrival = (() => {
   try {
-    const params = new URLSearchParams(window.location.search);
-    for (const [k, v] of new URLSearchParams(window.location.hash.replace(/^#/, ''))) params.set(k, v);
-    return {
-      code: params.has('code'),
-      error: params.get('error_code') || params.get('error') || null,
-      errorText: params.get('error_description'),
-    };
+    const { arrival, invite, tidied } = readArrival(window.location.href);
+    if (tidied) window.history.replaceState(window.history.state, '', tidied);
+    inviteTokens = invite;
+    return arrival;
   } catch {
-    return { code: false, error: null, errorText: null };
+    return { code: false, error: null, errorText: null, invited: false };
   }
 })();
+
+/**
+ * The session an invite email's link brought, handed over once, for App to set: a second call has none. It is
+ * never written anywhere, and never logged.
+ */
+export function takeInviteTokens(): InviteTokens | null {
+  const tokens = inviteTokens;
+  inviteTokens = null;
+  return tokens;
+}
 
 /**
  * One client for the whole dashboard. The session is kept by Supabase in this
@@ -28,7 +90,9 @@ export const arrivedWith = (() => {
  * Links from the sign-in emails use the PKCE flow: the link carries a code that
  * only the browser that asked for it can turn into a session, because the other
  * half of it was kept here when the email was asked for. A link someone else
- * made for their own account signs nobody in on this browser.
+ * made for their own account signs nobody in on this browser. The invite link is
+ * the one exception (readArrival), and the first screen it opens on names the
+ * address it signed in as.
  */
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -38,7 +102,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 export function tidyAddress(): void {
   try {
     const url = new URL(window.location.href);
-    for (const key of ['code', 'error', 'error_code', 'error_description', 'sb_flow_id', 'deleted']) url.searchParams.delete(key);
+    for (const key of ['code', 'error', 'error_code', 'error_description', 'sb_flow_id', 'deleted', 'invited']) url.searchParams.delete(key);
     if (/(^|&)(error|error_code|error_description|access_token)=/.test(url.hash.replace(/^#/, ''))) url.hash = '';
     window.history.replaceState(window.history.state, '', url.toString());
   } catch {

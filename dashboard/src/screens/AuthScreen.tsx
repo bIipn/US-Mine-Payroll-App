@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
-import { sendPasswordReset, signIn, signUp } from '../lib/api';
+import { sendPasswordReset, signIn, signOut, signUp } from '../lib/api';
 import { authProblem, messageOf } from '../lib/errors';
 import { supabase } from '../lib/supabase';
 import { Button, Check, Notice, tabPanelProps, Tabs, TextField } from '../ui/kit';
@@ -158,11 +158,17 @@ export function AuthScreen({ said: arrived = null, done = null, trial = false }:
   );
 }
 
-export function NewPasswordScreen({ onDone }: { onDone: () => void }) {
+/**
+ * Choose a password, once a link from an email has signed this browser in: a reset's, or, with `invitedAs`, an
+ * invitation's first (ruling R31). An invitation's screen names the address the link signed in as before anything
+ * else, with a way out, so that a link made for someone else's account is seen for what it is.
+ */
+export function NewPasswordScreen({ onDone, invitedAs }: { onDone: () => void; invitedAs?: string }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [short, setShort] = useState(false);
+  const invited = invitedAs !== undefined;
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setShort(password.length < 8);
@@ -175,12 +181,28 @@ export function NewPasswordScreen({ onDone }: { onDone: () => void }) {
     onDone();
   };
   return (
-    <Gate title="Choose a new password" say={<p>Then you are signed in.</p>}>
+    <Gate
+      tab={invited ? 'Set a password' : undefined}
+      title={invited ? `Set a password for ${invitedAs}` : 'Choose a new password'}
+      say={
+        invited ? (
+          <p>You are signed in as {invitedAs}, from the invitation in your email. Choose a password to sign in with from now on. The invitation shows next, to accept.</p>
+        ) : (
+          <p>Then you are signed in.</p>
+        )
+      }
+    >
       <form className="gate-form" onSubmit={submit} noValidate>
-        <h2 className="h2">Set a new password</h2>
-        <TextField label="New password" type="password" value={password} onChange={setPassword} autoComplete="new-password" hint="At least 8 characters." error={short ? 'Use a password of at least 8 characters.' : null} />
+        <h2 className="h2">{invited ? 'Choose a password' : 'Set a new password'}</h2>
+        <TextField label={invited ? 'Password' : 'New password'} type="password" value={password} onChange={setPassword} autoComplete="new-password" hint="At least 8 characters." error={short ? 'Use a password of at least 8 characters.' : null} />
         {error ? <Notice tone="bo" live>{error}</Notice> : null}
-        <Button kind="main" type="submit" block busy={busy}>Save the new password</Button>
+        <Button kind="main" type="submit" block busy={busy}>{invited ? 'Save the password' : 'Save the new password'}</Button>
+        {invited ? (
+          <div className="stack" style={{ gap: '0.25rem' }}>
+            <p className="small muted">Not {invitedAs}? The link was made for someone else’s account.</p>
+            <Button kind="quiet" onClick={() => void signOut()}>This is not my email: sign out</Button>
+          </div>
+        ) : null}
       </form>
     </Gate>
   );

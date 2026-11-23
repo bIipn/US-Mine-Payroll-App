@@ -72,7 +72,7 @@ describe('what the dashboard says about the phones', () => {
   });
 
   it('sends a supervisor to the Company page, not the app’s More → Company, for what that page saves', () => {
-    // "More → Company account" is the app's screen for joining a company, which is still where that is done.
+    // "More → Company account" is the app's own screen for the phone's link to its company, and may be named.
     const found = pages.flatMap((file) => {
       const text = readFileSync(file, 'utf8').replace(/\s+/g, ' ');
       return /More → Company(?! account)/.test(text) ? [path.relative(src, file)] : [];

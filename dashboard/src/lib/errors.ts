@@ -25,6 +25,7 @@ interface ErrorLike {
 }
 
 const NO_SERVER = 'Could not reach the MineMuster server. Check this computer’s connection, then try again.';
+const SIGNED_OUT = 'Your sign-in has run out. Sign in again.';
 
 /**
  * Whether a refusal can mean the account is no longer a supervisor of the
@@ -98,7 +99,7 @@ export function dataProblem(error: unknown, doing = 'That'): Problem {
       return new Problem(`${doing} is not allowed for this account. Only a supervisor of the company can do it. Sign out and back in if your role changed.`, code);
     case 'PGRST301':
     case 'PGRST303':
-      return new Problem('Your sign-in has run out. Sign in again.', code);
+      return new Problem(SIGNED_OUT, code);
     case '23514':
       return /supervisor/i.test(message) || !message
         ? new Problem('A company has to keep at least one supervisor who can sign in. Make someone else a supervisor first.', code)
@@ -123,6 +124,51 @@ export function dataProblem(error: unknown, doing = 'That'): Problem {
 }
 
 /**
+ * A refusal of a call made for the signed-in person alone, such as their own invitations: 42501 there means
+ * nobody is signed in, not a role the account lacks.
+ */
+export function ownProblem(error: unknown, doing: string): Problem {
+  const code = (error as ErrorLike | null)?.code;
+  return code === '42501' ? new Problem(SIGNED_OUT, code) : dataProblem(error, doing);
+}
+
+/**
+ * Why an invitation to supervise could not be accepted, worded for the person it was sent to, with what to do
+ * next: most often to ask the supervisor who invited them to send it again, or to change the row. Its refusals
+ * (accept_supervisor_invitation, migration 20261122000200): 42501 when nobody is signed in, PT404 for no such
+ * invitation, and PT409 with a hint; supervisor_needs_email comes from the roster's own rule, for a passcode
+ * account. Some of the same hints have the supervisor's own words, for the Roster page (hintWords).
+ */
+export function acceptProblem(error: unknown, company: string, email: string): Problem {
+  const e = (error ?? {}) as ErrorLike;
+  const code = typeof e.code === 'string' ? e.code : '';
+  if (isOffline(e)) return new Problem(NO_SERVER, 'offline');
+  if (code === '42501') return new Problem('Your sign-in has run out. Sign in again, then accept the invitation.', code);
+  if (isNotFound(code)) return new Problem(`That invitation to ${company} is no longer there. Ask the supervisor who invited you to invite you again.`, code);
+  const refused = (words: string) => new Problem(words, code || String(e.hint));
+  switch (e.hint) {
+    case 'wrong_email':
+      return refused(`That invitation to ${company} was sent to another email address, not ${email}. Sign out, then sign in with the address it was sent to.`);
+    case 'invitation_closed':
+      return refused(
+        `That invitation to ${company} has closed: it expired, was cancelled or was already accepted, or the supervisor who sent it is no longer a supervisor there. Ask a supervisor of ${company} to send it again.`,
+      );
+    case 'already_on_roster':
+      return refused(
+        `This account is already on ${company}’s roster, or was taken off it, so it cannot take another row there. Ask the supervisor who invited you to make your own row a supervisor’s on the Roster page instead.`,
+      );
+    case 'row_taken':
+      return refused(
+        `The row on ${company}’s roster that this invitation is for has changed: it was taken off the roster, or another email account holds it now. Ask the supervisor who invited you to check the row on the Roster page and send the invitation again.`,
+      );
+    case 'supervisor_needs_email':
+      return refused('This account signs in with a passcode, and a supervisor signs in with email. Sign out, then sign in with the email address the invitation was sent to.');
+    default:
+      return ownProblem(error, 'Accepting the invitation');
+  }
+}
+
+/**
  * What the supervisor-tools function answered when it did not do what was asked, as a sentence: its status and
  * `{ error, message }`. A row or invitation that is not there and one of a company the caller does not supervise
  * are the same 404, so the words do not say which.
@@ -136,7 +182,7 @@ export function toolProblem(status: number, answer: unknown): Problem {
     case 'bad_request':
       return new Problem(typeof a.message === 'string' && a.message.trim() ? a.message.trim() : 'The server could not read that. Check what was typed and try again.', error);
     case 'signed_out':
-      return new Problem('Your sign-in has run out. Sign in again.', error);
+      return new Problem(SIGNED_OUT, error);
     case 'origin_not_allowed':
       return new Problem('The server only takes this from the MineMuster dashboard. Open the dashboard from its usual address, sign in, and try again.', error);
     case 'not_found':

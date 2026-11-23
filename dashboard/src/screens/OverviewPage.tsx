@@ -58,7 +58,7 @@ export function OverviewPage() {
 
       {!shaped.lastArrived ? (
         <Notice tone="info" title="No records have arrived from the phones yet">
-          They come in once the crew’s phones are connected. Put the crew on the <A href="/roster">roster</A> and give them the company code. Each person then opens More → Company account in the MineMuster app, signs in and joins with the code. Their checklists, exams, requests{keepsTime(shaped.company) ? ' and hours' : ''} arrive here whenever the phone has signal. {EARLY_ACCESS}
+          They come in once the crew’s phones are connected. Put the crew on the <A href="/roster">roster</A> and give them the company code. Each person then opens the MineMuster app, taps Sign up on its first screen, and types the company code, their name as it is on the roster, and a passcode they choose. Their checklists, exams, requests{keepsTime(shaped.company) ? ' and hours' : ''} arrive here whenever the phone has signal. {EARLY_ACCESS}
         </Notice>
       ) : null}
 
