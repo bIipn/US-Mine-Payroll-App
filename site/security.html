@@ -95,7 +95,7 @@
           <ul class="lines">
             <li>Row level security is on for every table on the server. A person signed in reads only the records of the company they belong to.</li>
             <li>Only a company&rsquo;s supervisors change its roster, its area sheets, paid leave and the company&rsquo;s settings. Every record on the dashboard says which account sent it.</li>
-            <li>A name on the company&rsquo;s roster joins with the join code. Anyone else waits until a supervisor lets them in or turns them down.</li>
+            <li>A name on the company&rsquo;s roster joins with the company code. Anyone else waits until a supervisor lets them in or turns them down.</li>
             <li>A phone sends to one company only. Records that went to one company never go to another until a supervisor clears the phone.</li>
             <li>The app and the dashboard carry only the project&rsquo;s publishable key, which row level security holds to these rules. Neither will take a secret key.</li>
           </ul>
@@ -103,7 +103,8 @@
 
         <section aria-labelledby="signing-in">
           <h2 id="signing-in">Signing in</h2>
-          <p>Everyone signs in with an email and a password, through Supabase&rsquo;s sign-in. The password goes to Supabase and nowhere else. The links in the emails to confirm an account or reset a password sign in only the browser that asked for them.</p>
+          <p>Crew sign in to the app with the company code, their name and a passcode of 6 to 12 digits, and have no email. MineMuster&rsquo;s server makes each crew member&rsquo;s account under an address made up for it that receives no mail, and keeps the passcode only as a salted, keyed digest, never as typed. Five wrong tries in a row lock the account for 15 minutes, and ten lock it until a supervisor gives a reset code. The server also counts sign-in requests by network address, at most 30 in 10 minutes, so trying many names or codes is slowed down. These sign-ins are answered only to the phone apps, never to a web page.</p>
+          <p>Supervisors, and anyone who already signs in with email, use an email and a password, through Supabase&rsquo;s sign-in, on the dashboard and in the app under Supervisor? Sign in with email. The password goes to Supabase and nowhere else. The links in the emails to confirm an account or reset a password sign in only the browser that asked for them. A supervisor invites another supervisor by email from the Roster page, and the invited person takes the place only by accepting, signed in with that address.</p>
           <p>The dashboard keeps the person signed in with the browser&rsquo;s own storage, and signing out signs out that browser only. Its pages may exchange data only with MineMuster&rsquo;s server, and they cannot be shown inside another site&rsquo;s page.</p>
         </section>
 
