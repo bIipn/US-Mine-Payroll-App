@@ -41,7 +41,20 @@
 // It logs what happened as a code: never a token, a key, an email or an id.
 
 import { publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
-import { bearerOf, callFunction, deleteAuthUser, jsonOf, objectOf, personHeaders, readCapped, whoseToken, type Called, type Fetch } from '../_shared/http.ts';
+import {
+  bearerOf,
+  callFunction,
+  DASHBOARD_CORS as CORS,
+  DASHBOARD_ORIGIN,
+  deleteAuthUser,
+  jsonOf,
+  objectOf,
+  personHeaders,
+  readCapped,
+  whoseToken,
+  type Called,
+  type Fetch,
+} from '../_shared/http.ts';
 
 export interface DeleteDeps {
   env: Env;
@@ -52,21 +65,13 @@ export interface DeleteDeps {
 }
 
 /** The office dashboard: the one web page that may call this from a browser. */
-export const ALLOWED_ORIGIN = 'https://app.minemuster.com';
+export const ALLOWED_ORIGIN = DASHBOARD_ORIGIN;
 /** How long ago the password may have been typed, in seconds. */
 export const PASSWORD_FRESH_SECONDS = 600;
 /** How many companies one request may close. */
 export const MAX_CLOSE = 20;
 /** The largest body read, in bytes. */
 export const MAX_BODY_BYTES = 16_384;
-
-const CORS: Record<string, string> = {
-  'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Max-Age': '3600',
-  Vary: 'Origin',
-};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Statuses a gateway gives when it did not hear from the service behind it: the request may still have been carried out. */

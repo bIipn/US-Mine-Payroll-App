@@ -57,7 +57,7 @@
 // an email, a token, a key or an id.
 
 import { keyHeaders, publishableKeyFrom, serverFrom, type Env, type Server } from '../_shared/server.ts';
-import { bearerOf, callFunction, callWithin, deleteAuthUser, jsonOf, objectOf, personHeaders, readCapped, whoseToken, type Fetch } from '../_shared/http.ts';
+import { bearerOf, callFunction, callWithin, codeOf, deleteAuthUser, jsonOf, objectOf, personHeaders, readCapped, whoseToken, type Fetch } from '../_shared/http.ts';
 
 export interface CrewDeps {
   env: Env;
@@ -227,9 +227,6 @@ function sessionOf(body: Json, nowMs: number): Session | null {
   if (typeof user.id !== 'string' || !user.id || !Number.isFinite(expires)) return null;
   return { access_token, refresh_token, expires_at: Math.floor(expires), user_id: user.id };
 }
-
-/** A code from an answer, for the log (Supabase Auth's error_code, the database's SQLSTATE), only when it looks like one. */
-const codeOf = (value: unknown): string => (typeof value === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(value) ? ` ${value}` : '');
 
 /**
  * A call to Supabase Auth that did not go through: busy for its 429; whether it was answered at all (one

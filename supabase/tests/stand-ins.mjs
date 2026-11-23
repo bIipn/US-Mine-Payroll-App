@@ -7,6 +7,8 @@
 //                                             serverFunctions comes with the server key and runs as
 //                                             service_role; any other is the person's own, with the
 //                                             publishable key and their token, and runs as them. A
+//                                             function that returns a table is answered, as PostgREST
+//                                             answers one, with an array of its rows, empty for none. A
 //                                             refusal has the HTTP status PostgREST gives its SQLSTATE.
 //   GET /auth/v1/user                         whose a token is.
 //   DELETE /auth/v1/admin/users/<id>          Auth's admin delete, a hard delete: the auth.users row goes,
@@ -21,10 +23,14 @@
 //                                             over_request_rate_limit while a test turns that switch on.
 //   POST /auth/v1/logout?scope=...            signs out the token's own session (local), the other
 //                                             sessions of its account (others) or all of them (global).
-//   POST /auth/v1/invite                      a stub for supervisor-tools: it makes the account at an
-//                                             address that has none, unconfirmed, and answers it; sends
-//                                             again to an unconfirmed one; and refuses a confirmed one, 422
-//                                             email_exists. Task 7 checks this against Supabase Auth.
+//   POST /auth/v1/invite                      Auth's invite, with the server key, as Supabase Auth's source
+//                                             has it (internal/api/invite.go, the same at v2.198.0 and on
+//                                             17 November 2026): for an address with no account it makes
+//                                             one, not confirmed, and answers it; to an address whose
+//                                             account is not confirmed it sends again; and it refuses one
+//                                             that is, 422 email_exists. The body is the address and data,
+//                                             and nothing else: the link's redirect_to is read from the
+//                                             query, where Auth reads it (internal/utilities/request.go).
 //
 // Auth answers /auth/v1/user and the admin delete the way Supabase Auth v2.198.0 answered on the private
 // local scan stack (scripts/security-scan/stack), 20 November 2026: no token 401 no_authorization; a
@@ -34,7 +40,8 @@
 // refuses a key before Auth sees the request, answers 401 with a message and no error_code. An access
 // token's amr is [{ method: 'password', timestamp }], the sign-in's time, kept through every refresh of
 // its session. The admin create, the password grant, the sign-out and the invite answer in the shapes of
-// Supabase Auth's API, which no live or local Auth has been asked here.
+// Supabase Auth's API, which no live or local Auth has been asked here; the invite does what Auth's source
+// says it does.
 //
 // Each route's own checks of what was sent (the key, the method, the body) are made first; then a test's
 // own answer for the route, when it has put one in place (when); then the route's own answer, which a
@@ -102,6 +109,18 @@ export function supabase(db, { clock, serverFunctions = [], said = null }) {
   const instead = new Map();
   let tooMany = false;
   const record = (list, value) => said?.[list]?.push(value);
+  /** Whether each database function returns a table, which PostgREST answers with an array of its rows. */
+  const tables = new Map();
+  const returnsTable = async (name) => {
+    if (!tables.has(name)) {
+      const found = await db.adminRows(
+        "select p.proretset from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = $1",
+        [name],
+      );
+      tables.set(name, found.some((f) => f.proretset));
+    }
+    return tables.get(name);
+  };
 
   /**
    * An access token for an account, as Supabase Auth signs one at a password sign-in this many seconds
@@ -188,7 +207,13 @@ export function supabase(db, { clock, serverFunctions = [], said = null }) {
         as = db.as(held.sub, amr === undefined ? {} : { amr });
       }
       try {
-        const result = await as.call(name, JSON.parse(init.body || '{}'));
+        const args = JSON.parse(init.body || '{}');
+        if (await returnsTable(name)) {
+          const rows = await as.callRows(name, args);
+          call.answer = rows;
+          return json(200, rows);
+        }
+        const result = await as.call(name, args);
         call.answer = result;
         return result === '' || result === null ? json(204) : json(200, result);
       } catch (error) {

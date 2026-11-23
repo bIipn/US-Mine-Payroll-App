@@ -1,8 +1,9 @@
 // What MineMuster's edge functions share about the requests they take and the calls they make: a
-// request's body, read no further than a limit, and its bearer token; and the calls to the database and
-// to Supabase Auth, each of which counts as failed when it has no answer within CALL_TIMEOUT_MS. Supabase
-// leaves a folder named _shared out of the functions it deploys, and bundles what a function imports
-// from it. Nothing here writes a log.
+// request's body, read no further than a limit, and its bearer token; the office dashboard's origin and
+// the CORS headers of an answer to it; and the calls to the database and to Supabase Auth, each of which
+// counts as failed when it has no answer within CALL_TIMEOUT_MS. Supabase leaves a folder named _shared
+// out of the functions it deploys, and bundles what a function imports from it. Nothing here writes a
+// log; codeOf picks out what of an answer a log may hold.
 
 import { keyHeaders, type Server } from './server.ts';
 
@@ -13,6 +14,21 @@ type Json = Record<string, unknown>;
 
 /** How long one call to Supabase Auth or the database may take before it counts as failed. */
 export const CALL_TIMEOUT_MS = 15_000;
+
+/** The office dashboard: the one web page that may call MineMuster's edge functions from a browser. */
+export const DASHBOARD_ORIGIN = 'https://app.minemuster.com';
+
+/** The CORS headers of an answer to the dashboard, its preflight's included: POST, with the headers supabase-js sends. */
+export const DASHBOARD_CORS: Record<string, string> = {
+  'Access-Control-Allow-Origin': DASHBOARD_ORIGIN,
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Max-Age': '3600',
+  Vary: 'Origin',
+};
+
+/** A code from an answer, for a log (Supabase Auth's error_code, the database's SQLSTATE), only when it looks like one. */
+export const codeOf = (value: unknown): string => (typeof value === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(value) ? ` ${value}` : '');
 
 /**
  * A call that counts as failed once it has had no answer for CALL_TIMEOUT_MS: its response, or null when
