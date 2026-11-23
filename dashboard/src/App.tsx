@@ -17,6 +17,7 @@ import { AuthScreen, LinkTroubleScreen, NewPasswordScreen } from './screens/Auth
 import { EmployeeScreen } from './screens/EmployeeScreen';
 import { InvitationsNotice, InvitationsScreen } from './screens/InvitationsScreen';
 import { NoCompanyScreen } from './screens/NoCompanyScreen';
+import { AcceptedNotice } from './screens/RosterPage';
 import { Shell } from './screens/Shell';
 import { Boundary } from './ui/boundary';
 import { Button, Loading, Notice } from './ui/kit';
@@ -92,6 +93,9 @@ function Companies({ session, invited }: { session: Session; invited: boolean })
   // The invitations to supervise waiting for this account, asked after every sign-in, until the person accepts one or goes on.
   const [invitations, setInvitations] = useState<WaitingInvitations | null>(null);
   const [goneOn, setGoneOn] = useState(false);
+  // The company an invitation was just accepted for. Accepting writes the sign-in row alone: once that company is
+  // open, the person in its app roster is made a supervisor too (AcceptedNotice, said above its pages).
+  const [accepted, setAccepted] = useState<string | null>(null);
 
   /** Load the account's companies again, and open the one asked for. Says whether the account is in any company now. */
   const load = useCallback(async (open?: OpenWhich): Promise<boolean> => {
@@ -131,6 +135,7 @@ function Companies({ session, invited }: { session: Session; invited: boolean })
   const pick = (id: string) => {
     setPicked(id);
     remember(id);
+    setAccepted(null);
   };
   const notice = (problem: string | null) => (problem ? <InvitationsNotice problem={problem} onRetry={askInvitations} /> : null);
 
@@ -151,7 +156,18 @@ function Companies({ session, invited }: { session: Session; invited: boolean })
     case 'loading':
       return <Loading>Finding your companies</Loading>;
     case 'invitations':
-      return <InvitationsScreen email={email} waiting={view.waiting} invited={invited} companies={view.companies} onCompany={load} onRetry={askInvitations} onGoOn={() => setGoneOn(true)} />;
+      return (
+        <InvitationsScreen
+          email={email}
+          waiting={view.waiting}
+          invited={invited}
+          companies={view.companies}
+          onCompany={load}
+          onAccepted={setAccepted}
+          onRetry={askInvitations}
+          onGoOn={() => setGoneOn(true)}
+        />
+      );
     case 'account':
       return <AccountScreen email={email} openCompany={view.open} onPick={view.open ? pick : undefined} />;
     case 'no_company':
@@ -180,7 +196,17 @@ function Companies({ session, invited }: { session: Session; invited: boolean })
               </main>
             )}
           >
-            <Shell email={email} companies={view.companies} onPick={pick} notice={notice(view.problem)} />
+            <Shell
+              email={email}
+              companies={view.companies}
+              onPick={pick}
+              notice={
+                <>
+                  {notice(view.problem)}
+                  {accepted === view.choice.id ? <AcceptedNotice /> : null}
+                </>
+              }
+            />
           </CompanyProvider>
         </BillingProvider>
       );

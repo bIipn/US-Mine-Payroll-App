@@ -4,12 +4,18 @@ import type { Company } from '@app/domain/company';
 import type { Employee, Shift } from '@app/domain/types';
 
 import {
+  ACCEPTED_NOT_LOADED,
+  ACCEPTED_NOT_WRITTEN,
+  acceptedNotInAppWords,
+  acceptedTwoWords,
   ADD_TO_APP,
   addPeople,
+  afterAccepting,
   addToApp,
   appPeople,
   CLOCK_ANSWERS,
   clockQuestion,
+  finishAccepting,
   finishAdding,
   halfWhy,
   inAppAlready,
@@ -159,6 +165,74 @@ describe('who is in the app', () => {
     expect(w.log).toEqual(['person emp_ortiz']);
     expect(w.saved).toEqual([{ ...ortiz, role: 'supervisor' }]);
     expect(told).toEqual({ tone: 'ok', text: `Sam Ortiz is a supervisor in the app now. ${PEOPLE_SAVED}` });
+  });
+});
+
+describe('after accepting an invitation to supervise', () => {
+  const ME = 'user-quinn';
+  /** Riley J Quinn's row, which accepting the invitation made a supervisor's and put this account on. */
+  const myRow = rosterRow({ first_name: 'Riley J', last_name: 'Quinn', role: 'supervisor', user_id: ME, claimed_at: '2026-11-22T15:00:00.000Z' });
+  /** The person in the app, still crew: the acceptance wrote the sign-in row alone. */
+  const crewQuinn: Employee = { ...quinn, role: 'employee' };
+
+  it('writes the person in the app as a supervisor when the app still has them as crew, whatever sign-in the row had before', () => {
+    // A crew member made a supervisor (the row held by a passcode account until the acceptance), a crew row nobody
+    // held, a supervisor's row: the decision goes by the row and the person as they are once the company opens.
+    expect(afterAccepting(both([crewQuinn, ortiz], [myRow, ortizRow]), ME)).toEqual({ kind: 'write', person: crewQuinn, row: myRow });
+  });
+
+  it('writes nothing when the app has them as a supervisor already, or their own row is not a supervisor’s on the roster', () => {
+    expect(afterAccepting(both([quinn], [myRow]), ME)).toEqual({ kind: 'none' });
+    expect(afterAccepting(both([crewQuinn], [{ ...myRow, role: 'employee' }]), ME)).toEqual({ kind: 'none' });
+    expect(afterAccepting(both([crewQuinn], [{ ...myRow, active: false }]), ME)).toEqual({ kind: 'none' });
+    expect(afterAccepting(both([crewQuinn], [{ ...myRow, user_id: 'user-someone-else' }]), ME)).toEqual({ kind: 'none' });
+  });
+
+  it('writes nothing while the app’s roster is not loaded, and says to use Make both supervisor once it is', () => {
+    expect(afterAccepting(null, ME)).toEqual({ kind: 'say', told: { tone: 'warn', text: ACCEPTED_NOT_LOADED } });
+    expect(ACCEPTED_NOT_LOADED).toBe(
+      'You are a supervisor on the sign-in roster now. The app’s roster could not be loaded, so it was not changed. Once the records load, find your name on the Roster page: if the app still has you as crew, use Make both supervisor beside it.',
+    );
+  });
+
+  it('says what to do instead when two people in the app have the name, or nobody in the app is for the row', () => {
+    const twin: Employee = { ...crewQuinn, id: 'emp_quinn2' };
+    expect(afterAccepting(both([crewQuinn, twin], [myRow]), ME)).toEqual({ kind: 'say', told: { tone: 'warn', text: acceptedTwoWords('Riley J Quinn') } });
+    expect(acceptedTwoWords('Riley J Quinn')).toBe(
+      'You are a supervisor on the sign-in roster now. Two people in the app are called Riley J Quinn, so the app’s roster was not changed. On the Roster page, take the one who is not you off the app’s roster, then use Make both supervisor beside your name.',
+    );
+    expect(afterAccepting(both([ortiz], [myRow, ortizRow]), ME)).toEqual({ kind: 'say', told: { tone: 'warn', text: acceptedNotInAppWords('Quinn, Riley J') } });
+    expect(acceptedNotInAppWords('Quinn, Riley J')).toBe(
+      'You are a supervisor on the sign-in roster now, but nobody in the app’s roster is for your row yet. On the Roster page, use Add to the app’s roster beside Quinn, Riley J, under On the sign-in roster, not in the app.',
+    );
+  });
+
+  it('writes through Make both supervisor’s own write, and says what it says', async () => {
+    const w = writes();
+    const told = await finishAccepting(w.io, both([crewQuinn], [myRow]), ME);
+    // Only the person is written, by savePerson (saveRecord, from the version the page loaded): the row says supervisor already.
+    expect(w.log).toEqual(['person emp_quinn']);
+    expect(w.saved).toEqual([{ ...crewQuinn, role: 'supervisor' }]);
+    expect(told).toEqual(await makeBoth(writes().io, crewQuinn, 'supervisor'));
+  });
+
+  it('says a refused write was not made, with the server’s reason, and points to Make both supervisor', async () => {
+    const w = writes({ person: () => ({ ok: false, changed: false, words: NO_SIGNAL }) });
+    expect(await finishAccepting(w.io, both([crewQuinn], [myRow]), ME)).toEqual({ tone: 'bo', text: ACCEPTED_NOT_WRITTEN, why: NO_SIGNAL });
+    expect(ACCEPTED_NOT_WRITTEN).toBe(
+      'You are a supervisor on the sign-in roster now, but the app’s roster still has you as crew: it could not be changed. Use Make both supervisor beside your name on the Roster page.',
+    );
+    // A newer version of the person stopped it: the same, with what the page says of that.
+    const newer = writes({ person: () => ({ ok: false, changed: true, words: 'Someone changed it.', row: {} }) });
+    const told = await finishAccepting(newer.io, both([crewQuinn], [myRow]), ME);
+    expect(told).toMatchObject({ tone: 'warn', text: ACCEPTED_NOT_WRITTEN });
+  });
+
+  it('writes nothing, and says nothing, when there is nothing to do; with the roster not loaded it only says so', async () => {
+    const w = writes();
+    expect(await finishAccepting(w.io, both([quinn], [myRow]), ME)).toBeNull();
+    expect(await finishAccepting(w.io, null, ME)).toEqual({ tone: 'warn', text: ACCEPTED_NOT_LOADED });
+    expect(w.log).toEqual([]);
   });
 });
 

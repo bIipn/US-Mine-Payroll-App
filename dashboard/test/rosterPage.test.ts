@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Company } from '@app/domain/company';
 import type { Employee } from '@app/domain/types';
 
-import type { RecordRow, RosterRow, RosterSignIn } from '../src/lib/server';
+import type { JoinRequestRow, RecordRow, RosterRow, RosterSignIn } from '../src/lib/server';
 import { rosterRow } from './fixtures';
 
 /**
@@ -48,13 +48,13 @@ function record(kind: string, id: string, data: unknown): RecordRow {
 }
 
 /** The page as it opens on these rosters: the markup, with its tags taken out for reading. */
-function draw(people: Employee[], roster: RosterRow[], company: Company = PIT) {
+function draw(people: Employee[], roster: RosterRow[], company: Company = PIT, requests: JoinRequestRow[] = []) {
   const records = [record('settings', 'company', { company, site: null, workweekStartsOn: 0, allowSectionAllOk: true }), ...people.map((e) => record('employee', e.id, e))];
   page.ctx = {
     choice: { id: 'company-a', name: 'Test Pit A', role: 'supervisor', join_code: 'ABCD2345' },
     me: 'user-office',
     roster,
-    requests: [],
+    requests,
     notifications: [],
     company: null,
     records,
@@ -215,6 +215,26 @@ describe('the Roster page’s sign-in tools', () => {
     expect(text).toContain('Send invitation');
   });
 
+  it('explains, when the invite is opened on a row nobody holds, who gets an email and who does not, the same for every address', () => {
+    const row = rosterRow({ first_name: 'Lee', last_name: 'Park', role: 'supervisor', id: 'row-lee-park' });
+    draw([], []);
+    const html = renderToStaticMarkup(createElement(InviteForm, { row, signIn: signIn({ sign_in: 'none' }), onClose: () => {}, onChanged: async () => {} }));
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).toContain(
+      'Type Lee Park’s email address. Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. They take this row when they accept. Nothing changes until they do.',
+    );
+    expect(text).not.toContain('They get an email with a link');
+  });
+
+  it('tells the inviter of a crew member with a passcode to have everything sent from the phone first', () => {
+    const row = rosterRow({ first_name: 'Sam', last_name: 'Ortiz', id: 'row-sam-ortiz' });
+    draw([], []);
+    const html = renderToStaticMarkup(createElement(InviteForm, { row, signIn: signIn({ sign_in: 'passcode' }), onClose: () => {}, onChanged: async () => {} }));
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Before they accept, have them send everything on their phone with Send and receive now');
+    expect(text).toContain('Once they accept, they sign out of their phone and sign in again with Supervisor? Sign in with email, best when they are not on the clock.');
+  });
+
   it('opens the invite for a passcode row where it would make a supervisor, with the form open', () => {
     draw([], []);
     const row = rosterRow({ first_name: 'Sam', last_name: 'Ortiz', id: 'row-sam-ortiz' });
@@ -240,5 +260,19 @@ describe('the Roster page’s sign-in tools', () => {
     expect(cell(signIn({ invitation_id: 'inv-1', invited_email: 'lee.park@example.org' }))).toContain('Invited, waiting to accept');
     expect(cell(signIn({ invitation_id: 'inv-1', invited_email: 'lee.park@example.org' }))).toContain('lee.park@example.org');
     expect(cell(signIn({ sign_in: 'passcode', needs_reset: true }), '2026-11-03T15:00:00.000Z')).toContain('Locked, needs a reset');
+  });
+});
+
+describe('requests turned down and kept out', () => {
+  it('says under Decided requests that keeping someone out keeps out only that sign-in, and points to Make a new code', () => {
+    const denied: JoinRequestRow = {
+      id: 'req-1', company_id: 'company-a', user_id: 'user-kept-out', first_name: 'Lee', last_name: 'Park', reason: 'not_on_roster',
+      status: 'denied', decided_at: '2026-11-19T15:00:00.000Z', created_at: '2026-11-19T14:00:00.000Z',
+    };
+    const { text } = draw([], [], PIT, [denied]);
+    expect(text).toContain('Decided requests');
+    expect(text).toContain(
+      'One turned down with “keep them out” cannot be made again from that sign-in until a supervisor lets it, but anyone with the company code can make a new sign-in and ask again: Make a new code stops that.',
+    );
   });
 });

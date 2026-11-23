@@ -120,6 +120,8 @@ h1[tabindex='-1']:focus { outline: none; }
 .btn-ondark:hover:not(:disabled) { background: var(--ink-raised); border-color: var(--on-dark-muted); }
 .btn-small { min-height: 2.25rem; padding: 0.3rem 0.75rem; font-size: 0.875rem; }
 .btn-block { width: 100%; }
+/* A button that names something long, a company or an address: it wraps, where every other button keeps to one line. */
+.btn-wrap { white-space: normal; overflow-wrap: anywhere; }
 
 /* ---------- Fields ---------- */
 .field { display: grid; gap: 0.35rem; align-content: start; }
@@ -400,6 +402,8 @@ a.redtag:focus-visible { outline: none; }
 .gate-form { width: min(100%, 26rem); display: grid; gap: 1.25rem; }
 /* An email address in a heading or a line is one long word: it breaks where it must, not past the edge. */
 .gate-say, .gate-form { overflow-wrap: anywhere; }
+/* So does one in a button ("Go on as <address>"): a button keeps to one line elsewhere. */
+.gate-form .btn { white-space: normal; }
 .gate-wide { width: min(100%, 60rem); }
 .tabs { display: flex; gap: 0; border-bottom: 1.5px solid var(--rule-strong); }
 .tabs button { min-height: 2.75rem; padding: 0.4rem 1rem; border: 0; border-bottom: 3px solid transparent; margin-bottom: -1.5px; background: none; font-weight: 600; cursor: pointer; color: var(--silica); }

@@ -33,7 +33,11 @@ const {
   accountWords,
   deleteSignInQuestion,
   groupCode,
+  INVITE_SENT_ALWAYS,
   inviteAddress,
+  inviteWords,
+  KEEP_OUT_NOTE,
+  KEEP_OUT_QUESTION,
   makeSupervisorBy,
   makeSupervisorByEmail,
   RESET_CODE_HELP,
@@ -165,6 +169,49 @@ describe('the words around a reset code and a deletion', () => {
     const w = makeSupervisorByEmail('Sam Ortiz');
     expect(w).toContain('Supervisors sign in with email, not a passcode');
     expect(w).toContain('Nothing changes until they accept');
+  });
+
+  it('tells the inviter to have everything sent from the phone first, and that the phone then signs in again with email', () => {
+    expect(makeSupervisorByEmail('Sam Ortiz')).toBe(
+      'Supervisors sign in with email, not a passcode. Type Sam Ortiz’s email address to invite them. ' +
+        'Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. ' +
+        'Nothing changes until they accept: then the passcode sign-in is let go of and the row becomes a supervisor’s. ' +
+        'Before they accept, have them send everything on their phone with Send and receive now, under More, then Company account, until it says everything is sent: what is still on the phone once they accept cannot reach the company. If it cannot all go yet, wait, or cancel the invitation. ' +
+        'Once they accept, they sign out of their phone and sign in again with Supervisor? Sign in with email, best when they are not on the clock.',
+    );
+  });
+});
+
+describe('the words of an invitation, the same whether or not the address has an account (R20)', () => {
+  it('says who gets an email and who does not, and that the invitation waits for someone who already signs in', () => {
+    expect(INVITE_SENT_ALWAYS('riley.quinn@example.com')).toBe(
+      'Invitation sent to riley.quinn@example.com. Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. The invitation is good for 7 days. If the link has run out, use Send again.',
+    );
+    expect(inviteWords('Lee Park')).toBe(
+      'Type Lee Park’s email address. Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. They take this row when they accept. Nothing changes until they do.',
+    );
+  });
+
+  it('says nothing about whether an address has an account: the words differ only by the address', () => {
+    const a = INVITE_SENT_ALWAYS('riley.quinn@example.com');
+    const b = INVITE_SENT_ALWAYS('lee.park@example.org');
+    expect(a.replace('riley.quinn@example.com', '<address>')).toBe(b.replace('lee.park@example.org', '<address>'));
+    // No promise of an email to everyone, and no word of how long the email's own link lasts.
+    for (const words of [a, inviteWords('Lee Park'), makeSupervisorByEmail('Sam Ortiz')]) {
+      expect(words).not.toMatch(/They get an email|If it does not arrive/);
+      expect(words).not.toMatch(/link (is good|lasts|expires)|hours?\b|\b24\b/);
+    }
+  });
+});
+
+describe('turning a request down and keeping them out', () => {
+  it('says it keeps out only that sign-in, and points to Make a new code', () => {
+    expect(KEEP_OUT_QUESTION).toBe(
+      'This sign-in cannot ask again until a supervisor lets it. Anyone with the company code can still make a new sign-in and ask again: to stop that, use Make a new code.',
+    );
+    expect(KEEP_OUT_NOTE).toBe(
+      'A request turned down can be made again. One turned down with “keep them out” cannot be made again from that sign-in until a supervisor lets it, but anyone with the company code can make a new sign-in and ask again: Make a new code stops that.',
+    );
   });
 });
 

@@ -65,17 +65,21 @@ function troubleOut(trouble: LinkTrouble): string {
   }
 }
 
-/** Under the heading of a link's trouble, for a browser that stays signed in: what went wrong, and about the invitation. */
+/**
+ * Under the heading of a link's trouble, for a browser that stays signed in: what went wrong, and about the
+ * invitation. An invitation's link is used up once it is accepted, so the link of one accepted already, opened again
+ * in this browser, comes here too: there is then nothing to send again, and the person goes on.
+ */
 function whyKept(trouble: LinkTrouble): string {
   switch (trouble.kind) {
     case 'invite_expired':
-      return 'It has expired or was already used. Ask the supervisor who invited you to send it again.';
+      return 'It has expired or was already used. If you accepted the invitation already, go on. If not, ask the supervisor who invited you to send it again.';
     case 'invite_failed':
-      return 'Ask the supervisor who invited you to send it again.';
+      return 'If you accepted the invitation already, go on. If not, ask the supervisor who invited you to send it again.';
     case 'invite_not_set':
       return trouble.offline ? 'The MineMuster server could not be reached. Check this computer’s connection.' : 'It could not finish signing you in on this browser.';
     case 'refused':
-      return 'If it was an invitation, ask the supervisor who invited you to send it again.';
+      return 'If it was an invitation you accepted already, go on. If it was one you have not accepted, ask the supervisor who invited you to send it again.';
   }
 }
 
@@ -84,7 +88,7 @@ export function troubleKept(trouble: LinkTrouble, email: string): { title: strin
   return {
     title: trouble.kind === 'refused' ? 'That link did not sign you in' : 'That invitation link did not sign you in',
     why: whyKept(trouble),
-    next: `This browser is still signed in to that account. If the link was sent to ${email}, go on: an invitation sent there shows next. If not, sign out, then sign in with your own email, choosing a password first with Forgot your password if you have none.`,
+    next: `This browser is still signed in to that account. If the link was sent to ${email}, go on: an invitation sent there shows next, or, if you accepted it already, your companies open. If not, sign out, then sign in with your own email, choosing a password first with Forgot your password if you have none.`,
   };
 }
 
@@ -191,12 +195,14 @@ export async function readInvitations(): Promise<WaitingInvitations> {
 }
 
 /**
- * Accept an invitation, then read the companies again and open the one it was for (`reopen` is App's own). A
- * refusal is thrown, worded for the person invited, and nothing is opened.
+ * Accept an invitation, then read the companies again and open the one it was for (`reopen` is App's own). It
+ * answers that company's id: once the company is open, App has the person in its app roster made a supervisor too
+ * (AcceptedNotice). A refusal is thrown, worded for the person invited, and nothing is opened.
  */
-export async function acceptAndOpen(invitation: SupervisorInvitation, email: string, reopen: (open: OpenWhich) => Promise<unknown>): Promise<void> {
+export async function acceptAndOpen(invitation: SupervisorInvitation, email: string, reopen: (open: OpenWhich) => Promise<unknown>): Promise<string> {
   const accepted = await acceptInvitation(invitation, email);
   await reopen({ id: accepted.companyId, name: accepted.companyName });
+  return accepted.companyId;
 }
 
 /** What a signed-in account sees: `problem` is why its invitations could not be read, said above its companies. */

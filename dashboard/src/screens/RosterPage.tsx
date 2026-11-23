@@ -24,12 +24,14 @@ import {
 import { useCompany } from '../lib/company';
 import { messageOf, notAllowed } from '../lib/errors';
 import {
+  ACCEPTED_NOT_WRITTEN,
   addPeople,
   addToApp,
   appPeople,
   changeRow,
   CLOCK_ANSWERS,
   clockQuestion,
+  finishAccepting,
   finishAdding,
   inAppWords,
   keptIds,
@@ -67,6 +69,9 @@ import {
   groupCode,
   INVITE_SENT_ALWAYS,
   inviteAddress,
+  inviteWords,
+  KEEP_OUT_NOTE,
+  KEEP_OUT_QUESTION,
   makeSupervisorBy,
   makeSupervisorByEmail,
   RESET_CODE_GOOD_FOR,
@@ -252,7 +257,7 @@ function PendingRequest({ request, tell }: { request: JoinRequestRow; tell: Tell
         <Confirm
           kind="danger"
           label="Turn it down and keep them out"
-          question="This account cannot ask again until a supervisor lets it."
+          question={KEEP_OUT_QUESTION}
           yes="Keep them out"
           onYes={() => act(() => denyRequest(request.id, true))}
         />
@@ -381,6 +386,30 @@ export function ToldNotice({ told, onFinish, keepFocus }: { told: Told | null; o
       </Notice>
     </div>
   );
+}
+
+/**
+ * Once a company opens on an invitation just accepted: the acceptance made the person's sign-in row a supervisor's,
+ * and this makes the person in the app one too, through Make both supervisor's own write (`finishAccepting`, with
+ * the page's writes: `saveRecord`, from the version the page loaded), so the app does not go on treating them as
+ * crew. Run once, when the company's records have loaded (the company opens only then); what it says stays above the
+ * company's pages until another company is picked. With the records not loaded, or the write refused, it says so
+ * and points to Make both supervisor on the person's row.
+ */
+export function AcceptedNotice() {
+  const ctx = useCompany();
+  const app = useAppRoster();
+  const [told, setTold] = useState<Told | null>(null);
+  const ran = useRef(false);
+  const run = useRef({ app, me: ctx.me });
+  run.current = { app, me: ctx.me };
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    const { app: now, me } = run.current;
+    void finishAccepting(now.io, now.rosters, me).then(setTold, (e: unknown) => setTold({ tone: 'bo', text: ACCEPTED_NOT_WRITTEN, why: messageOf(e) }));
+  }, []);
+  return <ToldNotice told={told} keepFocus />;
 }
 
 const ANSWERS: { value: Answer; label: string }[] = [
@@ -774,10 +803,7 @@ export function InviteForm({ row, signIn, onClose, onChanged }: {
   const [email, setEmail] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const said = firstLast(row);
-  const explain =
-    signIn.sign_in === 'passcode'
-      ? makeSupervisorByEmail(said)
-      : `Type ${said}’s email address. They get an email with a link to the dashboard, and take this row when they accept. Nothing changes until they do.`;
+  const explain = signIn.sign_in === 'passcode' ? makeSupervisorByEmail(said) : inviteWords(said);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const checked = inviteAddress(email);
@@ -1195,7 +1221,7 @@ function Decided({ requests }: { requests: JoinRequestRow[] }) {
           </li>
         ))}
       </ul>
-      <p className="small muted">A request turned down can be made again. One turned down with “keep them out” cannot, until a supervisor lets them ask again.</p>
+      <p className="small muted">{KEEP_OUT_NOTE}</p>
     </section>
   );
 }

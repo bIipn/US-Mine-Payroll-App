@@ -85,7 +85,7 @@ const consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((l
 
 // The client module is the first to read the address, as in the browser.
 const link = await import('../src/lib/supabase');
-const { acceptAndOpen, afterAuthEvent, companiesView, loadCompanies, openingAuth, readInvitations, setInvitedSession } = await import('../src/lib/arrival');
+const { acceptAndOpen, afterAuthEvent, companiesView, loadCompanies, openingAuth, readInvitations, setInvitedSession, troubleKept } = await import('../src/lib/arrival');
 const { LinkTroubleScreen, NewPasswordScreen } = await import('../src/screens/AuthScreen');
 const { InvitationsNotice, InvitationsScreen } = await import('../src/screens/InvitationsScreen');
 const { EmployeeScreen } = await import('../src/screens/EmployeeScreen');
@@ -240,10 +240,10 @@ describe('the invite email’s link', () => {
 
     const html = renderToStaticMarkup(createElement(LinkTroubleScreen, { trouble: { kind: 'invite_expired' }, email: 'sam@example.com', onGoOn: () => {} }));
     expect(html).toMatch(/<h1[^>]*>That invitation link did not sign you in<\/h1>/);
-    expect(text(html)).toContain('It has expired or was already used. Ask the supervisor who invited you to send it again.');
+    expect(text(html)).toContain('It has expired or was already used. If you accepted the invitation already, go on. If not, ask the supervisor who invited you to send it again.');
     expect(html).toMatch(/<h2[^>]*>Signed in as sam@example.com<\/h2>/);
     expect(text(html)).toContain(
-      'This browser is still signed in to that account. If the link was sent to sam@example.com, go on: an invitation sent there shows next. If not, sign out, then sign in with your own email, choosing a password first with Forgot your password if you have none.',
+      'This browser is still signed in to that account. If the link was sent to sam@example.com, go on: an invitation sent there shows next, or, if you accepted it already, your companies open. If not, sign out, then sign in with your own email, choosing a password first with Forgot your password if you have none.',
     );
     expect(html).toMatch(/<button[^>]*>Go on as sam@example.com<\/button>/);
     expect(html).toMatch(/<button[^>]*>Sign out<\/button>/);
@@ -259,6 +259,23 @@ describe('the invite email’s link', () => {
     expect(afterAuthEvent(keptHere, 'SIGNED_OUT', null)).toEqual({ state: 'out' });
     // Another tab signs another account in: this one follows it.
     expect(afterAuthEvent(keptHere, 'SIGNED_IN', RILEY)).toEqual({ state: 'in', session: RILEY });
+  });
+
+  it('an accepted invitation’s link opened again in a browser signed in to its account says to go on, and asks for no new invitation first', () => {
+    // The link is used up once the invitation is accepted: opened again, it is expired or was used already.
+    for (const trouble of [{ kind: 'invite_expired' }, { kind: 'invite_failed' }, { kind: 'refused' }] as const) {
+      const words = troubleKept(trouble, 'riley@example.org');
+      expect(words.why).toMatch(/accepted (the invitation|already)/);
+      expect(words.why.indexOf('go on')).toBeGreaterThanOrEqual(0);
+      expect(words.why.indexOf('go on')).toBeLessThan(words.why.indexOf('send it again'));
+      expect(words.next).toContain('if you accepted it already, your companies open');
+    }
+    expect(troubleKept({ kind: 'invite_failed' }, 'riley@example.org').why).toBe(
+      'If you accepted the invitation already, go on. If not, ask the supervisor who invited you to send it again.',
+    );
+    expect(troubleKept({ kind: 'refused' }, 'riley@example.org').why).toBe(
+      'If it was an invitation you accepted already, go on. If it was one you have not accepted, ask the supervisor who invited you to send it again.',
+    );
   });
 
   it('opens on the session the invite link brought, and on what the browser keeps otherwise', async () => {
@@ -415,7 +432,8 @@ describe('signed in by the invite link', () => {
     // This browser last opened another company.
     localStorage.setItem('minemuster.office.company', 'c-a');
     server.calls = [];
-    await acceptAndOpen(INVITATION, 'riley@example.org', loadCompanies);
+    // It answers the company it opened, for the page to write the person in the app as a supervisor once it is open.
+    expect(await acceptAndOpen(INVITATION, 'riley@example.org', loadCompanies)).toBe('c-b');
     expect(server.calls.map((c) => [c.name, c.args])).toEqual([
       ['accept_supervisor_invitation', { p_invitation_id: 'inv-b' }],
       ['my_companies', undefined],

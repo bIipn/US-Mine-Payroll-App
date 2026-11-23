@@ -10,7 +10,7 @@ import { uid } from '@app/util/hash';
 import type { NewRosterRow } from './api';
 import { refusalWords } from './changes';
 import { messageOf } from './errors';
-import { matchRows, type RowMatch } from './rosterTools';
+import { matchRows, rowName as listedName, type RowMatch } from './rosterTools';
 import type { RosterRow } from './server';
 
 /**
@@ -700,6 +700,65 @@ export async function makeBoth(io: PeopleWrites, person: Employee, role: Role): 
   const result = await io.savePerson({ ...person, role }, name);
   if (!result.ok) return notSaved(result, name);
   return { tone: 'ok', text: `${name} is ${role === 'supervisor' ? 'a supervisor' : 'crew'} in the app now. ${PEOPLE_SAVED}` };
+}
+
+// ---- After accepting an invitation to supervise ----------------------------------------------------------
+
+/** Said when the app's roster is not loaded once the company opens on an invitation just accepted. */
+export const ACCEPTED_NOT_LOADED =
+  'You are a supervisor on the sign-in roster now. The app’s roster could not be loaded, so it was not changed. Once the records load, find your name on the Roster page: if the app still has you as crew, use Make both supervisor beside it.';
+
+/** Said when writing the person in the app as a supervisor was refused: `why` says why. */
+export const ACCEPTED_NOT_WRITTEN =
+  'You are a supervisor on the sign-in roster now, but the app’s roster still has you as crew: it could not be changed. Use Make both supervisor beside your name on the Roster page.';
+
+/** Said when two people in the app have the name of the row accepted onto. */
+export const acceptedTwoWords = (name: string) =>
+  `You are a supervisor on the sign-in roster now. Two people in the app are called ${name}, so the app’s roster was not changed. On the Roster page, take the one who is not you off the app’s roster, then use Make both supervisor beside your name.`;
+
+/** Said when nobody in the app is for the row accepted onto: the page's own button adds them, with the row's role. */
+export const acceptedNotInAppWords = (listed: string) =>
+  `You are a supervisor on the sign-in roster now, but nobody in the app’s roster is for your row yet. On the Roster page, use ${ADD_TO_APP} beside ${listed}, under On the sign-in roster, not in the app.`;
+
+/** What accepting an invitation to supervise leaves to do on the app's roster, once the company it was for opens. */
+export type AfterAccepting =
+  /** Nothing: the app's roster has the person as a supervisor already, or their own row is not a supervisor's. */
+  | { kind: 'none' }
+  /** Write the person in the app as a supervisor, as Make both supervisor does beside their row. */
+  | { kind: 'write'; person: Employee; row: RosterRow }
+  /** Nothing can be written from here now: what the page says instead. */
+  | { kind: 'say'; told: Told };
+
+/**
+ * Accepting an invitation writes the sign-in row alone, on the server: the row is a supervisor's and the account
+ * (`me`) is on it, while the person in the app's roster still says crew, and the app goes by that (a phone gives
+ * supervisor's powers only to a person whose record says supervisor). What is left to write is what Make both
+ * supervisor would write beside the row: the person, as a supervisor, when the row is the account's own active
+ * row, a supervisor's, and the one person in the app it is for says otherwise (`matchOf`, `roleMismatch`). It goes
+ * by the rows and people as they are once the company opens, whatever sign-in the row had before. With the app's
+ * roster not loaded (`rosters` null), or no one person for the row, nothing is written and the words say what to do.
+ */
+export function afterAccepting(rosters: Rosters | null, me: string): AfterAccepting {
+  if (!rosters) return { kind: 'say', told: { tone: 'warn', text: ACCEPTED_NOT_LOADED } };
+  const row = rosters.rows.find((r) => r.active && r.user_id === me);
+  if (!row || row.role !== 'supervisor') return { kind: 'none' };
+  const match = matchOf(rosters, row.id);
+  if (match.kind === 'person') return roleMismatch(row, match.person) ? { kind: 'write', person: match.person, row } : { kind: 'none' };
+  if (match.kind === 'two') return { kind: 'say', told: { tone: 'warn', text: acceptedTwoWords(match.name) } };
+  return { kind: 'say', told: { tone: 'warn', text: acceptedNotInAppWords(listedName(row)) } };
+}
+
+/**
+ * Write what accepting leaves to do (`afterAccepting`) through Make both supervisor's own write (`makeBoth`, with
+ * the page's writes: `saveRecord`, from the version the page loaded), and say how it went: null when there was
+ * nothing to do. A write refused says so, with the server's reason, and points to Make both supervisor.
+ */
+export async function finishAccepting(io: PeopleWrites, rosters: Rosters | null, me: string): Promise<Told | null> {
+  const next = afterAccepting(rosters, me);
+  if (next.kind === 'none') return null;
+  if (next.kind === 'say') return next.told;
+  const told = await makeBoth(io, next.person, next.row.role);
+  return told.tone === 'ok' ? told : { tone: told.tone, text: ACCEPTED_NOT_WRITTEN, why: told.text };
 }
 
 // ---- Payroll IDs -----------------------------------------------------------------------------------------

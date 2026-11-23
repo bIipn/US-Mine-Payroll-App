@@ -92,8 +92,25 @@ export const groupCode = (code: string) => (code.length === 6 ? `${code.slice(0,
 export const deleteSignInQuestion = (name: string) =>
   `This deletes ${name}’s passcode sign-in for good, and every phone signed in with it is signed out at once. The row and every record stay with the company. ${name} can sign up for the row again with the company code. Use this too when someone signed up under the wrong name.`;
 
+/**
+ * Who an invitation emails, said the same whatever the address, so the page never tells whether it has an account
+ * (R20). Supabase Auth sends no email to an address that already signs in to MineMuster: the invitation waits on
+ * the dashboard for that account, and the inviter is the one who can tell them to look.
+ */
+export const INVITE_EMAIL_WORDS =
+  'Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look.';
+
+/** The invite form's words for a row nobody holds. */
+export const inviteWords = (name: string) =>
+  `Type ${name}’s email address. ${INVITE_EMAIL_WORDS} They take this row when they accept. Nothing changes until they do.`;
+
+/**
+ * The invite form's words for a row a passcode account holds: a crew member made a supervisor. Accepting lets the
+ * passcode sign-in go, and a sign-in off the company's roster sends nothing, so the person's phone sends everything
+ * first; then they sign out of it and sign in again with email.
+ */
 export const makeSupervisorByEmail = (name: string) =>
-  `Supervisors sign in with email, not a passcode. Type ${name}’s email address to invite them. Nothing changes until they accept: then the passcode sign-in is let go of and the row becomes a supervisor’s.`;
+  `Supervisors sign in with email, not a passcode. Type ${name}’s email address to invite them. ${INVITE_EMAIL_WORDS} Nothing changes until they accept: then the passcode sign-in is let go of and the row becomes a supervisor’s. Before they accept, have them send everything on their phone with Send and receive now, under More, then Company account, until it says everything is sent: what is still on the phone once they accept cannot reach the company. If it cannot all go yet, wait, or cancel the invitation. Once they accept, they sign out of their phone and sign in again with Supervisor? Sign in with email, best when they are not on the clock.`;
 
 /**
  * Do the work, then read the sign-ins again whatever came of it: done, refused because the page was out of date,
@@ -107,8 +124,18 @@ export async function reloadAfter<T>(work: () => Promise<T>, reload: () => Promi
   }
 }
 
+/** Said once an invitation is made or sent again: the same whether or not the address has an account (R20). */
 export const INVITE_SENT_ALWAYS = (address: string) =>
-  `Invitation sent to ${address}. If it does not arrive, use Send again. It is good for 7 days.`;
+  `Invitation sent to ${address}. ${INVITE_EMAIL_WORDS} The invitation is good for 7 days. If the link has run out, use Send again.`;
+
+/**
+ * Turning a request down and keeping them out bars that sign-in alone: a crew member makes a new sign-in just by
+ * signing up again with the company code, which only a new code stops.
+ */
+export const KEEP_OUT_QUESTION =
+  'This sign-in cannot ask again until a supervisor lets it. Anyone with the company code can still make a new sign-in and ask again: to stop that, use Make a new code.';
+export const KEEP_OUT_NOTE =
+  'A request turned down can be made again. One turned down with “keep them out” cannot be made again from that sign-in until a supervisor lets it, but anyone with the company code can make a new sign-in and ask again: Make a new code stops that.';
 
 // ---- The address an invitation goes to --------------------------------------------------------------------
 

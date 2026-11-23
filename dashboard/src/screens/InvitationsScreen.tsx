@@ -40,7 +40,7 @@ export function InvitationsNotice({ problem, onRetry }: { problem: string; onRet
  * nothing to decline on the server: an invitation left alone ends by itself, and the supervisor who sent it can
  * cancel it. After an invite link with none left, it says that invitation is no longer open.
  */
-export function InvitationsScreen({ email, waiting, invited, companies, onCompany, onRetry, onGoOn }: {
+export function InvitationsScreen({ email, waiting, invited, companies, onCompany, onAccepted, onRetry, onGoOn }: {
   email: string;
   waiting: WaitingInvitations;
   /** The account came in by an invite email's link. */
@@ -49,6 +49,8 @@ export function InvitationsScreen({ email, waiting, invited, companies, onCompan
   companies: CompanyChoice[];
   /** Read the account's companies again and open one: App's own. */
   onCompany: (open?: OpenWhich) => Promise<boolean>;
+  /** An invitation to this company was accepted: App finishes it once the company is open (AcceptedNotice). */
+  onAccepted?: (companyId: string) => void;
   onRetry: () => Promise<void>;
   /** On to the companies, leaving the invitations as they are. */
   onGoOn: () => void;
@@ -62,7 +64,8 @@ export function InvitationsScreen({ email, waiting, invited, companies, onCompan
     setAccepting(invitation.id);
     setRefused(null);
     try {
-      await acceptAndOpen(invitation, email, onCompany);
+      const companyId = await acceptAndOpen(invitation, email, onCompany);
+      onAccepted?.(companyId);
       onGoOn();
     } catch (e) {
       setRefused({ id: invitation.id, words: messageOf(e) });
@@ -78,7 +81,8 @@ export function InvitationsScreen({ email, waiting, invited, companies, onCompan
           <div className="page-head">
             <div className="page-head-text">
               <h1 className="h1">{list.length === 1 ? 'An invitation to supervise' : 'Invitations to supervise'}</h1>
-              <p className="lede">
+              {/* An address is one long word: it breaks where it must, not past the edge of a phone. */}
+              <p className="lede" style={{ overflowWrap: 'anywhere' }}>
                 Signed in as {email}.{list.length ? ' Accepting an invitation makes you a supervisor of the company, under the name on its roster, and opens it here.' : ''}
               </p>
             </div>
@@ -99,14 +103,14 @@ export function InvitationsScreen({ email, waiting, invited, companies, onCompan
                 </p>
                 {refused?.id === invitation.id ? <Notice tone="bo" live>{refused.words}</Notice> : null}
                 <div className="row">
-                  <Button kind="main" busy={accepting === invitation.id} onClick={() => void accept(invitation)}>Accept and open {invitation.company_name}</Button>
+                  <Button kind="main" className="btn-wrap" busy={accepting === invitation.id} onClick={() => void accept(invitation)}>Accept and open {invitation.company_name}</Button>
                 </div>
               </section>
             );
           })}
           {list.length ? <p className="small muted">To turn an invitation down, leave it. It ends by itself when its time is up, and the supervisor who sent it can cancel it.</p> : null}
           <div className="row">
-            <Button kind={list.length ? 'quiet' : 'main'} onClick={onGoOn}>{goOnWords(companies)}</Button>
+            <Button kind={list.length ? 'quiet' : 'main'} className="btn-wrap" onClick={onGoOn}>{goOnWords(companies)}</Button>
           </div>
         </div>
       </main>
