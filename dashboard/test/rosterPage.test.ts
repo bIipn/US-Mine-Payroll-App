@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Company } from '@app/domain/company';
 import type { Employee } from '@app/domain/types';
 
-import type { RecordRow, RosterRow } from '../src/lib/server';
+import type { RecordRow, RosterRow, RosterSignIn } from '../src/lib/server';
 import { rosterRow } from './fixtures';
 
 /**
@@ -35,7 +35,7 @@ vi.stubGlobal('window', globalThis);
 
 const { shapeRecords } = await import('../src/lib/records');
 const { BillingProvider } = await import('../src/lib/billingState');
-const { RosterPage, TakenOffAsk } = await import('../src/screens/RosterPage');
+const { AccountCell, InviteForm, ResetCode, RosterPage, SignInTools, TakenOffAsk } = await import('../src/screens/RosterPage');
 
 const NOW = Date.UTC(2026, 10, 20, 18);
 const PIT: Company = { name: 'Test Pit A', state: 'NV', pay: null };
@@ -127,5 +127,111 @@ describe('the question about someone taken off the roster', () => {
     expect(html).toContain(`id="${labelledBy}">Sam Ortiz, who was taken off the roster, has this name. Bring them back, or add a new person?</span>`);
     expect(html).toMatch(/tabindex="-1"[^>]*role="group"|role="group"[^>]*tabindex="-1"/);
     expect(html).not.toMatch(/autofocus/i);
+  });
+});
+
+describe('the company code', () => {
+  it('is called the company code on the page, as the app calls it, and never the join code', () => {
+    const { html, text } = draw([], []);
+    expect(text).toContain('Company code');
+    expect(html).toContain('aria-label="Company code A B C D 2 3 4 5"');
+    expect(text).not.toMatch(/join code/i);
+  });
+});
+
+const signIn = (over: Partial<RosterSignIn> = {}): RosterSignIn => ({
+  roster_id: 'row-sam-ortiz',
+  sign_in: 'none',
+  locked_until: null,
+  needs_reset: false,
+  invitation_id: null,
+  invited_email: null,
+  invited_at: null,
+  invitation_lapsed: false,
+  ...over,
+});
+
+/** The sign-in tools of one row, as they open under it. */
+function tools(row: Pick<RosterRow, 'first_name' | 'last_name' | 'role'>, how: Partial<RosterSignIn>, inviting = false) {
+  draw([], []);
+  const full = rosterRow({ ...row, id: 'row-sam-ortiz' });
+  const html = renderToStaticMarkup(createElement(SignInTools, { row: full, signIn: signIn(how), inviting, setInviting: () => {}, onChanged: async () => {} }));
+  return { html, text: html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ') };
+}
+
+describe('the Roster page’s sign-in tools', () => {
+  const crew = { first_name: 'Sam', last_name: 'Ortiz', role: 'employee' as const };
+  const boss = { first_name: 'Lee', last_name: 'Park', role: 'supervisor' as const };
+
+  it('shows Reset passcode and Delete sign-in on a row held by a passcode account, and nothing about an invitation', () => {
+    const { text } = tools(crew, { sign_in: 'passcode' });
+    expect(text).toContain('Reset passcode');
+    expect(text).toContain('Delete sign-in');
+    expect(text).not.toMatch(/Invite|Send again|Cancel invitation/);
+  });
+
+  it('shows neither on a row nobody holds, or one an email account holds', () => {
+    for (const sign_in of ['none', 'email'] as const) {
+      const { text } = tools(crew, { sign_in });
+      expect(text).not.toMatch(/Reset passcode|Delete sign-in/);
+    }
+  });
+
+  it('shows Invite only on a supervisor’s row with no email account and no open invitation', () => {
+    expect(tools(boss, { sign_in: 'none' }).text).toContain('Invite by email');
+    expect(tools(boss, { sign_in: 'email' }).text).not.toContain('Invite');
+    expect(tools(crew, { sign_in: 'none' }).text).not.toContain('Invite');
+    expect(tools(boss, { sign_in: 'none', invitation_id: 'inv-1' }).text).not.toContain('Invite by email');
+  });
+
+  it('shows Send again and Cancel invitation on a row with an open invitation, with the reset and delete only for a passcode account', () => {
+    const open = tools(boss, { invitation_id: 'inv-1', invited_email: 'lee.park@example.org' });
+    expect(open.text).toContain('Send again');
+    expect(open.text).toContain('Cancel invitation');
+    expect(open.text).not.toMatch(/Reset passcode|Delete sign-in/);
+    const both = tools(crew, { sign_in: 'passcode', invitation_id: 'inv-1' });
+    expect(both.text).toMatch(/Reset passcode.*Delete sign-in.*Send again.*Cancel invitation/);
+  });
+
+  it('puts no question until Delete sign-in is pressed', () => {
+    expect(tools(crew, { sign_in: 'passcode' }).text).not.toContain('stay with the company');
+  });
+
+  it('explains, when the invite is opened on a passcode row, that supervisors sign in with email', () => {
+    const row = rosterRow({ first_name: 'Sam', last_name: 'Ortiz', id: 'row-sam-ortiz' });
+    draw([], []);
+    const html = renderToStaticMarkup(createElement(InviteForm, { row, signIn: signIn({ sign_in: 'passcode' }), onClose: () => {}, onChanged: async () => {} }));
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Supervisors sign in with email, not a passcode.');
+    expect(text).toContain('Nothing changes until they accept');
+    expect(html).toMatch(/<label[^>]*>Email address for Ortiz, Sam<\/label>/);
+    expect(text).toContain('Send invitation');
+  });
+
+  it('opens the invite for a passcode row where it would make a supervisor, with the form open', () => {
+    draw([], []);
+    const row = rosterRow({ first_name: 'Sam', last_name: 'Ortiz', id: 'row-sam-ortiz' });
+    const html = renderToStaticMarkup(createElement(SignInTools, { row, signIn: signIn({ sign_in: 'passcode' }), inviting: true, setInviting: () => {}, onChanged: async () => {} }));
+    expect(html.replace(/<[^>]+>/g, ' ')).toContain('Supervisors sign in with email, not a passcode.');
+  });
+
+  it('shows a reset code once, large, in groups of three, with what to tell the person', () => {
+    draw([], []);
+    const html = renderToStaticMarkup(createElement(ResetCode, { name: 'Sam Ortiz', code: '004217', onClose: () => {} }));
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).toContain('004 217');
+    expect(html).toContain('aria-label="Reset code for Sam Ortiz: 0 0 4 2 1 7"');
+    expect(text).toContain('In the app, tap Forgot your passcode? and type this code with a new passcode.');
+    expect(text).toContain('only time the code is shown');
+  });
+
+  it('words the Account column from the row’s sign-in, and shows where an invitation went', () => {
+    draw([], []);
+    const cell = (how: RosterSignIn | undefined, claimed: string | null = null) =>
+      renderToStaticMarkup(createElement(AccountCell, { signIn: how, claimedAt: claimed, now: NOW })).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(cell(signIn())).toContain('Not joined yet');
+    expect(cell(signIn({ invitation_id: 'inv-1', invited_email: 'lee.park@example.org' }))).toContain('Invited, waiting to accept');
+    expect(cell(signIn({ invitation_id: 'inv-1', invited_email: 'lee.park@example.org' }))).toContain('lee.park@example.org');
+    expect(cell(signIn({ sign_in: 'passcode', needs_reset: true }), '2026-11-03T15:00:00.000Z')).toContain('Locked, needs a reset');
   });
 });

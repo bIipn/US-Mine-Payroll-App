@@ -1,17 +1,23 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { keepsTime } from '@app/domain/company';
 import { cleanText, titleCase, type PersonName } from '@app/domain/roster';
 import type { Employee, Role } from '@app/domain/types';
-import { fmtDateTime, fmtDayShort } from '@app/util/format';
+import { fmtDateTime } from '@app/util/format';
 
 import {
   addToRoster,
   approveRequest,
+  cancelInvitation,
+  deleteCrewSignIn,
   deleteRosterRow,
   denyRequest,
+  inviteSupervisor,
   liftBar,
+  makeResetCode,
   releaseClaim,
+  resendInvitation,
+  rosterSignIns,
   rotateJoinCode,
   updateRosterRow,
 } from '../lib/api';
@@ -54,12 +60,24 @@ import {
 } from '../lib/rosterPeople';
 import { matchRows, offRosterInApp, phonesNotOnRoster, readPastedRoster, REASON_TEXT, rowName, rowsLike, type RowMatch } from '../lib/rosterTools';
 import { useFormFields, useSaver } from '../lib/save';
-import type { JoinRequestRow, RosterRow } from '../lib/server';
+import type { JoinRequestRow, RosterRow, RosterSignIn } from '../lib/server';
+import {
+  accountWords,
+  deleteSignInQuestion,
+  groupCode,
+  INVITE_SENT_ALWAYS,
+  inviteAddress,
+  makeSupervisorBy,
+  makeSupervisorByEmail,
+  RESET_CODE_GOOD_FOR,
+  RESET_CODE_HELP,
+  RESET_CODE_ONCE,
+  signInTools,
+} from '../lib/signIns';
 import { AreaField, Button, Check, Confirm, count, Ledger, Notice, Seg, SelectField, tabPanelProps, Tabs, TextField } from '../ui/kit';
 import { PageHead } from './Shell';
 
 const when = (iso: string | null | undefined) => (iso ? fmtDateTime(Date.parse(iso)) : '');
-const day = (iso: string | null | undefined) => (iso ? `${fmtDayShort(Date.parse(iso))}, ${new Date(Date.parse(iso)).getFullYear()}` : '');
 
 /** A call to the server that says what went wrong, and reloads the roster when it goes through. */
 function useAct() {
@@ -104,7 +122,7 @@ export function RosterPage() {
       <PageHead title="Roster" lede={keepsTime(ctx.shaped.company) ? ROSTER_LEDE : ROSTER_LEDE_SAFETY_ONLY} />
       {app.known ? null : (
         <Notice tone="warn" title="The app’s roster is not loaded">
-          Who is on the sign-in roster is shown, and the join code and requests work. Adding people, changing a job title, making someone a supervisor and putting someone back wait for the records, because the two rosters are written together. Taking someone off and making a supervisor crew still change the sign-in roster at once; look at the app’s roster once the records load. Load new records to try again.
+          Who is on the sign-in roster is shown, and the company code and requests work. Adding people, changing a job title, making someone a supervisor and putting someone back wait for the records, because the two rosters are written together. Taking someone off and making a supervisor crew still change the sign-in roster at once; look at the app’s roster once the records load. Load new records to try again.
         </Notice>
       )}
       <div className="pair">
@@ -138,9 +156,9 @@ function JoinCode() {
   const code = ctx.choice.join_code;
   return (
     <section className="section" aria-labelledby="code-title">
-      <h2 className="h2" id="code-title">Join code</h2>
+      <h2 className="h2" id="code-title">Company code</h2>
       <div className="code-show dark">
-        <span className="code" aria-label={code ? `Join code ${code.split('').join(' ')}` : undefined}>{code ? `${code.slice(0, 4)} ${code.slice(4)}` : 'Not shown'}</span>
+        <span className="code" aria-label={code ? `Company code ${code.split('').join(' ')}` : undefined}>{code ? `${code.slice(0, 4)} ${code.slice(4)}` : 'Not shown'}</span>
         <p>Give this code to the crew. Each person types it in the MineMuster app with their name. A name on the roster joins by itself; anyone else waits here for a supervisor.</p>
       </div>
       <div className="row">
@@ -396,6 +414,7 @@ function RosterTable() {
   const { act, error, done } = useAct();
   const { told, tell } = useTell();
   const [busy, once] = useBusy();
+  const { signIns, trouble, reload: reloadSignIns } = useSignIns();
   const [open, setOpen] = useState<string | null>(null);
   const [showOff, setShowOff] = useState(false);
   const active = ctx.roster.filter((r) => r.active);
@@ -414,6 +433,7 @@ function RosterTable() {
       {error ? <Notice tone="bo" live>{error}</Notice> : null}
       {done ? <Notice tone="ok" live>{done}</Notice> : null}
       <ToldNotice told={told} />
+      {trouble ? <Notice tone="warn" title="How each person signs in is not shown">{trouble}</Notice> : null}
       <Ledger>
           <thead>
             <tr>
@@ -462,7 +482,7 @@ function RosterTable() {
                       </span>
                     ) : null}
                   </td>
-                  <td className="small nowrap">{row.user_id ? <>Joined {day(row.claimed_at)}</> : <span className="muted">Not joined yet</span>}</td>
+                  <AccountCell signIn={signIns.get(row.id)} claimedAt={row.claimed_at} now={ctx.now} />
                   <td className="r">
                     {row.active ? (
                       <Button kind="line" small aria-expanded={isOpen} aria-controls={`change-${row.id}`} onClick={() => setOpen(isOpen ? null : row.id)}>
@@ -486,6 +506,8 @@ function RosterTable() {
                         lastSupervisor={row.role === 'supervisor' && !!row.user_id && signInSupervisors.length === 1}
                         app={app}
                         person={person}
+                        signIn={signIns.get(row.id)}
+                        reloadSignIns={reloadSignIns}
                         tell={tell}
                         act={act}
                         onDone={() => setOpen(null)}
@@ -506,13 +528,16 @@ function RosterTable() {
 }
 
 /** What can be changed about one person on the roster: kept out of the row, so the list stays a list to read. */
-function RowChanges({ row, me, lastSupervisor, app, person, tell, act, onDone }: {
+function RowChanges({ row, me, lastSupervisor, app, person, signIn, reloadSignIns, tell, act, onDone }: {
   row: RosterRow;
   me: boolean;
   lastSupervisor: boolean;
   app: AppRoster;
   /** The person in the app the row is for, when there is one. */
   person: Employee | undefined;
+  /** How the row is signed in, when the server has said. */
+  signIn: RosterSignIn | undefined;
+  reloadSignIns: () => Promise<void>;
   tell: (work: () => Promise<Told>) => Promise<boolean>;
   act: (work: () => Promise<unknown>, said?: string) => Promise<boolean>;
   onDone: () => void;
@@ -529,6 +554,7 @@ function RowChanges({ row, me, lastSupervisor, app, person, tell, act, onDone }:
   // Without the app's roster, `changeRow` and `takeOff` go ahead only with what takes a sign-in's access away.
   const change = (patch: Parameters<typeof changeRow>[3], words: string) => tell(() => changeRow(app.io, app.rosters, row, patch, words));
   const typed = cleanText(title);
+  const [inviting, setInviting] = useState(false);
   return (
     <div className="row-changes">
       <form
@@ -557,6 +583,9 @@ function RowChanges({ row, me, lastSupervisor, app, person, tell, act, onDone }:
               onYes={() => change({ role: 'employee' }, `${said} is now crew.`)}
             />
           )
+        ) : makeSupervisorBy(signIn) === 'invite' ? (
+          // A passcode account cannot be a supervisor's: a supervisor signs in with email, so they are invited.
+          <Button kind="line" small aria-expanded={inviting} onClick={() => setInviting(true)}>Make a supervisor<span className="sr-only">: {name}</span></Button>
         ) : (
           <Confirm
             small
@@ -597,8 +626,184 @@ function RowChanges({ row, me, lastSupervisor, app, person, tell, act, onDone }:
           />
         )}
       </div>
+      <SignInTools row={row} signIn={signIn} inviting={inviting} setInviting={setInviting} onChanged={reloadSignIns} />
       {lastSupervisor ? <p className="small muted">{onlyOne}</p> : null}
     </div>
+  );
+}
+
+// ---- How each person signs in --------------------------------------------------------------------------
+
+/**
+ * How every row of the company is signed in (roster_sign_ins), read again whenever the roster is. A read that
+ * fails is said, and the page keeps what it had; the Account column then says only joined or not.
+ */
+function useSignIns() {
+  const ctx = useCompany();
+  const [signIns, setSignIns] = useState<Map<string, RosterSignIn>>(new Map());
+  const [trouble, setTrouble] = useState<string | null>(null);
+  const turn = useRef(0);
+  const companyId = ctx.choice.id;
+  const reload = useCallback(async () => {
+    const mine = ++turn.current;
+    try {
+      const rows = await rosterSignIns(companyId);
+      if (mine !== turn.current) return;
+      setSignIns(new Map(rows.map((r) => [r.roster_id, r])));
+      setTrouble(null);
+    } catch (e) {
+      if (mine === turn.current) setTrouble(messageOf(e));
+    }
+  }, [companyId]);
+  useEffect(() => {
+    void reload();
+  }, [reload, ctx.roster]);
+  return { signIns, trouble, reload };
+}
+
+/** The Account column: how the row is held, and where an open invitation went. */
+export function AccountCell({ signIn, claimedAt, now }: { signIn: RosterSignIn | undefined; claimedAt: string | null; now: number }) {
+  const words = accountWords(signIn, claimedAt, now);
+  return (
+    <td className="small">
+      {words === 'Not joined yet' ? <span className="muted">{words}</span> : words}
+      {signIn?.invitation_id && signIn.invited_email ? <span className="under">Sent to {signIn.invited_email}{signIn.invited_at ? `, ${when(signIn.invited_at)}` : ''}</span> : null}
+    </td>
+  );
+}
+
+/** A reset code, shown once: large, in groups, and read digit by digit by a screen reader. */
+export function ResetCode({ name, code, onClose }: { name: string; code: string; onClose: () => void }) {
+  return (
+    <div className="code-show dark" role="group" aria-label={`Reset code for ${name}`}>
+      <span className="code" aria-label={`Reset code for ${name}: ${code.split('').join(' ')}`}>{groupCode(code)}</span>
+      <p>{RESET_CODE_HELP}</p>
+      <p>{RESET_CODE_GOOD_FOR}</p>
+      <p>{RESET_CODE_ONCE}</p>
+      <div className="row"><Button kind="ink" small onClick={onClose}>Done, I have given it</Button></div>
+    </div>
+  );
+}
+
+/**
+ * The tools for how a row is signed in, under the row's other changes: a reset code and deleting a passcode
+ * account's sign-in, an invitation by email, and sending an open invitation again or cancelling it. Which of them a
+ * row gets is `signInTools`. Each reloads the sign-ins after it, and the roster, which `useAct` does.
+ */
+export function SignInTools({ row, signIn, inviting, setInviting, onChanged }: {
+  row: RosterRow;
+  signIn: RosterSignIn | undefined;
+  inviting: boolean;
+  setInviting: (open: boolean) => void;
+  onChanged: () => Promise<void>;
+}) {
+  const { act, error, done } = useAct();
+  const [busy, once] = useBusy();
+  const [code, setCode] = useState<string | null>(null);
+  const tools = signInTools(row, signIn);
+  const name = rowName(row);
+  const said = firstLast(row);
+  const address = signIn?.invited_email ?? 'the address';
+  // A new action puts away the code of the last: a code is shown once.
+  const run = (work: () => Promise<unknown>, words?: string) =>
+    once(() => {
+      setCode(null);
+      return act(async () => {
+        await work();
+        await onChanged();
+      }, words);
+    });
+  if (!signIn || (!Object.values(tools).some(Boolean) && !inviting && !error && !done && !code)) return null;
+  return (
+    <div className="stack" style={{ gap: '0.75rem' }}>
+      <div className="row">
+        {tools.resetPasscode ? (
+          <Button kind="line" small busy={busy} onClick={() => void run(async () => setCode(await makeResetCode(row.id)))}>
+            Reset passcode<span className="sr-only">: {name}</span>
+          </Button>
+        ) : null}
+        {tools.deleteSignIn ? (
+          <Confirm
+            small
+            kind="danger"
+            label="Delete sign-in"
+            name={`Delete the passcode sign-in of ${said}`}
+            question={deleteSignInQuestion(said)}
+            yes="Delete the sign-in"
+            onYes={() => run(() => deleteCrewSignIn(row.id), `${said}’s passcode sign-in is deleted. The row and every record stay with the company, and ${said} can sign up for the row again.`)}
+          />
+        ) : null}
+        {tools.invite && !inviting ? (
+          <Button kind="line" small aria-expanded={false} onClick={() => setInviting(true)}>Invite by email<span className="sr-only">: {name}</span></Button>
+        ) : null}
+        {tools.sendAgain && signIn.invitation_id ? (
+          <Button kind="line" small busy={busy} onClick={() => void run(() => resendInvitation(signIn.invitation_id as string), INVITE_SENT_ALWAYS(address))}>
+            Send again<span className="sr-only">: invitation to {name}</span>
+          </Button>
+        ) : null}
+        {tools.cancelInvitation && signIn.invitation_id ? (
+          <Confirm
+            small
+            label="Cancel invitation"
+            name={`Cancel the invitation to ${address}`}
+            question={`${address} can no longer accept it. Nothing about ${said}’s row changes.`}
+            yes="Cancel the invitation"
+            no="Keep the invitation"
+            onYes={() => run(() => cancelInvitation(signIn.invitation_id as string), 'The invitation is cancelled.')}
+          />
+        ) : null}
+      </div>
+      {error ? <Notice tone="bo" live>{error}</Notice> : null}
+      {done ? <Notice tone="ok" live>{done}</Notice> : null}
+      {code ? <ResetCode name={said} code={code} onClose={() => setCode(null)} /> : null}
+      {inviting ? <InviteForm row={row} signIn={signIn} onClose={() => setInviting(false)} onChanged={onChanged} /> : null}
+    </div>
+  );
+}
+
+/**
+ * The email address an invitation goes to. It is checked here first, as strictly as the database and Supabase
+ * Auth, and the answer is always "sent", whether or not the address has an account, so the page never tells which.
+ */
+export function InviteForm({ row, signIn, onClose, onChanged }: {
+  row: RosterRow;
+  signIn: RosterSignIn;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const { act, error, done } = useAct();
+  const [busy, once] = useBusy();
+  const [email, setEmail] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const said = firstLast(row);
+  const explain =
+    signIn.sign_in === 'passcode'
+      ? makeSupervisorByEmail(said)
+      : `Type ${said}’s email address. They get an email with a link to the dashboard, and take this row when they accept. Nothing changes until they do.`;
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const checked = inviteAddress(email);
+    setProblem(checked.ok ? null : checked.why);
+    if (!checked.ok) return;
+    void once(async () => {
+      const sent = await act(async () => {
+        await inviteSupervisor(row.id, checked.address);
+        await onChanged();
+      }, INVITE_SENT_ALWAYS(checked.address));
+      if (sent) setEmail('');
+    });
+  };
+  return (
+    <form className="stack" style={{ gap: '0.5rem' }} onSubmit={submit} noValidate>
+      <p className="small">{explain}</p>
+      <div className="row" style={{ alignItems: 'end' }}>
+        <TextField label={`Email address for ${rowName(row)}`} value={email} onChange={setEmail} type="email" inputMode="email" autoComplete="off" maxLength={254} error={problem} />
+        <Button kind="ink" small type="submit" busy={busy}>Send invitation</Button>
+        <Button kind="line" small onClick={onClose}>Close</Button>
+      </div>
+      {error ? <Notice tone="bo" live>{error}</Notice> : null}
+      {done ? <Notice tone="ok" live>{done}</Notice> : null}
+    </form>
   );
 }
 
@@ -776,7 +981,7 @@ function NotInApp() {
   return (
     <section className="section" aria-labelledby="not-in-app-title">
       <h2 className="h2" id="not-in-app-title" tabIndex={-1}>On the sign-in roster, not in the app</h2>
-      <p className="section-note">They can join the company with the join code, but no phone has them on its roster until they are on the app’s roster too.</p>
+      <p className="section-note">They can join the company with the company code, but no phone has them on its roster until they are on the app’s roster too.</p>
       <ToldNotice told={told} />
       {rows.length ? (
         <Ledger>

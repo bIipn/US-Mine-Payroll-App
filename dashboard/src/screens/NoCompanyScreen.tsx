@@ -105,7 +105,7 @@ function StartCompany({ onCompany }: { onCompany: OnCompany }) {
       <section className="panel" aria-labelledby="start-title">
         <h2 className="h2" id="start-title">{cleanText(name)} is started</h2>
         <div className="code-show">
-          <span className="small" style={{ color: 'var(--on-dark-muted)' }}>Join code</span>
+          <span className="small" style={{ color: 'var(--on-dark-muted)' }}>Company code</span>
           <span className="code">{made.joinCode.slice(0, 4)} {made.joinCode.slice(4)}</span>
           <p>Give this code to the crew. Each person types it in the MineMuster app with their name. Put them on the roster first, and they join by themselves; anyone else waits for you to let them in.</p>
         </div>
@@ -172,7 +172,7 @@ function JoinWithCode({ onCompany, onAsked }: { onCompany: OnCompany; onAsked: (
     setError(null);
     setResult(null);
     setStill(null);
-    if (typed.length !== 8) return setError('A join code is 8 letters and numbers. Type it the way the supervisor gave it.');
+    if (typed.length !== 8) return setError('A company code is 8 letters and numbers. Type it the way the supervisor gave it.');
     if (!cleanText(first) || !cleanText(last)) return setError('Give your first and last name, the way they are on the roster.');
     setBusy(true);
     try {
@@ -212,7 +212,7 @@ function JoinWithCode({ onCompany, onAsked }: { onCompany: OnCompany; onAsked: (
         <p className="muted small">Ask a supervisor for the code. It is 8 letters and numbers.</p>
       </div>
       <TextField
-        label="Join code"
+        label="Company code"
         value={code}
         onChange={setCode}
         className="input-code"

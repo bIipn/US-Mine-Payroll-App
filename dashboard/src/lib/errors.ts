@@ -18,6 +18,7 @@ export class Problem extends Error {
 
 interface ErrorLike {
   code?: unknown;
+  hint?: unknown;
   message?: unknown;
   status?: unknown;
   name?: unknown;
@@ -61,12 +62,35 @@ export function authProblem(error: unknown): Problem {
   }
 }
 
+/**
+ * What a refusal that carries a hint means, for the sign-in tools: the database's hint on a PT409 or a 22023, or
+ * the `error` of the supervisor-tools function, which is that hint. Empty for any other.
+ */
+export function hintWords(hint: unknown): string {
+  switch (hint) {
+    case 'supervisor_needs_email':
+      return 'A supervisor signs in with email, not a passcode. Reload the page, then use Make a supervisor on this row to invite them by email.';
+    case 'row_taken':
+      return 'That row is taken off the roster, or an email account holds it, so it cannot be invited. Reload the page to see where it stands.';
+    case 'invitation_closed':
+      return 'That invitation was already accepted or cancelled. Reload the page to see where it stands.';
+    case 'not_a_passcode_account':
+      return 'That row is not held by a passcode account any more. Reload the page to see where it stands.';
+    case 'email_invalid':
+      return 'Type the email address to send the invitation to, like name@example.com.';
+    default:
+      return '';
+  }
+}
+
 /** A Supabase database or function error as a sentence. */
 export function dataProblem(error: unknown, doing = 'That'): Problem {
   const e = (error ?? {}) as ErrorLike;
   const code = typeof e.code === 'string' ? e.code : '';
   const message = typeof e.message === 'string' ? e.message : '';
   if (isOffline(e)) return new Problem(NO_SERVER, 'offline');
+  const byHint = hintWords(e.hint);
+  if (byHint) return new Problem(byHint, code || (e.hint as string));
   if (isNotFound(code)) return new Problem(`${doing} did not work: it was not found. Someone may have changed it. Reload the page.`, code);
   if (isWrongState(code)) return new Problem(`${doing} did not work: it has already been done or decided. Reload the page to see where it stands.`, code);
   switch (code) {
@@ -95,6 +119,34 @@ export function dataProblem(error: unknown, doing = 'That'): Problem {
         `${doing} did not work${message ? ` (the server said: ${message.replace(/[.\s]+$/, '')})` : ''}. Try again in a minute. If it keeps happening, tell whoever runs MineMuster for your company.`,
         code || undefined,
       );
+  }
+}
+
+/**
+ * What the supervisor-tools function answered when it did not do what was asked, as a sentence: its status and
+ * `{ error, message }`. A row or invitation that is not there and one of a company the caller does not supervise
+ * are the same 404, so the words do not say which.
+ */
+export function toolProblem(status: number, answer: unknown): Problem {
+  const a = (answer && typeof answer === 'object' ? answer : {}) as { error?: unknown; message?: unknown };
+  const error = typeof a.error === 'string' ? a.error : '';
+  const byHint = hintWords(error);
+  if (byHint) return new Problem(byHint, error);
+  switch (error) {
+    case 'bad_request':
+      return new Problem(typeof a.message === 'string' && a.message.trim() ? a.message.trim() : 'The server could not read that. Check what was typed and try again.', error);
+    case 'signed_out':
+      return new Problem('Your sign-in has run out. Sign in again.', error);
+    case 'origin_not_allowed':
+      return new Problem('The server only takes this from the MineMuster dashboard. Open the dashboard from its usual address, sign in, and try again.', error);
+    case 'not_found':
+      return new Problem('That was not found, or it is not one of your company’s. Reload the page to see where it stands.', error);
+    case 'too_large':
+      return new Problem('That was too much to send. Shorten what was typed and try again.', error);
+    case 'not_set_up':
+      return new Problem('The server is not set up for this yet. Try again later, and if it keeps happening, tell whoever runs MineMuster for your company.', error);
+    default:
+      return new Problem('That did not work on the server. Try again in a minute. If it keeps happening, tell whoever runs MineMuster for your company.', error || String(status));
   }
 }
 

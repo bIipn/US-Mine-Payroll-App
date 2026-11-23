@@ -699,7 +699,11 @@ $$;
 --                 whether or not it could still be accepted (its row taken,
 --                 or its inviter no longer a supervisor): the Roster page
 --                 words a row by its account first, and sending it again
---                 vouches for it anew.
+--                 vouches for it anew;
+--   invitation_lapsed
+--                 true when that invitation's inviter no longer vouches for it
+--                 (still_a_supervisor), so that it cannot be accepted until a
+--                 supervisor sends it again; false with no invitation.
 -- It refuses as company_billing does: 42501 when nobody is signed in, and
 -- PT404 for a company the caller does not supervise, or none.
 create function public.roster_sign_ins(p_company_id uuid)
@@ -710,7 +714,8 @@ returns table (
   needs_reset boolean,
   invitation_id uuid,
   invited_email text,
-  invited_at timestamptz
+  invited_at timestamptz,
+  invitation_lapsed boolean
 )
 language plpgsql
 stable
@@ -739,7 +744,8 @@ begin
            coalesce(l.wrong_in_a_row >= 10, false),
            i.id,
            i.email,
-           i.created_at
+           i.created_at,
+           i.id is not null and not public.still_a_supervisor(i.invited_by, r.company_id)
     from public.roster r
     left join public.crew_logins l on l.user_id = r.user_id
     left join public.supervisor_invitations i

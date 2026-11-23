@@ -32,6 +32,15 @@ describe('errors', () => {
     for (const code of ['PT409', '55000', '22023', '23505', 'PGRST202', 'PGRST301', 'offline', 'timeout', '', undefined]) expect(mayHaveLostRole(code)).toBe(false);
   });
 
+  it('words a refusal by its hint, for the sign-in tools, and keeps the code the server sent', () => {
+    const problem = dataProblem({ code: 'PT409', hint: 'supervisor_needs_email', message: 'A supervisor signs in with email, not a passcode.' }, 'Changing the roster');
+    expect(problem.message).toBe('A supervisor signs in with email, not a passcode. Reload the page, then use Make a supervisor on this row to invite them by email.');
+    expect(problem.code).toBe('PT409');
+    expect(dataProblem({ code: 'PT409', hint: 'invitation_closed' }, 'Cancelling the invitation').message).toMatch(/already accepted or cancelled/);
+    // A refusal with no hint is worded as before.
+    expect(dataProblem({ code: 'PT409' }, 'Cancelling the invitation').message).toMatch(/already been done or decided/);
+  });
+
   it('says what went wrong signing in', () => {
     expect(authProblem({ code: 'invalid_credentials', message: 'Invalid login credentials' }).message).toBe(
       'That email and password do not match an account. Check them, or create an account.',

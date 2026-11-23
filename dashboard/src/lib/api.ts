@@ -4,7 +4,7 @@ import type { Change } from '@app/domain/sync';
 import type { Role } from '@app/domain/types';
 
 import { billingAnswer, type BillingView } from './billing';
-import { authProblem, companyLimitWords, dataProblem, isNotFound, isTooMany, Problem } from './errors';
+import { authProblem, companyLimitWords, dataProblem, isNotFound, isTooMany, Problem, toolProblem } from './errors';
 import type { Deletion, VersionRow } from './history';
 import type {
   CompanyChoice,
@@ -15,7 +15,9 @@ import type {
   NotificationRow,
   RecordRow,
   RosterRow,
+  RosterSignIn,
 } from './server';
+import { inviteAddress } from './signIns';
 import { supabase } from './supabase';
 
 /**
@@ -260,6 +262,73 @@ export async function rotateJoinCode(companyId: string): Promise<string> {
   if (error) throw dataProblem(error, 'Making a new code');
   return data as string;
 }
+
+// ---- Sign-in tools: passcodes and invitations ---------------------------------------------------
+
+/** How each row of the company is signed in: for a supervisor of it (roster_sign_ins). */
+export async function rosterSignIns(companyId: string): Promise<RosterSignIn[]> {
+  const { data, error } = await supabase.rpc('roster_sign_ins', { p_company_id: companyId });
+  if (error) throw dataProblem(error, 'Loading how each person signs in');
+  return (Array.isArray(data) ? data : data ? [data] : []) as RosterSignIn[];
+}
+
+/** A 6-digit code, good for 30 minutes and 5 tries, to reset a passcode account's passcode. Shown once. */
+export async function makeResetCode(rosterId: string): Promise<string> {
+  const { data, error } = await supabase.rpc('make_passcode_reset_code', { p_roster_id: rosterId });
+  if (error) throw dataProblem(error, 'Making a reset code');
+  if (typeof data !== 'string' || !/^\d{6}$/.test(data)) throw new Problem('The server did not give a reset code. Try again.');
+  return data;
+}
+
+export async function cancelInvitation(invitationId: string): Promise<void> {
+  const { error } = await supabase.rpc('cancel_supervisor_invitation', { p_invitation_id: invitationId });
+  if (error) throw dataProblem(error, 'Cancelling the invitation');
+}
+
+/** How long a call to supervisor-tools may take: it asks the database, then Supabase Auth. */
+export const TOOLS_TIMEOUT_MS = 30_000;
+
+/**
+ * Call supervisor-tools with this supervisor's session, the way delete-account is called. It answers `status`
+ * or says why not; an answer that never came leaves it open whether the request got through, and says so.
+ */
+async function supervisorTools(body: Record<string, string>, status: 'sent' | 'deleted', unknown: string): Promise<void> {
+  let error: unknown;
+  let data: unknown;
+  try {
+    ({ data, error } = await supabase.functions.invoke('supervisor-tools', { body, timeout: TOOLS_TIMEOUT_MS }));
+  } catch (e) {
+    error = e;
+  }
+  if (!error) {
+    if ((data as { status?: unknown } | null)?.status === status) return;
+    throw new Problem('The server answered in a way this page does not understand. Reload the page to see where it stands.');
+  }
+  const reply = (error as { context?: unknown }).context as { status?: unknown; json?: () => Promise<unknown> } | undefined;
+  if ((error as { name?: unknown }).name === 'FunctionsHttpError' && reply && typeof reply.status === 'number') {
+    const answer = typeof reply.json === 'function' ? await reply.json().catch(() => null) : null;
+    throw toolProblem(reply.status, answer);
+  }
+  throw new Problem(unknown, 'unknown');
+}
+
+/**
+ * Invite a supervisor by email onto a roster row. The address is checked here first, as strictly as the database and
+ * Supabase Auth, so that it is not recorded with no email going out. The server answers the same whether or not
+ * the address has an account, so neither does the page.
+ */
+export async function inviteSupervisor(rosterId: string, email: string): Promise<void> {
+  const checked = inviteAddress(email);
+  if (!checked.ok) throw new Problem(checked.why, 'email_invalid');
+  await supervisorTools({ action: 'invite', roster_id: rosterId, email: checked.address }, 'sent', 'No answer came back, so it is not known whether the invitation was made. Reload the page and look at the row, then try again if it is not there.');
+}
+
+export const resendInvitation = (invitationId: string) =>
+  supervisorTools({ action: 'resend', invitation_id: invitationId }, 'sent', 'No answer came back, so it is not known whether the email went. Try Send again in a minute.');
+
+/** Delete the passcode sign-in on a row for good. The row and its records stay with the company. */
+export const deleteCrewSignIn = (rosterId: string) =>
+  supervisorTools({ action: 'delete_crew_sign_in', roster_id: rosterId }, 'deleted', 'No answer came back, so it is not known whether the sign-in was deleted. Reload the page to see whether the row still shows a passcode.');
 
 // ---- Join requests ------------------------------------------------------------------------
 

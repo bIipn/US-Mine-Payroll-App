@@ -745,7 +745,7 @@ describe('roster_sign_ins', () => {
     const ahead = aheadOf(joLock);
     assert.ok(ahead > 14 * MINUTE && ahead <= 15 * MINUTE + 1000, `locked for ${Math.round(ahead / 1000)} s more`);
     const invitedAt = async (id) => (await invitationOf(id)).created_at;
-    const none = { sign_in: 'none', locked_until: null, needs_reset: false, invitation_id: null, invited_email: null, invited_at: null };
+    const none = { sign_in: 'none', locked_until: null, needs_reset: false, invitation_id: null, invited_email: null, invited_at: null, invitation_lapsed: false };
     const passcode = { ...none, sign_in: 'passcode' };
     const email = { ...none, sign_in: 'email' };
     const expected = {
@@ -776,6 +776,27 @@ describe('roster_sign_ins', () => {
     for (const session of [db.anon(), server()]) {
       await refused(session.callRows('roster_sign_ins', { p_company_id: company.id }), NO_PRIVILEGE, /permission denied for function roster_sign_ins/);
     }
+  });
+});
+
+describe('roster_sign_ins and a lapsed invitation', () => {
+  it("says an invitation has lapsed once its inviter is no longer a supervisor, and not again after Send again", async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Ana', last: 'Diaz', role: 'supervisor' }, { first: 'Riley J', last: 'Quinn' }] });
+    const bo = await secondSupervisor(db, company, 'Bo', 'Ellison');
+    const address = newAddress('ana.diaz');
+    const id = (await invite(bo, company.rows['Ana Diaz'], address)).invitation_id;
+    const lapsed = async (who, name) => (await signIns(who, company.id)).find((r) => r.roster_id === company.rows[name]).invitation_lapsed;
+    assert.equal(await lapsed(company.owner, 'Ana Diaz'), false);
+    // A row with no invitation is never lapsed.
+    assert.equal(await lapsed(company.owner, 'Riley J Quinn'), false);
+    // Bo Ellison steps down to crew: his invitation is lapsed, still shown, and not accepted by anyone.
+    await db.as(bo).query("update public.roster set role = 'employee' where id = $1", [company.rows['Bo Ellison']]);
+    const [shown] = (await signIns(company.owner, company.id)).filter((r) => r.roster_id === company.rows['Ana Diaz']);
+    assert.equal(shown.invitation_id, id);
+    assert.equal(shown.invitation_lapsed, true);
+    // A supervisor who sends it again vouches for it: it is good once more.
+    await resend(company.owner, id);
+    assert.equal(await lapsed(company.owner, 'Ana Diaz'), false);
   });
 });
 

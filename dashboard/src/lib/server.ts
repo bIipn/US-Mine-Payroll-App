@@ -39,6 +39,27 @@ export interface RosterRow {
   created_at: string;
 }
 
+/** How a roster row is held, as `roster_sign_ins` says it. */
+export type SignInKind = 'none' | 'passcode' | 'email';
+
+/**
+ * One roster row's sign-in, as `roster_sign_ins(company)` gives it to a supervisor: how the row is held, the
+ * lock on a passcode account, and the row's open invitation. A row taken off the roster has one too.
+ */
+export interface RosterSignIn {
+  roster_id: string;
+  sign_in: SignInKind;
+  /** While 5 wrong tries in a row keep the account locked: when the lock ends. */
+  locked_until: string | null;
+  /** 10 wrong tries in a row: only a reset code opens the account. */
+  needs_reset: boolean;
+  invitation_id: string | null;
+  invited_email: string | null;
+  invited_at: string | null;
+  /** The supervisor who sent the open invitation is no longer one, so it cannot be accepted until it is sent again. */
+  invitation_lapsed: boolean;
+}
+
 export type JoinReason = 'not_on_roster' | 'already_claimed' | 'supervisor_row' | 'removed' | 'released' | 'ambiguous';
 export type RequestStatus = 'pending' | 'approved' | 'denied' | 'withdrawn';
 
