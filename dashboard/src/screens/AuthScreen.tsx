@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { sendPasswordReset, signIn, signOut, signUp } from '../lib/api';
+import { troubleKept, type LinkTrouble } from '../lib/arrival';
 import { authProblem, messageOf } from '../lib/errors';
 import { supabase } from '../lib/supabase';
 import { Button, Check, Notice, tabPanelProps, Tabs, TextField } from '../ui/kit';
@@ -204,6 +205,24 @@ export function NewPasswordScreen({ onDone, invitedAs }: { onDone: () => void; i
           </div>
         ) : null}
       </form>
+    </Gate>
+  );
+}
+
+/**
+ * A link from an email signed nobody in, and this browser stays signed in to an account: what went wrong shows
+ * first, naming that account, with a way on as it and a way out (ruling R31). The page signs nobody out by itself.
+ */
+export function LinkTroubleScreen({ trouble, email, onGoOn }: { trouble: LinkTrouble; email: string; onGoOn: () => void }) {
+  const words = troubleKept(trouble, email);
+  return (
+    <Gate title={words.title} say={<p>{words.why}</p>}>
+      <div className="gate-form">
+        <h2 className="h2">Signed in as {email}</h2>
+        <p>{words.next}</p>
+        <Button kind="main" block onClick={onGoOn}>Go on as {email}</Button>
+        <Button kind="quiet" onClick={() => void signOut()}>Sign out</Button>
+      </div>
     </Gate>
   );
 }

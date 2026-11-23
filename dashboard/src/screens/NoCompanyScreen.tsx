@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 
 import { STATES, stateName } from '@app/domain/company';
 import { cleanText } from '@app/domain/roster';
@@ -39,7 +39,8 @@ export function TopBand({ email }: { email: string }) {
 /** Load the account's companies again and open one. Resolves to whether the account is in a company now. */
 type OnCompany = (open?: OpenWhich) => Promise<boolean>;
 
-export function NoCompanyScreen({ email, onCompany }: { email: string; onCompany: OnCompany }) {
+/** `notice` is said above the rest. */
+export function NoCompanyScreen({ email, onCompany, notice }: { email: string; onCompany: OnCompany; notice?: ReactNode }) {
   const [requests, setRequests] = useState<MyJoinRequest[]>([]);
   const [trial] = useState(wantsTrial);
   useEffect(() => {
@@ -57,6 +58,7 @@ export function NoCompanyScreen({ email, onCompany }: { email: string; onCompany
               <p className="lede">This account is not part of a company yet. Start one if you run the crew, or join yours with the code a supervisor gave you.</p>
             </div>
           </div>
+          {notice}
           {trial ? (
             <Notice tone="info" title="Start your 14-day free trial">
               Start your company first. Its Billing page opens next, and the trial starts there.

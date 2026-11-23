@@ -52,8 +52,8 @@ function useNarrow(): boolean {
   return narrow;
 }
 
-/** The supervisor's dashboard: the sidebar, and the page the address names. */
-export function Shell({ email, companies, onPick }: { email: string; companies: CompanyChoice[]; onPick: (id: string) => void }) {
+/** The supervisor's dashboard: the sidebar, and the page the address names. `notice` is said above every page. */
+export function Shell({ email, companies, onPick, notice }: { email: string; companies: CompanyChoice[]; onPick: (id: string) => void; notice?: ReactNode }) {
   const ctx = useCompany();
   const billing = useBilling();
   const { path, query } = useLocation();
@@ -230,6 +230,7 @@ export function Shell({ email, companies, onPick }: { email: string; companies: 
       </aside>
       <main className="main" id="main" ref={mainRef} tabIndex={-1} style={{ outline: 'none' }} inert={drawer}>
         <div className="page">
+          {notice}
           {ctx.recordsError ? (
             <Notice tone="warn" title="The records could not be loaded">
               {ctx.recordsError} The roster still works. Checklists, exams, requests and hours show once the records load.

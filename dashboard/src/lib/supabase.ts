@@ -11,6 +11,8 @@ export interface Arrival {
   errorText: string | null;
   /** The link was the invite email's (`?invited=1`, INVITE_LINK in supervisor-tools), whether or not it still worked. */
   invited: boolean;
+  /** The address held a session that is not an invitation's: it was taken off the address, and not taken. */
+  refused: boolean;
 }
 
 /** The two halves of the session an invite email's link brings. */
@@ -25,32 +27,31 @@ export interface InviteTokens {
  * invitation on the server, where no browser kept the other half of a code. That session is taken only when the
  * address is an invitation's both ways (ruling R31): `invited=1` in the query, as the invite link has it
  * (INVITE_LINK), and Auth's `type=invite` in the hash, with both halves of the session, no code and no error. Any
- * other session in an address is left to the client, which turns it down, as it takes codes only. Anyone can write
- * such an address, with a session of their own: that is why the first screen after it names the address it signed
- * in as, with a way out.
+ * other session in an address is not taken (`refused`): the client takes codes only, and the page says the link
+ * signed nobody in. Anyone can write such an address, with a session of their own: that is why the first screen
+ * after it names the address it signed in as, with a way out.
  *
- * `tidied` is the address to put in place of this one, before the client is made, when an invitation's session
- * is taken off it: the same address without it. Null when there is nothing to take off.
+ * `tidied` is the address to put in place of this one, before the client is made, when it holds a session, taken
+ * or not: the same address without it, so that no session is left in the address bar for anyone to copy. Null
+ * when there is nothing to take off.
  */
 export function readArrival(href: string): { arrival: Arrival; invite: InviteTokens | null; tidied: string | null } {
   const url = new URL(href);
   const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
   const params = new URLSearchParams(url.search);
   for (const [k, v] of hash) params.set(k, v);
-  const arrival: Arrival = {
-    code: params.has('code'),
-    error: params.get('error_code') || params.get('error') || null,
-    errorText: params.get('error_description'),
-    invited: url.searchParams.get('invited') === '1',
-  };
+  const code = params.has('code');
+  const error = params.get('error_code') || params.get('error') || null;
+  const invited = url.searchParams.get('invited') === '1';
   const access = hash.get('access_token');
   const refresh = hash.get('refresh_token');
-  if (!arrival.invited || hash.get('type') !== 'invite' || !access || !refresh || arrival.code || arrival.error) {
-    return { arrival, invite: null, tidied: null };
-  }
+  const holdsSession = hash.has('access_token') || hash.has('refresh_token');
+  const invite = invited && hash.get('type') === 'invite' && access && refresh && !code && !error ? { access_token: access, refresh_token: refresh } : null;
+  const arrival: Arrival = { code, error, errorText: params.get('error_description'), invited, refused: holdsSession && !invite };
+  if (!holdsSession) return { arrival, invite: null, tidied: null };
   url.searchParams.delete('invited');
   url.hash = '';
-  return { arrival, invite: { access_token: access, refresh_token: refresh }, tidied: url.toString() };
+  return { arrival, invite, tidied: url.toString() };
 }
 
 /** The invitation's session, held here in memory only, until App hands it to the client (takeInviteTokens). */
@@ -59,8 +60,8 @@ let inviteTokens: InviteTokens | null = null;
 /**
  * What the address said when the page opened, read before the client below looks at it: a link from an email
  * comes back with a code to sign in with, with an invitation's session, or with an error when the link has
- * expired or was used already. An invitation's session is taken off the address here, before the client is
- * made: the client reads the address as it is made, and would turn the session down and leave it there.
+ * expired or was used already. A session in the address is taken off it here, before the client is made: the
+ * client reads the address as it is made, and would turn the session down and leave it there.
  */
 export const arrivedWith: Arrival = (() => {
   try {
@@ -69,7 +70,7 @@ export const arrivedWith: Arrival = (() => {
     inviteTokens = invite;
     return arrival;
   } catch {
-    return { code: false, error: null, errorText: null, invited: false };
+    return { code: false, error: null, errorText: null, invited: false, refused: false };
   }
 })();
 
