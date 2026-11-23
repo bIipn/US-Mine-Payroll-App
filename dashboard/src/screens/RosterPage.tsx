@@ -72,6 +72,7 @@ import {
   RESET_CODE_GOOD_FOR,
   RESET_CODE_HELP,
   RESET_CODE_ONCE,
+  reloadAfter,
   signInTools,
 } from '../lib/signIns';
 import { AreaField, Button, Check, Confirm, count, Ledger, Notice, Seg, SelectField, tabPanelProps, Tabs, TextField } from '../ui/kit';
@@ -708,10 +709,7 @@ export function SignInTools({ row, signIn, inviting, setInviting, onChanged }: {
   const run = (work: () => Promise<unknown>, words?: string) =>
     once(() => {
       setCode(null);
-      return act(async () => {
-        await work();
-        await onChanged();
-      }, words);
+      return act(() => reloadAfter(work, onChanged), words);
     });
   if (!signIn || (!Object.values(tools).some(Boolean) && !inviting && !error && !done && !code)) return null;
   return (
@@ -786,10 +784,7 @@ export function InviteForm({ row, signIn, onClose, onChanged }: {
     setProblem(checked.ok ? null : checked.why);
     if (!checked.ok) return;
     void once(async () => {
-      const sent = await act(async () => {
-        await inviteSupervisor(row.id, checked.address);
-        await onChanged();
-      }, INVITE_SENT_ALWAYS(checked.address));
+      const sent = await act(() => reloadAfter(() => inviteSupervisor(row.id, checked.address), onChanged), INVITE_SENT_ALWAYS(checked.address));
       if (sent) setEmail('');
     });
   };

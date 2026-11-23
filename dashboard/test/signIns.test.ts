@@ -37,6 +37,7 @@ const {
   makeSupervisorBy,
   makeSupervisorByEmail,
   RESET_CODE_HELP,
+  reloadAfter,
   signInTools,
 } = await import('../src/lib/signIns');
 import type { RosterSignIn } from '../src/lib/server';
@@ -231,17 +232,13 @@ describe('the address an invitation goes to', () => {
     expect(refused(`riley@${'a'.repeat(64)}.com`)).toMatch(/cannot use/);
   });
 
-  it('accepts only addresses that Supabase Auth’s own pattern (checkmail) also accepts', () => {
-    // Supabase Auth's validateEmail uses badoux/checkmail's ValidateFormat, a long RFC 5322 pattern. Its branch for a
-    // bare address is dot-atom@dot-atom; every other branch (comments, quoted names, <angle> forms, [literals]) only
-    // adds to it. This checks that nothing accepted here falls outside that branch. The whole pattern was also run
-    // over the same corpus, in Go, when this was written.
-    const atext = "[A-Za-z0-9!#-'*+\\/=?^_`{|}~-]";
-    const dotAtom = `${atext}+(\\.${atext}+)*`;
-    // The core of the published pattern for a bare address: dot-atom@dot-atom, which every other branch of it (comments,
-    // quoted names, <angle> forms, [literals]) only adds to.
-    const checkmailCore = new RegExp(`^${dotAtom}@${dotAtom}$`);
-    const parts = ['riley', 'a.b', 'a+b', "o'n", 'x_y', '-a', 'a-', '.a', 'a.', 'a..b', 'ex.com', 'e-x.co', '-x.com', 'x-.com', 'a'.repeat(64), '1.2', 'é', 'a b', '', 'a@b'];
+  it('accepts only addresses that the pattern Supabase Auth runs also accepts, and refuses some it would refuse', () => {
+    // Auth v2.198.0 (internal/api/mail.go validateEmail) checks the length, then checkmail.ValidateFormat. Its go.mod line 131 pins
+    // github.com/badoux/checkmail v0.0.0-20170203135005-d0a759655d62, and checkmail.go line 34 of that commit holds this pattern:
+    // https://raw.githubusercontent.com/badoux/checkmail/d0a759655d62/checkmail.go
+    // (go.mod: https://raw.githubusercontent.com/supabase/auth/v2.198.0/go.mod). Auth applies it before lowercasing.
+    const checkmail = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+    const parts = ['riley', 'a.b', 'a+b', "o'n", 'x_y', '-a', 'a-', '.a', 'a.', 'a..b', 'ex.com', 'e-x.co', '-x.com', 'x-.com', 'a'.repeat(64), 'b'.repeat(63), 'b'.repeat(64), '1.2', 'é', 'a b', '', 'a@b'];
     let accepted = 0;
     for (const local of parts) {
       for (const domain of parts) {
@@ -249,12 +246,46 @@ describe('the address an invitation goes to', () => {
         const answer = inviteAddress(typed);
         if (answer.ok) {
           accepted += 1;
-          expect(checkmailCore.test(answer.address), typed).toBe(true);
+          // What the dashboard sends, as Auth receives it, and as typed: both pass the pinned pattern.
+          expect(checkmail.test(answer.address), typed).toBe(true);
           expect(answer.address.length).toBeLessThanOrEqual(254);
         }
       }
     }
     expect(accepted).toBeGreaterThan(5);
+    // Addresses the pinned pattern refuses, and so does the dashboard.
+    for (const typed of ['riley@-example.com', 'riley@example-.com', 'riley@example..com', `riley@${'a'.repeat(64)}.com`, 'rílèy@example.com']) {
+      expect(checkmail.test(typed), typed).toBe(false);
+      expect(inviteAddress(typed).ok, typed).toBe(false);
+    }
+  });
+});
+
+describe('reading the sign-ins again after an action', () => {
+  it('reads them after an action that went through', async () => {
+    const reload = vi.fn(async () => {});
+    expect(await reloadAfter(async () => 'done', reload)).toBe('done');
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads them after an action the server turned down because the page was out of date, and still says why', async () => {
+    const reload = vi.fn(async () => {});
+    server.invoke = { data: null, error: { name: 'FunctionsHttpError', context: { status: 409, json: async () => ({ error: 'row_taken', message: 'x' }) } } };
+    await expect(reloadAfter(() => inviteSupervisor('row-lee-park', 'lee.park@example.org'), reload)).rejects.toMatchObject({ code: 'row_taken' });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads them after an action whose answer never came', async () => {
+    const reload = vi.fn(async () => {});
+    server.invoke = new Error('Failed to fetch');
+    await expect(reloadAfter(() => deleteCrewSignIn('row-sam-ortiz'), reload)).rejects.toThrow(/not known whether the sign-in was deleted/);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads them after the action, never before it', async () => {
+    const order: string[] = [];
+    await expect(reloadAfter(async () => { order.push('work'); throw new Error('x'); }, async () => { order.push('reload'); })).rejects.toThrow('x');
+    expect(order).toEqual(['work', 'reload']);
   });
 });
 
@@ -290,7 +321,7 @@ describe('the calls to the server', () => {
 
   it('says a row that is not a passcode account has no code to reset', async () => {
     server.answers.make_passcode_reset_code = { data: null, error: { code: 'PT409', hint: 'not_a_passcode_account', message: 'x' } };
-    await expect(makeResetCode('row-sam-ortiz')).rejects.toThrow(/not held by a passcode account any more/);
+    await expect(makeResetCode('row-sam-ortiz')).rejects.toThrow(/changed since this page loaded: it is not held by a passcode account any more/);
   });
 
   it('cancels an invitation with the database function', async () => {
@@ -326,10 +357,10 @@ describe('the calls to the server', () => {
       [401, 'signed_out', /sign-in has run out/],
       [403, 'origin_not_allowed', /only takes this from the MineMuster dashboard/],
       // A row or invitation that is not there, and one of a company the caller does not supervise, read alike.
-      [404, 'not_found', /not found, or it is not one of your company/],
-      [409, 'row_taken', /taken off the roster, or an email account holds it/],
-      [409, 'invitation_closed', /already accepted or cancelled/],
-      [409, 'not_a_passcode_account', /not held by a passcode account any more/],
+      [404, 'not_found', /not found, or it is not one of your company.*refreshed/],
+      [409, 'row_taken', /changed since this page loaded.*email account holds it/],
+      [409, 'invitation_closed', /changed since this page loaded.*already accepted or cancelled/],
+      [409, 'not_a_passcode_account', /changed since this page loaded.*not held by a passcode account any more/],
       [413, 'too_large', /too much to send/],
       [500, 'not_set_up', /not set up for this yet/],
       [500, 'try_again', /did not work on the server/],

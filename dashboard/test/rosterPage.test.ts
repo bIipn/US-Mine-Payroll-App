@@ -171,17 +171,24 @@ describe('the Roster page’s sign-in tools', () => {
   });
 
   it('shows neither on a row nobody holds, or one an email account holds', () => {
-    for (const sign_in of ['none', 'email'] as const) {
-      const { text } = tools(crew, { sign_in });
-      expect(text).not.toMatch(/Reset passcode|Delete sign-in/);
-    }
+    // Where something is shown, neither is among it: the invite form open on a row nobody holds.
+    const form = tools(crew, { sign_in: 'none' }, true).text;
+    expect(form).toContain('Send invitation');
+    expect(form).not.toMatch(/Reset passcode|Delete sign-in/);
+    // And where a passcode account holds the row they are shown, so the empty render below is a real absence.
+    expect(tools(crew, { sign_in: 'passcode' }).text).toMatch(/Reset passcode.*Delete sign-in/);
+    for (const sign_in of ['none', 'email'] as const) expect(tools(crew, { sign_in }).html).toBe('');
   });
 
   it('shows Invite only on a supervisor’s row with no email account and no open invitation', () => {
     expect(tools(boss, { sign_in: 'none' }).text).toContain('Invite by email');
-    expect(tools(boss, { sign_in: 'email' }).text).not.toContain('Invite');
-    expect(tools(crew, { sign_in: 'none' }).text).not.toContain('Invite');
-    expect(tools(boss, { sign_in: 'none', invitation_id: 'inv-1' }).text).not.toContain('Invite by email');
+    // An email account holds the row, a crew row is not a supervisor's: nothing is shown at all, where the row above shows Invite.
+    expect(tools(boss, { sign_in: 'email' }).html).toBe('');
+    expect(tools(crew, { sign_in: 'none' }).html).toBe('');
+    // An open invitation takes Invite's place with Send again and Cancel.
+    const open = tools(boss, { sign_in: 'none', invitation_id: 'inv-1' }).text;
+    expect(open).toContain('Send again');
+    expect(open).not.toContain('Invite by email');
   });
 
   it('shows Send again and Cancel invitation on a row with an open invitation, with the reset and delete only for a passcode account', () => {

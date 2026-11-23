@@ -302,7 +302,7 @@ async function supervisorTools(body: Record<string, string>, status: 'sent' | 'd
   }
   if (!error) {
     if ((data as { status?: unknown } | null)?.status === status) return;
-    throw new Problem('The server answered in a way this page does not understand. Reload the page to see where it stands.');
+    throw new Problem('The server answered in a way this page does not understand. The page has been refreshed to show where things stand.');
   }
   const reply = (error as { context?: unknown }).context as { status?: unknown; json?: () => Promise<unknown> } | undefined;
   if ((error as { name?: unknown }).name === 'FunctionsHttpError' && reply && typeof reply.status === 'number') {
@@ -320,7 +320,7 @@ async function supervisorTools(body: Record<string, string>, status: 'sent' | 'd
 export async function inviteSupervisor(rosterId: string, email: string): Promise<void> {
   const checked = inviteAddress(email);
   if (!checked.ok) throw new Problem(checked.why, 'email_invalid');
-  await supervisorTools({ action: 'invite', roster_id: rosterId, email: checked.address }, 'sent', 'No answer came back, so it is not known whether the invitation was made. Reload the page and look at the row, then try again if it is not there.');
+  await supervisorTools({ action: 'invite', roster_id: rosterId, email: checked.address }, 'sent', 'No answer came back, so it is not known whether the invitation was made. Look at the row, which has been refreshed, and try again if there is no invitation on it.');
 }
 
 export const resendInvitation = (invitationId: string) =>
@@ -328,7 +328,7 @@ export const resendInvitation = (invitationId: string) =>
 
 /** Delete the passcode sign-in on a row for good. The row and its records stay with the company. */
 export const deleteCrewSignIn = (rosterId: string) =>
-  supervisorTools({ action: 'delete_crew_sign_in', roster_id: rosterId }, 'deleted', 'No answer came back, so it is not known whether the sign-in was deleted. Reload the page to see whether the row still shows a passcode.');
+  supervisorTools({ action: 'delete_crew_sign_in', roster_id: rosterId }, 'deleted', 'No answer came back, so it is not known whether the sign-in was deleted. Look at the row, which has been refreshed, to see whether it still shows a passcode.');
 
 // ---- Join requests ------------------------------------------------------------------------
 

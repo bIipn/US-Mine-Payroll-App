@@ -95,6 +95,18 @@ export const deleteSignInQuestion = (name: string) =>
 export const makeSupervisorByEmail = (name: string) =>
   `Supervisors sign in with email, not a passcode. Type ${name}’s email address to invite them. Nothing changes until they accept: then the passcode sign-in is let go of and the row becomes a supervisor’s.`;
 
+/**
+ * Do the work, then read the sign-ins again whatever came of it: done, refused because the page was out of date,
+ * or no answer at all. A refusal still goes on to the caller, to be said.
+ */
+export async function reloadAfter<T>(work: () => Promise<T>, reload: () => Promise<void>): Promise<T> {
+  try {
+    return await work();
+  } finally {
+    await reload();
+  }
+}
+
 export const INVITE_SENT_ALWAYS = (address: string) =>
   `Invitation sent to ${address}. If it does not arrive, use Send again. It is good for 7 days.`;
 
@@ -112,11 +124,12 @@ const HIDDEN = /[\u0001-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁯￹-￻]/
 /** What the database accepts (`invite_supervisor`). */
 const DATABASE = /^[^@ ]{1,64}@[^@ .]+(\.[^@ .]+)+$/;
 /**
- * What Supabase Auth accepts, from the inside: Auth refuses an address over 255 characters or one that fails
- * `checkmail.ValidateFormat`. That pattern is a long RFC 5322 one (names, comments, quoted parts). This is the plain
- * part of it every address in use fits, and nothing it does not allow: letters, digits and `!#$%&'*+/=?^_`{|}~-`
- * in dot-separated parts of the name, and a domain of dot-separated labels of letters, digits and hyphens. A dot
- * is required in the domain, as the database requires. Tested against checkmail's own pattern.
+ * What Supabase Auth accepts. Auth v2.198.0 (internal/api/mail.go, validateEmail) refuses an address over 255
+ * characters or one that fails `checkmail.ValidateFormat`, and its go.mod (line 131) pins
+ * github.com/badoux/checkmail v0.0.0-20170203135005-d0a759655d62, whose checkmail.go (line 34) holds
+ * ^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@LABEL(?:\.LABEL)*$, a name of those characters and a domain of dot-separated
+ * labels of letters, digits and inner hyphens, each up to 63 characters. This is inside that: the name is
+ * dot-separated parts with no empty one, and the domain needs a dot, as the database requires.
  */
 const ATEXT = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+";
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';

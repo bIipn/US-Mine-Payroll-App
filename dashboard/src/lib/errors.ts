@@ -69,13 +69,13 @@ export function authProblem(error: unknown): Problem {
 export function hintWords(hint: unknown): string {
   switch (hint) {
     case 'supervisor_needs_email':
-      return 'A supervisor signs in with email, not a passcode. Reload the page, then use Make a supervisor on this row to invite them by email.';
+      return 'A supervisor signs in with email, not a passcode, and this row is held by a passcode account now. Use Make a supervisor on it to invite them by email.';
     case 'row_taken':
-      return 'That row is taken off the roster, or an email account holds it, so it cannot be invited. Reload the page to see where it stands.';
+      return 'That row changed since this page loaded: it is taken off the roster, or an email account holds it, so it cannot be invited. The row now shows where it stands.';
     case 'invitation_closed':
-      return 'That invitation was already accepted or cancelled. Reload the page to see where it stands.';
+      return 'That invitation changed since this page loaded: it was already accepted or cancelled. The row now shows where it stands.';
     case 'not_a_passcode_account':
-      return 'That row is not held by a passcode account any more. Reload the page to see where it stands.';
+      return 'That row changed since this page loaded: it is not held by a passcode account any more. The row now shows where it stands.';
     case 'email_invalid':
       return 'Type the email address to send the invitation to, like name@example.com.';
     default:
@@ -140,7 +140,7 @@ export function toolProblem(status: number, answer: unknown): Problem {
     case 'origin_not_allowed':
       return new Problem('The server only takes this from the MineMuster dashboard. Open the dashboard from its usual address, sign in, and try again.', error);
     case 'not_found':
-      return new Problem('That was not found, or it is not one of your company’s. Reload the page to see where it stands.', error);
+      return new Problem('That was not found, or it is not one of your company’s. The page has been refreshed to show where things stand.', error);
     case 'too_large':
       return new Problem('That was too much to send. Shorten what was typed and try again.', error);
     case 'not_set_up':
