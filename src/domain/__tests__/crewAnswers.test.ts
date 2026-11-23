@@ -1,4 +1,4 @@
-import { crewWords, readCrewAnswer, type CrewAnswer } from '../serverAnswers';
+import { crewWords, madeSupervisorWords, readCrewAnswer, type CrewAnswer } from '../serverAnswers';
 import { passcodeWords } from '../passcode';
 import { fmtTime } from '../../util/format';
 
@@ -128,8 +128,19 @@ describe('crewWords', () => {
     expect(w.body).not.toMatch(/create/i);
   });
 
-  it('points use_email to Supervisor? Sign in with email', () => {
-    expect(crewWords({ kind: 'use_email' }, NOW).body).toContain('Supervisor? Sign in with email');
+  it('points use_email to Supervisor? Sign in with email, and someone with no email sign-in yet to a supervisor’s invitation', () => {
+    const body = crewWords({ kind: 'use_email' }, NOW).body;
+    expect(body).toContain('Supervisor? Sign in with email');
+    expect(body).toContain('If you have no email sign-in yet, ask a supervisor to invite you from the dashboard.');
+  });
+
+  it('says a reset code whose last try was wrong is used up, and to ask for a new one, not to try again', () => {
+    const w = crewWords({ kind: 'bad_reset_code', triesLeft: 0 }, NOW);
+    expect(w.body).toBe('That was its last try, so the code is used up. Ask a supervisor for a new one.');
+    expect(`${w.title} ${w.body}`).not.toMatch(/0 tries|try again/i);
+    // With tries left, it names them.
+    expect(crewWords({ kind: 'bad_reset_code', triesLeft: 2 }, NOW).body).toBe('2 tries left. Check it with your supervisor and try again.');
+    expect(crewWords({ kind: 'bad_reset_code', triesLeft: 1 }, NOW).body).toContain('1 try left');
   });
 
   it('says the new passcode is set and to sign in with it', () => {
@@ -153,8 +164,10 @@ describe('crewWords', () => {
     expect(crewWords({ kind: 'bad_name', message: 'Type it as on the roster.' }, NOW).body).toBe('Type it as on the roster.');
   });
 
-  it('tells busy to wait a few minutes', () => {
-    expect(crewWords({ kind: 'busy' }, NOW).body).toMatch(/Wait a few minutes/);
+  it('tells busy to wait a few minutes, and lays it on no network: Supabase Auth’s own limit is everyone’s at once', () => {
+    const w = crewWords({ kind: 'busy' }, NOW);
+    expect(w).toEqual({ title: 'Too many tries right now', body: 'Wait a few minutes and try again.', tone: 'warn' });
+    expect(`${w.title} ${w.body}`).not.toMatch(/network/i);
   });
 
   it('tells unreachable there is no signal and to try again with signal', () => {
@@ -167,5 +180,35 @@ describe('crewWords', () => {
     const w = crewWords(all[2], NOW);
     expect(w.tone).toBe('info');
     expect(w.body).toMatch(/supervisor will let you in/);
+  });
+});
+
+describe('madeSupervisorWords', () => {
+  it('tells someone made a supervisor to sign out of this phone and sign in with email at the address they were invited at', () => {
+    expect(madeSupervisorWords('Test Pit A', 0)).toEqual({
+      title: 'Made a supervisor?',
+      body: 'Sign out of this phone, then tap Supervisor? Sign in with email and use the address you were invited at.',
+    });
+  });
+
+  it('promises no sign-out while records this sign-in can no longer send are on the phone, and says what to do', () => {
+    expect(madeSupervisorWords('Test Pit A', 1)).toEqual({
+      title: 'Made a supervisor?',
+      body:
+        '1 record on this phone did not reach Test Pit A before you accepted, and this passcode sign-in cannot send it now, so this phone cannot sign out without losing it. Keep it here and tell the supervisor who invited you.',
+    });
+    const two = madeSupervisorWords(null, 2);
+    expect(two.body).toBe(
+      '2 records on this phone did not reach your company before you accepted, and this passcode sign-in cannot send them now, so this phone cannot sign out without losing them. Keep them here and tell the supervisor who invited you.',
+    );
+    expect(two.body).not.toMatch(/Sign out of this phone, then/);
+  });
+
+  it('never asks for an email address, and its title is in sentence case', () => {
+    for (const held of [0, 1, 3]) {
+      const w = madeSupervisorWords('Test Pit A', held);
+      expect(w.title).toMatch(/^[A-Z][^A-Z]*\?$/);
+      expect(`${w.title} ${w.body}`).not.toMatch(/e-?mail address|your email|type your email|enter your email/i);
+    }
   });
 });

@@ -7,8 +7,9 @@ import { SignInHeader, signInStyles } from '../../components/SignInHeader';
 import { Button, Notice, Panel, Row, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { ownPersonHere, signInPerson } from '../../domain/access';
+import { heldOffRoster } from '../../domain/accountDeletion';
 import type { ConnectedCompany } from '../../domain/server';
-import { joinWords, pickCompany, type ServerCompany, type WaitingRequest } from '../../domain/serverAnswers';
+import { joinWords, madeSupervisorWords, pickCompany, type ServerCompany, type WaitingRequest } from '../../domain/serverAnswers';
 import type { ScreenProps } from '../../navigation/types';
 import { checkAccount, server, signOutOfPhone, useServerAccount, type AccountState } from '../../services/connection';
 import { syncNow, useSyncStatus } from '../../services/sync';
@@ -169,6 +170,7 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, leave }: 
 }) {
   const asked = useStore((s) => (s.joinAsked?.accountId === account.id ? s.joinAsked : null));
   const session = useStore((s) => s.session);
+  const sync = useSyncStatus();
   const connector = useConnectCompany({ id: account.id, email: account.email });
   const [found, setFound] = useState<Found>({ kind: 'finding' });
   const [busy, setBusy] = useState(true);
@@ -269,7 +271,7 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, leave }: 
             <Button testID="company-delete-sign-in" label="Delete this sign-in" icon={UserX} kind="outline" onPress={onDeleteSignIn} />
           </View>
         ) : (
-          <OffRoster company={companyName} onDelete={onDeleteAccount} whose={session?.employeeId ?? null} />
+          <OffRoster company={companyName} onDelete={onDeleteAccount} whose={session?.employeeId ?? null} passcode held={heldOffRoster(sync)} />
         );
       break;
   }
@@ -316,7 +318,7 @@ function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerA
       <Waiting text={`Checking your sign-in with ${linked.name}…`} />
     );
   } else if (receiving?.role === 'none') {
-    body = <OffRoster company={linked.name} onDelete={onDeleteAccount} whose={whose} />;
+    body = <OffRoster company={linked.name} onDelete={onDeleteAccount} whose={whose} passcode={account.kind === 'passcode'} held={heldOffRoster(sync)} />;
   } else if (sync.trouble === 'closed') {
     body = <Notice tone="bo" title={`MineMuster has stopped for ${linked.name}`} body="A supervisor can start it again on the dashboard’s Billing page." />;
   } else if (receiving?.caughtUpAt != null && receiving.role != null) {
@@ -348,9 +350,19 @@ function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerA
 /**
  * A sign-in whose roster row was taken off: it still works, only to delete the account. A unit the person
  * (`whose`) still has checked out is checked back in from here, off the clock (End use): this screen is all
- * they are shown, and signing out of the phone waits for it.
+ * they are shown, and signing out of the phone waits for it. A passcode sign-in is also let go of when its
+ * person accepts an invitation to supervise, which reads the same here: the card then says how a supervisor
+ * signs in, and, while the phone holds records that sign-in can no longer send (`held`), promises no
+ * sign-out, which waits for them (madeSupervisorWords).
  */
-function OffRoster({ company, onDelete, whose }: { company: string | null; onDelete: () => void; whose: string | null }) {
+function OffRoster({ company, onDelete, whose, passcode = false, held = 0 }: {
+  company: string | null;
+  onDelete: () => void;
+  whose: string | null;
+  passcode?: boolean;
+  held?: number;
+}) {
+  const promoted = passcode ? madeSupervisorWords(company, held) : null;
   return (
     <View testID="company-off-roster" style={styles.gap}>
       <Notice
@@ -359,6 +371,11 @@ function OffRoster({ company, onDelete, whose }: { company: string | null; onDel
         title={`You are no longer on ${company ? `${company}’s` : 'your company’s'} roster`}
         body={`Your sign-in still works, but only to delete your account. Your records stay with ${company ?? 'the company'}. If this is a mistake, see your supervisor.`}
       />
+      {promoted ? (
+        <View testID="company-made-supervisor">
+          <Notice tone="info" icon={UserCog} title={promoted.title} body={promoted.body} />
+        </View>
+      ) : null}
       {whose ? <CheckedOutUnits employeeId={whose} /> : null}
       <Button testID="company-delete-account" label="Delete my account" icon={UserX} kind="outline" onPress={onDelete} />
     </View>

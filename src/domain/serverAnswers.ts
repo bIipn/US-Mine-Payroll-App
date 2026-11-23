@@ -642,7 +642,11 @@ export function crewWords(answer: CrewAnswer, now: number): { title: string; bod
     case 'already_signed_up':
       return { title: 'That name already has a sign-in', body: 'Sign in with your passcode. If you forgot it, ask a supervisor for a reset code.', tone: 'warn' };
     case 'use_email':
-      return { title: 'This name signs in with email', body: 'Tap Supervisor? Sign in with email.', tone: 'info' };
+      return {
+        title: 'This name signs in with email',
+        body: 'Tap Supervisor? Sign in with email. If you have no email sign-in yet, ask a supervisor to invite you from the dashboard.',
+        tone: 'info',
+      };
     case 'no_account':
       return { title: 'No sign-in for that name yet', body: 'Check the spelling, or tap Sign up to make your sign-in.', tone: 'warn' };
     case 'ambiguous':
@@ -650,7 +654,8 @@ export function crewWords(answer: CrewAnswer, now: number): { title: string; bod
     case 'expired':
       return { title: 'That reset code has run out or was already used', body: 'Ask a supervisor for a new one.', tone: 'warn' };
     case 'busy':
-      return { title: 'Too many tries from this network', body: 'Wait a few minutes and try again.', tone: 'warn' };
+      // Past the limit on tries from one place, or past Supabase Auth's own limit, which every crew-auth sign-in shares.
+      return { title: 'Too many tries right now', body: 'Wait a few minutes and try again.', tone: 'warn' };
     case 'denied':
       return { title: 'A supervisor has turned down your request', body: 'Speak to a supervisor at your company.', tone: 'bo' };
     case 'signed_out':
@@ -664,6 +669,8 @@ export function crewWords(answer: CrewAnswer, now: number): { title: string; bod
       return { title: 'That passcode is not right', body: `${left}. Check it and try again.`, tone: 'bo' };
     }
     case 'bad_reset_code': {
+      // The fifth wrong code spends it: there is nothing left to try.
+      if (answer.triesLeft <= 0) return { title: 'That reset code is not right', body: 'That was its last try, so the code is used up. Ask a supervisor for a new one.', tone: 'bo' };
       const left = `${answer.triesLeft} ${answer.triesLeft === 1 ? 'try' : 'tries'} left`;
       return { title: 'That reset code is not right', body: `${left}. Check it with your supervisor and try again.`, tone: 'bo' };
     }
@@ -681,4 +688,22 @@ export function crewWords(answer: CrewAnswer, now: number): { title: string; bod
     case 'server':
       return { title: 'Something went wrong', body: 'Try again in a minute. If it keeps happening, tell a supervisor.', tone: 'warn' };
   }
+}
+
+/**
+ * The line of the off-the-roster card for someone made a supervisor. Accepting an invitation to supervise lets the
+ * person's passcode sign-in go, so the phone finds that sign-in off the company's roster, as if they had been taken
+ * off. Supervisors sign in with email: they sign out of this phone and sign in again that way. `held` is how many
+ * records on the phone that sign-in can no longer send (waiting, and turned down: `heldOffRoster`). Signing out
+ * would lose them, so it is refused, and the words then promise no sign-out and say what to do instead.
+ */
+export function madeSupervisorWords(company: string | null, held: number): { title: string; body: string } {
+  const title = 'Made a supervisor?';
+  if (held <= 0) return { title, body: 'Sign out of this phone, then tap Supervisor? Sign in with email and use the address you were invited at.' };
+  const one = held === 1;
+  const them = one ? 'it' : 'them';
+  return {
+    title,
+    body: `${one ? '1 record' : `${held} records`} on this phone did not reach ${company ?? 'your company'} before you accepted, and this passcode sign-in cannot send ${them} now, so this phone cannot sign out without losing ${them}. Keep ${them} here and tell the supervisor who invited you.`,
+  };
 }

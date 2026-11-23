@@ -327,7 +327,7 @@ describe('signing up and signing in with a passcode', () => {
     await type('crew-passcode-again', '582039');
     await press('crew-submit');
     expect(sent('sign_up')).toEqual([{ code: 'ABCD2345', first_name: 'Sam', last_name: 'Ortiz', passcode: '582039' }]);
-    expect(shown()).toContain('Too many tries from this network');
+    expect(shown()).toContain('Too many tries right now');
   });
 
   it('a wrong passcode says how many tries are left; a locked account says until when', async () => {
@@ -468,6 +468,64 @@ describe('signing up and signing in with a passcode', () => {
     expect({ session: useStore.getState().session, connected: useStore.getState().connectedCompany }).toEqual({ session: null, connected: null });
     expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
     expect(byId('crew-code')).not.toHaveLength(0);
+  });
+
+  it('tells a crew member made a supervisor, whose passcode sign-in the company let go of, to sign out and sign in with email', async () => {
+    const ref = await freshPhone();
+    // Sam's own phone, Sam's account open, and nothing waiting to be sent.
+    await act(async () => {
+      useServerAccount.setState({ known: true, account: SAM });
+      expect(useStore.getState().connectCompany(PIT_A, SAM)).toEqual({ ok: true });
+    });
+    await round({ firstName: 'Sam', lastName: 'Ortiz' }, [row('employee', 'emp-sam', { id: 'emp-sam', firstName: 'Sam', lastName: 'Ortiz', role: 'employee', active: true })]);
+    expect(ref.getCurrentRoute()?.name).toBe('Clock');
+    // Sam accepted an invitation to supervise: the passcode sign-in is let go of, so the next standing read finds no row.
+    await act(async () => {
+      const g = useStore.getState;
+      expect(g().applyStanding({ company: PIT_A.id, account: SAM.id, epoch: g().receiving!.epoch }, null)).toBe(true);
+      useSyncStatus.setState({ waiting: 0, stuck: 0, notTaken: 0 });
+    });
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+    expect(byId('company-made-supervisor')).not.toHaveLength(0);
+    expect(shown()).toContain('Made a supervisor?');
+    expect(shown()).toContain('Sign out of this phone, then tap Supervisor? Sign in with email and use the address you were invited at.');
+    expect(byId('company-sign-out')).not.toHaveLength(0);
+  });
+
+  it('promises a crew member made a supervisor no sign-out while records the passcode sign-in can no longer send are on the phone', async () => {
+    await freshPhone();
+    await act(async () => {
+      useServerAccount.setState({ known: true, account: SAM });
+      expect(useStore.getState().connectCompany(PIT_A, SAM)).toEqual({ ok: true });
+    });
+    await round({ firstName: 'Sam', lastName: 'Ortiz' }, [row('employee', 'emp-sam', { id: 'emp-sam', firstName: 'Sam', lastName: 'Ortiz', role: 'employee', active: true })]);
+    await act(async () => {
+      const g = useStore.getState;
+      expect(g().applyStanding({ company: PIT_A.id, account: SAM.id, epoch: g().receiving!.epoch }, null)).toBe(true);
+      // Two records were not sent before Sam accepted, and one the company turned down: none can go now.
+      useSyncStatus.setState({ waiting: 2, stuck: 0, notTaken: 1, trouble: 'not_member' });
+    });
+    expect(byId('company-made-supervisor')).not.toHaveLength(0);
+    expect(shown()).toContain(
+      '3 records on this phone did not reach Test Pit A before you accepted, and this passcode sign-in cannot send them now, so this phone cannot sign out without losing them. Keep them here and tell the supervisor who invited you.',
+    );
+    expect(shown()).not.toContain('Sign out of this phone, then tap');
+  });
+
+  it('says nothing of being made a supervisor to an email sign-in off the roster', async () => {
+    await freshPhone();
+    await act(async () => {
+      useServerAccount.setState({ known: true, account: AVERY });
+      expect(useStore.getState().connectCompany(PIT_A, AVERY)).toEqual({ ok: true });
+    });
+    await round({ firstName: 'Lee', lastName: 'Park' }, [row('employee', 'emp-lee', { id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true })]);
+    await act(async () => {
+      const g = useStore.getState;
+      expect(g().applyStanding({ company: PIT_A.id, account: AVERY.id, epoch: g().receiving!.epoch }, null)).toBe(true);
+    });
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+    expect(byId('company-made-supervisor')).toHaveLength(0);
+    expect(shown()).not.toContain('Made a supervisor?');
   });
 
   it('says what holds signing out of this phone up, with Delete my account for what cannot reach the company', async () => {

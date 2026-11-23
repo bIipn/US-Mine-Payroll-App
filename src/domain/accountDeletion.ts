@@ -264,6 +264,15 @@ export function sendable(sync: { waiting: number; stuck: number; trouble: SendTr
   return Math.max(0, sync.waiting - sync.stuck);
 }
 
+/**
+ * What a phone whose company sign-in is off the company's roster holds that no round will send: what waits, and
+ * what the company turned down (`notTaken`, and what the server will not take as it is, `stuck`, which waits too).
+ * Signing out would lose all of it, so signing out waits for it (`signOutBlockers`).
+ */
+export function heldOffRoster(sync: { waiting: number; stuck: number; notTaken: number }): number {
+  return Math.max(0, sync.waiting - sync.stuck) + sync.notTaken + sync.stuck;
+}
+
 /** The same email, written either way. */
 export const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
@@ -557,7 +566,7 @@ export function signOutBlockers(input: SignOutInput): { blockers: Blocker[]; war
   const toSend = Math.max(0, sync.waiting - sync.stuck);
   const turnedDown = sync.notTaken + sync.stuck;
   if (sync.trouble === 'not_member') {
-    const n = toSend + turnedDown;
+    const n = heldOffRoster(sync);
     if (n > 0) {
       const one = n === 1;
       blockers.push({
