@@ -5,7 +5,9 @@
 // as they are (store.test.ts). A made-up company and made-up people.
 import { keepsTime } from '../../domain/company';
 import { changesToSend, revOf, type ReceivedRow, type Standing, type SyncStatus } from '../../domain/sync';
-import type { Account, Shift } from '../../domain/types';
+import { startedLunch } from '../../domain/time';
+import type { Account, OperatingLog, Shift } from '../../domain/types';
+import { fmtTime } from '../../util/format';
 import { SAMPLE_CREW_IDS } from '../seed';
 
 type Loaded = typeof import('../useStore');
@@ -35,6 +37,11 @@ let seq = 0;
 function row(kind: ReceivedRow['kind'], id: string, data: object): ReceivedRow {
   seq += 1;
   return { kind, id, rev: revOf(data), seq, deleted: false, data };
+}
+/** A record the company deleted. */
+function removed(kind: ReceivedRow['kind'], id: string): ReceivedRow {
+  seq += 1;
+  return { kind, id, rev: 'deleted', seq, deleted: true, data: {} };
 }
 const person = (id: string, firstName: string, lastName: string, more: { role?: 'employee' | 'supervisor'; active?: boolean } = {}) =>
   row('employee', id, { id, firstName, lastName, role: more.role ?? 'employee', active: more.active ?? true });
@@ -321,5 +328,69 @@ describe('forgetting the phone', () => {
     left.g().disconnectCompany();
     expect(left.g().forgetPhone()).toEqual({ ok: false, error: 'This phone is not joined to a company.' });
     expect(left.g().session?.employeeId).toBe('emp-lee');
+  });
+
+  // Phones do not receive time records: a shift or a use left open here would stay open on the company's
+  // server, with nothing in the app to close it.
+  describe('waits until the shift and any unit are closed', () => {
+    const T99 = { id: 'eq-t99', unit: 'T-99', category: 'haul_truck', make: 'Made-up', model: 'HX 40', status: 'ready', meter: 100, meterUnit: 'hrs' };
+    /** Lee's shift today from 1 PM: open, unless it has a clock-out. */
+    const leesShift = (more: Partial<Shift> = {}): Shift => ({ id: 'sh-today', employeeId: 'emp-lee', clockIn: { at: at(13) }, lunches: [], breaks: [], ...more });
+    /** Lee's use of T-99 from 1 PM: still checked out, unless it has an end. */
+    const leesUse = (more: Partial<OperatingLog> = {}): OperatingLog => ({
+      id: 'op-today',
+      equipmentId: T99.id,
+      employeeId: 'emp-lee',
+      inspectionId: 'insp-today',
+      startAt: at(13),
+      startMeter: 100,
+      ...more,
+    });
+    /** Lee's own phone with these records, every one of them already with the company: nothing waits. */
+    function phoneWith(records: { shifts?: Shift[]; opLogs?: OperatingLog[] }, company = { timeClock: true }) {
+      const phone = joinedPhone();
+      phone.round(LEE, [settings(company), person('emp-lee', 'Lee', 'Park'), row('equipment', T99.id, T99)]);
+      phone.useStore.setState(records);
+      allSent(phone.useStore);
+      expect(waiting(phone.useStore)).toEqual([]);
+      return phone;
+    }
+
+    it('is refused while the person is on the clock', () => {
+      const { g } = phoneWith({ shifts: [leesShift()] });
+      expect(g().forgetPhone()).toEqual({ ok: false, error: 'You are on the clock. Clock out, then sign out.' });
+      expect(g().session?.employeeId).toBe('emp-lee');
+      expect(g().shifts).toHaveLength(1);
+      // The office turned the time clock off meanwhile: someone on the clock keeps the Clock to clock out on.
+      const clockOff = phoneWith({ shifts: [leesShift()] }, { timeClock: false });
+      expect(keepsTime(clockOff.g().settings.company)).toBe(false);
+      expect(clockOff.g().forgetPhone()).toEqual({ ok: false, error: 'You are on the clock. Clock out, then sign out.' });
+    });
+
+    it('is refused while the person is at lunch', () => {
+      const { g } = phoneWith({ shifts: [leesShift({ lunches: [startedLunch({ at: at(14, 45) })] })] });
+      expect(g().forgetPhone()).toEqual({ ok: false, error: `You are at lunch until ${fmtTime(at(15, 15))}. Clock out after that, then sign out.` });
+      expect(g().shifts).toHaveLength(1);
+    });
+
+    it('is refused while the person has a unit checked out', () => {
+      const { g, round } = phoneWith({ opLogs: [leesUse()] });
+      const words = { ok: false, error: 'You still have T-99 checked out. End use on the Checklists screen, then sign out.' };
+      expect(g().forgetPhone()).toEqual(words);
+      // The company takes T-99 out of the fleet meanwhile: the phone keeps it until its use is ended, and still waits.
+      round(LEE, [removed('equipment', T99.id)]);
+      expect(g().equipment).toEqual([]);
+      expect(g().forgetPhone()).toEqual(words);
+      expect(g().opLogs).toHaveLength(1);
+    });
+
+    it('is allowed once they have clocked out, with nothing checked out and nothing waiting', () => {
+      const { g } = phoneWith({
+        shifts: [leesShift({ clockOut: { at: at(14, 30) } })],
+        opLogs: [leesUse({ endAt: at(14, 20), endMeter: 104, parkedSafely: true })],
+      });
+      expect(g().forgetPhone()).toEqual({ ok: true });
+      expect(g()).toMatchObject({ session: null, accounts: [], shifts: [], opLogs: [], connectedCompany: null });
+    });
   });
 });

@@ -5,13 +5,14 @@ import { CloudUpload, Eye, EyeOff, OctagonAlert, RotateCcw, TriangleAlert, UserX
 import { Button, Field, IconButton, Notice, Page, Panel, Sheet, Txt } from '../../components/ui';
 import { ACCOUNT_PAGE, DELETED_TOAST, deletionPlan, LOCAL_CONFIRM, PASSWORD_HINT, whoseSignIn, type Blocker, type DeletionCheckCompany } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
+import { unitCheckedOut } from '../../domain/fleet';
 import type { ScreenProps } from '../../navigation/types';
 import { CAN_CONNECT, deleteMyServerAccount, forgetDeletedSignIn, server, useServerAccount, type ServerDeletion } from '../../services/connection';
 import { haptic } from '../../services/haptics';
 import { openWebPage } from '../../services/links';
 import { syncNow, useSyncStatus } from '../../services/sync';
 import { SAMPLE_CREW_IDS } from '../../store/seed';
-import { openLogs, openShiftOf, staleShiftOf, useMe, useStore } from '../../store/useStore';
+import { openShiftOf, staleShiftOf, useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDate, fmtTime } from '../../util/format';
 
@@ -70,7 +71,8 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     };
   }, [askFor, tries]);
 
-  const myLog = me ? [...openLogs(opLogs).values()].find((log) => log.employeeId === me.id) : undefined;
+  // The unit they have checked out, as signing out of the phone finds it (unitCheckedOut): one they can still end use of.
+  const myUnit = me ? unitCheckedOut(me.id, opLogs, equipment, receiving?.gone) : null;
   // Everyone else with a shift open on this phone.
   const othersOnClock = me
     ? [...new Set(shifts.filter((s) => !s.clockOut && s.employeeId !== me.id).map((s) => s.employeeId))].filter((id) => openShiftOf(shifts, id, now)).length
@@ -84,7 +86,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     company: company.name,
     openShift: me ? openShiftOf(shifts, me.id, now) : undefined,
     staleShift: me ? staleShiftOf(shifts, me.id, now) : undefined,
-    openUnit: myLog ? equipment.find((e) => e.id === myLog.equipmentId)?.unit ?? null : null,
+    openUnit: myUnit?.unit ?? null,
     hasRate: !signInOnly && rate != null,
     canConnect: CAN_CONNECT,
     linked,

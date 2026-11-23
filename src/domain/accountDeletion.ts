@@ -168,6 +168,20 @@ export interface DeletionPlan {
   finishOnDashboard: boolean;
 }
 
+/**
+ * A shift still open: clock out first, before deleting the account or signing out of the phone (`then`).
+ * Only this phone can clock it out, since phones do not receive time records. At lunch, after the lunch:
+ * it runs its full 30 minutes and cannot be clocked out of. Null with no open shift.
+ */
+export function clockBlocker(openShift: Shift | undefined, now: number, then: 'delete your account' | 'sign out', fmtTime: (ms: number) => string): Blocker | null {
+  if (!openShift) return null;
+  const lunch = openShift.lunches[openShift.lunches.length - 1];
+  const until = lunch ? lunchEndAt(lunch) : 0;
+  return lunch && now < until
+    ? { kind: 'at_lunch', title: 'Clock out first', body: `You are at lunch until ${fmtTime(until)}. Clock out after that, then ${then}.`, action: 'clock' }
+    : { kind: 'on_clock', title: 'Clock out first', body: `You are on the clock. Clock out, then ${then}.`, action: 'clock' };
+}
+
 /** Records this phone has not sent yet: sent before its own company sign-in is deleted. */
 export function waitingBlocker(n: number, company: string, online: boolean): Blocker {
   return {
@@ -338,15 +352,8 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   // ---- What stops it for now ---------------------------------------------------------------------
   const blockers: Blocker[] = [];
   // With time tracking off there is no Clock screen to clock out on, and no shift that counts.
-  if (me && keepsTime && input.openShift) {
-    const lunch = input.openShift.lunches[input.openShift.lunches.length - 1];
-    const until = lunch ? lunchEndAt(lunch) : 0;
-    blockers.push(
-      lunch && input.now < until
-        ? { kind: 'at_lunch', title: 'Clock out first', body: `You are at lunch until ${input.fmtTime(until)}. Clock out after that, then delete your account.`, action: 'clock' }
-        : { kind: 'on_clock', title: 'Clock out first', body: 'You are on the clock. Clock out, then delete your account.', action: 'clock' },
-    );
-  }
+  const clock = me && keepsTime ? clockBlocker(input.openShift, input.now, 'delete your account', input.fmtTime) : null;
+  if (clock) blockers.push(clock);
   const needsServer = serverToo || signIn.kind === 'unknown';
   const canSend = sendsWithIt ? sendable(sync) : 0;
   if (needsServer) {

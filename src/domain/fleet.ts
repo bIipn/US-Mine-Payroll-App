@@ -1,7 +1,7 @@
 import { uid } from '../util/hash';
 import { cleanText } from './roster';
 import { CATEGORY_ORDER } from './templates';
-import type { Equipment, EquipmentCategory } from './types';
+import type { Equipment, EquipmentCategory, OperatingLog } from './types';
 
 /**
  * The fleet: the units people check and take out. Every unit gets the same
@@ -79,6 +79,26 @@ export function changedUnit(
 /** The fleet with a unit taken out. Its past checklists and requests stay on record. */
 export function withoutUnit<T extends { id: string }>(fleet: readonly T[], unitId: string): T[] {
   return fleet.filter((e) => e.id !== unitId);
+}
+
+/**
+ * A unit this person has checked out on this phone, to check back in with End use, or null: the unit of a
+ * use of theirs that has not ended, in the fleet or kept in `gone` (`Receiving`) because the company took
+ * it out of the fleet while it was checked out here. A use whose unit is in neither is shown nowhere on
+ * the phone and cannot be ended, so it is never one.
+ */
+export function unitCheckedOut(
+  employeeId: string,
+  opLogs: readonly OperatingLog[],
+  fleet: readonly Equipment[],
+  gone: Readonly<Record<string, Equipment>> | null | undefined,
+): Equipment | null {
+  for (const log of opLogs) {
+    if (log.employeeId !== employeeId || log.endAt) continue;
+    const unit = fleet.find((e) => e.id === log.equipmentId) ?? gone?.[log.equipmentId];
+    if (unit) return unit;
+  }
+  return null;
 }
 
 /**

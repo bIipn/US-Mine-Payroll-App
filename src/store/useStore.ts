@@ -4,11 +4,11 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { accountHere, offTheRosterHere, ownPersonHere, signInIsTheirs, supervisorHere } from '../domain/access';
-import { sendable } from '../domain/accountDeletion';
+import { clockBlocker, sendable } from '../domain/accountDeletion';
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
-import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
+import { newUnit, unitCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced, type SyncStatus } from '../domain/sync';
@@ -242,11 +242,12 @@ interface Actions {
   /**
    * One person per phone: the person whose own company sign-in this phone has signs it out, and it is
    * emptied the way clearDevice empties it, to start as the build does. Only on a phone joined to its
-   * company, and only once nothing on it would be lost: the phone has read the company's records to the
-   * end, and a round could send nothing more of what waits on it (`sendable`). `round` is what only the
-   * round knows (useSyncStatus): what the server will not take as it is, and why nothing can go now.
-   * Left out, everything waiting holds it up. What the company turned down (receiving.held) never does.
-   * Signing out of the company's server is connection.ts's.
+   * company, and only once nothing on it would be lost: the person has clocked out and checked their
+   * units back in (only this phone can, as for deleting the account), the phone has read the company's
+   * records to the end, and a round could send nothing more of what waits on it (`sendable`). `round` is
+   * what only the round knows (useSyncStatus): what the server will not take as it is, and why nothing
+   * can go now. Left out, everything waiting holds it up. What the company turned down (receiving.held)
+   * never does. Signing out of the company's server is connection.ts's.
    */
   forgetPhone: (round?: Pick<SyncStatus, 'stuck' | 'trouble'>) => Result;
 
@@ -511,9 +512,9 @@ export const useStore = create<Store>()(
         if (path === 'off_roster') {
           return { ok: false, error: 'You are still on the clock on this phone. Ask a supervisor to set the end of your shift, then delete this account.' };
         }
-        const lunch = open.lunches[open.lunches.length - 1];
-        if (lunch && now < lunchEndAt(lunch)) return { ok: false, error: `You are at lunch until ${fmtTime(lunchEndAt(lunch))}. Clock out after that, then delete your account.` };
-        return { ok: false, error: 'You are on the clock. Clock out, then delete your account.' };
+        // The deletion plan's own check and words (clockBlocker).
+        const clock = clockBlocker(open, now, 'delete your account', fmtTime);
+        return clock ? { ok: false, error: clock.body } : null;
       };
       /** What this phone holds that its company does not, sorted as a round sorts it on a phone joined to a company (sortedChanges). */
       const sortedHere = (r: Receiving) => {
@@ -753,7 +754,7 @@ export const useStore = create<Store>()(
         signOut: () => set({ session: null }),
 
         forgetPhone: (round = { stuck: 0, trouble: null }) => {
-          const { connectedCompany, session, employees } = get();
+          const { connectedCompany, session, employees, shifts, opLogs, equipment } = get();
           if (!connectedCompany) return { ok: false, error: 'This phone is not joined to a company.' };
           if (!session) return signedOut;
           const r = receivingHere();
@@ -762,6 +763,14 @@ export const useStore = create<Store>()(
           if (!me || !signInIsTheirs(me, r)) {
             return { ok: false, error: `This phone is joined with ${r.name.firstName} ${r.name.lastName}’s company sign-in. Only they can sign this phone out.` };
           }
+          // Only this phone can clock its shift out and check its units back in: phones do not receive time
+          // records, so one left open here would stay open on the company's server with nothing to close it.
+          // The deletion plan's checks (clockBlocker, unitCheckedOut), in the words for signing out.
+          const now = Date.now();
+          const clock = clockBlocker(openShiftOf(shifts, me.id, now), now, 'sign out', fmtTime);
+          if (clock) return { ok: false, error: clock.body };
+          const unit = unitCheckedOut(me.id, opLogs, equipment, r.gone);
+          if (unit) return { ok: false, error: `You still have ${unit.unit} checked out. End use on the Checklists screen, then sign out.` };
           // Until the phone has read the company's records to the end, a round leaves its new units, sheets and settings out of what it would send.
           if (r.caughtUpAt == null) {
             return {

@@ -1,5 +1,5 @@
-import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitNumber, withoutUnit } from '../fleet';
-import type { Equipment } from '../types';
+import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitCheckedOut, unitNumber, withoutUnit } from '../fleet';
+import type { Equipment, OperatingLog } from '../types';
 
 const loader: Equipment = { id: 'eq_a', unit: 'L-2', category: 'loader', make: 'Test', model: 'One', status: 'ready', meter: 4250.5, meterUnit: 'hrs' };
 const truck: Equipment = { id: 'eq_b', unit: 'T-10', category: 'haul_truck', make: 'Test', model: 'Two', status: 'out_of_service', meter: 9120, meterUnit: 'hrs' };
@@ -106,5 +106,31 @@ describe('the fleet as it is listed', () => {
     expect(fleetOrder(more).map((e) => e.unit)).toEqual(['L-2', 'L-10', 'T-10', 'P-4']);
     // The list handed in is left as it was.
     expect(more[0].unit).toBe('L-10');
+  });
+});
+
+describe('a unit someone has checked out', () => {
+  const use = (id: string, equipmentId: string, employeeId: string, endAt?: number): OperatingLog => ({
+    id,
+    equipmentId,
+    employeeId,
+    inspectionId: `insp_${id}`,
+    startAt: 1_000,
+    startMeter: 100,
+    ...(endAt ? { endAt } : null),
+  });
+
+  it('is a unit whose use of theirs has not ended, in the fleet or kept until the use ends', () => {
+    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_a', 'emp_lee')], fleet, null)).toEqual(loader);
+    // Ended, or someone else's: not theirs to check back in.
+    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_a', 'emp_lee', 2_000), use('op2', 'eq_b', 'emp_sam')], fleet, null)).toBeNull();
+    // The company took it out of the fleet while it was checked out here: the phone keeps it until its use is ended.
+    const takenOut = { ...truck, id: 'eq_gone', unit: 'T-77' };
+    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_gone', 'emp_lee')], fleet, { eq_gone: takenOut })).toEqual(takenOut);
+  });
+
+  it('is never a use whose unit is nowhere on the phone, which nothing shows and nothing could end', () => {
+    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_nowhere', 'emp_lee')], fleet, {})).toBeNull();
+    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_nowhere', 'emp_lee'), use('op2', 'eq_c', 'emp_lee')], fleet, {})).toEqual(pickup);
   });
 });

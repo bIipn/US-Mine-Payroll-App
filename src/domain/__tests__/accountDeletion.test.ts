@@ -1,6 +1,7 @@
 import {
   ACCOUNT_PAGE,
   CHECK_FAILED_BLOCKER,
+  clockBlocker,
   DELETED_TOAST,
   deletionPlan,
   legalLine,
@@ -265,6 +266,24 @@ describe('what stops it, and what to look at first', () => {
     // After lunch, on the clock again.
     const after = shiftAt(NOW - 3 * 3_600_000, { lunches: [{ start: { at: NOW - 40 * 60_000 }, end: { at: NOW - 10 * 60_000, auto: true } }] });
     expect(kinds(deletionPlan(input({ openShift: after })))).toEqual(['on_clock']);
+  });
+
+  it('is the same clock-out check for signing out of the phone, in its words', () => {
+    expect(clockBlocker(shiftAt(NOW - 3 * 3_600_000), NOW, 'sign out', hhmm)).toEqual({
+      kind: 'on_clock',
+      title: 'Clock out first',
+      body: 'You are on the clock. Clock out, then sign out.',
+      action: 'clock',
+    });
+    // A lunch runs its full 30 minutes and cannot be clocked out of: clock out after it, then sign out.
+    const lunch = { start: { at: NOW - 10 * 60_000 }, end: { at: NOW - 10 * 60_000 + LUNCH_MS, auto: true } };
+    expect(clockBlocker(shiftAt(NOW - 3 * 3_600_000, { lunches: [lunch] }), NOW, 'sign out', hhmm)).toEqual({
+      kind: 'at_lunch',
+      title: 'Clock out first',
+      body: `You are at lunch until ${hhmm(NOW + 20 * 60_000)}. Clock out after that, then sign out.`,
+      action: 'clock',
+    });
+    expect(clockBlocker(undefined, NOW, 'sign out', hhmm)).toBeNull();
   });
 
   it('warns of a unit still checked out and of an old shift with no clock-out, and stops for neither', () => {
