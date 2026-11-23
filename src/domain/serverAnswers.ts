@@ -1,4 +1,6 @@
 import type { CloseRefusal, DeletionAnswer, DeletionCheckCompany } from './accountDeletion';
+import { fmtDateTime, fmtTime, startOfDay } from '../util/format';
+import { passcodeWords, type PasscodeProblem } from './passcode';
 import { isNotFound } from './refusals';
 import { cleanText } from './roster';
 import type { ConnectedCompany } from './server';
@@ -498,5 +500,165 @@ export function deletionAnswerWords(answer: DeletionAnswer, { email }: { email: 
       return answer.closed.length
         ? 'The company is closed, but your account could not be deleted just now. Try again in a few minutes.'
         : 'MineMuster’s server could not delete your account just now. Nothing was deleted. Try again in a few minutes.';
+  }
+}
+
+// ---- The crew-auth function: company code, name and passcode ----------------------------------------
+
+export type CrewAction = 'lookup' | 'sign_up' | 'sign_in' | 'reset' | 'confirm';
+
+/** The session a sign-in hands the phone. `expiresAt` is Supabase's own: seconds since the epoch. */
+export interface CrewSession {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  userId: string;
+}
+
+export type CrewAnswer =
+  | { kind: 'company'; name: string; state: string }
+  | {
+      kind: 'signed_in';
+      session: CrewSession;
+      /** Null from a confirm, which names no company. */
+      company: { id: string; name: string } | null;
+      waiting: boolean;
+      join: JoinAnswer | null;
+      /** False only when a reset could not sign the account's other sessions out. */
+      othersSignedOut: boolean;
+    }
+  | { kind: 'passcode_changed' }
+  | {
+      kind:
+        | 'no_company'
+        | 'already_signed_up'
+        | 'use_email'
+        | 'no_account'
+        | 'ambiguous'
+        | 'expired'
+        | 'busy'
+        | 'denied'
+        | 'signed_out'
+        | 'already_deleted'
+        | 'unreachable';
+    }
+  | { kind: 'wrong'; triesLeft: number }
+  | { kind: 'bad_reset_code'; triesLeft: number }
+  | { kind: 'locked'; until: number | null }
+  | { kind: 'easy_passcode'; problem: PasscodeProblem }
+  | { kind: 'bad_name'; message: string }
+  | { kind: 'server'; message: string };
+
+const PLAIN_CREW_REFUSALS = ['no_company', 'already_signed_up', 'use_email', 'no_account', 'ambiguous', 'expired', 'busy', 'denied'] as const;
+const PASSCODE_PROBLEMS: readonly unknown[] = ['not_digits', 'too_short', 'too_long', 'easy'];
+
+const crewServerTrouble = (status: number): CrewAnswer => ({ kind: 'server', message: `The sign-in server sent an answer this app cannot read (HTTP ${status}).` });
+
+function readCrewSession(raw: unknown): CrewSession | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { access_token, refresh_token, expires_at, user_id } = raw as Record<string, unknown>;
+  if (typeof access_token !== 'string' || !access_token || typeof refresh_token !== 'string' || !refresh_token) return null;
+  if (typeof expires_at !== 'number' || !Number.isFinite(expires_at) || typeof user_id !== 'string' || !user_id) return null;
+  return { accessToken: access_token, refreshToken: refresh_token, expiresAt: expires_at, userId: user_id };
+}
+
+/** What the crew-auth function answered, by its HTTP status and body. Never echoes the body. */
+export function readCrewAnswer(status: number, body: unknown): CrewAnswer {
+  if (status === 401) return { kind: 'signed_out' };
+  if (status === 410) return { kind: 'already_deleted' };
+  if (status !== 200 || !body || typeof body !== 'object' || Array.isArray(body)) return crewServerTrouble(status);
+  const b = body as Record<string, unknown>;
+  const said = b.status;
+  if (said === 'company') {
+    return typeof b.name === 'string' && typeof b.state === 'string' ? { kind: 'company', name: b.name, state: b.state } : crewServerTrouble(status);
+  }
+  if (said === 'signed_in') {
+    const session = readCrewSession(b.session);
+    if (!session) return crewServerTrouble(status);
+    const c = b.company;
+    const company =
+      c && typeof c === 'object' && typeof (c as Record<string, unknown>).id === 'string' && typeof (c as Record<string, unknown>).name === 'string'
+        ? { id: (c as { id: string }).id, name: (c as { name: string }).name }
+        : null;
+    return {
+      kind: 'signed_in',
+      session,
+      company,
+      waiting: b.waiting === true,
+      join: readJoinAnswer(b.join),
+      othersSignedOut: b.others_signed_out !== false,
+    };
+  }
+  if (said === 'passcode_changed') return { kind: 'passcode_changed' };
+  if ((PLAIN_CREW_REFUSALS as readonly unknown[]).includes(said)) return { kind: said as (typeof PLAIN_CREW_REFUSALS)[number] };
+  if (said === 'wrong' || said === 'bad_reset_code') {
+    return typeof b.tries_left === 'number' && Number.isFinite(b.tries_left) ? { kind: said, triesLeft: b.tries_left } : crewServerTrouble(status);
+  }
+  if (said === 'locked') {
+    if (b.until === null) return { kind: 'locked', until: null };
+    const until = typeof b.until === 'string' ? Date.parse(b.until) : NaN;
+    return Number.isFinite(until) ? { kind: 'locked', until } : crewServerTrouble(status);
+  }
+  if (said === 'easy_passcode') {
+    return PASSCODE_PROBLEMS.includes(b.problem) ? { kind: 'easy_passcode', problem: b.problem as PasscodeProblem } : crewServerTrouble(status);
+  }
+  if (said === 'bad_name') return typeof b.message === 'string' && b.message ? { kind: 'bad_name', message: b.message } : crewServerTrouble(status);
+  return crewServerTrouble(status);
+}
+
+/** What to tell a crew member about an answer from the crew-auth function. Never asks crew for an email. */
+export function crewWords(answer: CrewAnswer, now: number): { title: string; body?: string; tone: 'ok' | 'warn' | 'bo' | 'info' } {
+  switch (answer.kind) {
+    case 'company':
+      return { title: answer.name, body: 'Type your first and last name and your passcode.', tone: 'ok' };
+    case 'signed_in':
+      return answer.waiting
+        ? { title: 'Waiting for a supervisor', body: 'A supervisor will let you in. Once they do, open the app again.', tone: 'info' }
+        : { title: 'You are signed in', tone: 'ok' };
+    case 'passcode_changed':
+      return { title: 'Your new passcode is set', body: 'Sign in with your new passcode.', tone: 'ok' };
+    case 'no_company':
+      return { title: 'No company has that code', body: 'Check the code with your supervisor and type it again.', tone: 'warn' };
+    case 'already_signed_up':
+      return { title: 'That name already has a sign-in', body: 'Sign in with your passcode. If you forgot it, ask a supervisor for a reset code.', tone: 'warn' };
+    case 'use_email':
+      return { title: 'This name signs in with email', body: 'Tap Supervisor? Sign in with email.', tone: 'info' };
+    case 'no_account':
+      return { title: 'No sign-in for that name yet', body: 'Check the spelling, or create your sign-in first.', tone: 'warn' };
+    case 'ambiguous':
+      return { title: 'More than one person fits that name', body: 'Type your name the way it is on the roster.', tone: 'warn' };
+    case 'expired':
+      return { title: 'That reset code has run out or was already used', body: 'Ask a supervisor for a new one.', tone: 'warn' };
+    case 'busy':
+      return { title: 'Too many tries from this network', body: 'Wait a few minutes and try again.', tone: 'warn' };
+    case 'denied':
+      return { title: 'A supervisor has turned down your request', body: 'Speak to a supervisor at your company.', tone: 'bo' };
+    case 'signed_out':
+      return { title: 'You are signed out', body: 'Sign in again.', tone: 'warn' };
+    case 'already_deleted':
+      return { title: 'That sign-in is already deleted', tone: 'info' };
+    case 'unreachable':
+      return { title: 'No signal', body: 'The company server could not be reached. Try again when you have signal.', tone: 'warn' };
+    case 'wrong': {
+      const left = `${answer.triesLeft} ${answer.triesLeft === 1 ? 'try' : 'tries'} left`;
+      return { title: 'That passcode is not right', body: `${left}. Check it and try again.`, tone: 'bo' };
+    }
+    case 'bad_reset_code': {
+      const left = `${answer.triesLeft} ${answer.triesLeft === 1 ? 'try' : 'tries'} left`;
+      return { title: 'That reset code is not right', body: `${left}. Check it with your supervisor and try again.`, tone: 'bo' };
+    }
+    case 'locked':
+      if (answer.until === null) return { title: 'This sign-in is locked', body: 'Ask a supervisor for a reset code.', tone: 'bo' };
+      return {
+        title: 'Too many wrong passcodes',
+        body: `Try again at ${startOfDay(answer.until) === startOfDay(now) ? fmtTime(answer.until) : fmtDateTime(answer.until)}, or ask a supervisor for a reset code.`,
+        tone: 'bo',
+      };
+    case 'easy_passcode':
+      return { title: 'Pick a harder passcode', body: passcodeWords(answer.problem), tone: 'warn' };
+    case 'bad_name':
+      return { title: 'Check your name', body: answer.message, tone: 'warn' };
+    case 'server':
+      return { title: 'Something went wrong', body: 'Try again in a minute. If it keeps happening, tell a supervisor.', tone: 'warn' };
   }
 }
