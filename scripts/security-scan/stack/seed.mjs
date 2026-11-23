@@ -36,16 +36,22 @@ export function sendStripeEvent(secrets, event, { signedWith = secrets.webhookSe
   return call('POST', '/functions/v1/stripe-webhook', { body, headers: { 'Stripe-Signature': `t=${t},v1=${v1}`, 'Content-Type': 'application/json' } });
 }
 
-/** What a phone sends for a company: one record of each kind a supervisor sends, in the tests' own made-up shapes. */
-const supervisorRecords = (name, state) => [
-  change('settings', 'company', { company: { name, state }, site: { name: 'North bench' }, workweekStartsOn: 0, allowSectionAllOk: false }),
-  change('employee', 'emp-1', { id: 'emp-1', first: 'Lee', last: 'Park', role: 'employee', active: true }),
-  change('equipment', 'eq-1', { id: 'eq-1', unit: 'T-14', category: 'haul_truck', status: 'ready', meter: 1200 }),
-  change('areaSheet', 'wash-plant', { id: 'wash-plant', name: 'Wash plant', lines: ['Walkways', 'Guards'] }),
+/**
+ * What a phone sends for a company: one record of each kind a supervisor sends, made up. The four kinds every phone
+ * reads (settings, employee, equipment, areaSheet) are in the shape the phones read them, which push_records checks
+ * (shared_record_problem; readRecord in src/domain/receive.ts), as supabase/tests writes them: a company with no
+ * clock-in site, a person with a first and last name, a unit with its number, make, model and meter, and a sheet
+ * with a name and lines. supabase/tests/scan_seed.db.mjs holds them to it.
+ */
+export const supervisorRecords = (name, state) => [
+  change('settings', 'company', { company: { name, state, pay: null }, site: null, workweekStartsOn: 0, allowSectionAllOk: false }),
+  change('employee', 'emp-1', { id: 'emp-1', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true }),
+  change('equipment', 'eq-1', { id: 'eq-1', unit: 'T-14', category: 'haul_truck', make: 'Made-up', model: 'HX 40', status: 'ready', meter: 1200, meterUnit: 'hrs' }),
+  change('areaSheet', 'wash-plant', { id: 'wash-plant', title: 'Wash plant', rows: [{ id: 'r1', label: 'Walkways' }, { id: 'r2', label: 'Guards' }], active: true }),
   change('leave', 'leave-1', { id: 'leave-1', employeeId: 'emp-1', day: '2026-11-11', kind: 'holiday', hours: 800 }),
 ];
 
-const memberRecords = (at) => [
+export const memberRecords = (at) => [
   change('shift', 'shift-1', { id: 'shift-1', employeeId: 'emp-1', clockIn: at, clockOut: null, edits: [] }),
   change('denied', 'denied-1', { id: 'denied-1', employeeId: 'emp-1', at, reason: 'outside the boundary' }),
   change('inspection', 'insp-1', { id: 'insp-1', equipmentId: 'eq-1', answers: { 1: 'ok' }, signedAt: at }),

@@ -76,7 +76,7 @@ All of it in `MINEMUSTER_SCAN_STACK_DIR`, readable by its owner only:
 | N1 | Jo Vale | An account that has joined nothing |
 | P1 | Kit Marlow | An account with a pending request to join Test Pit A |
 
-Test Pit A holds one record of each of the eleven kinds `push_records` takes; Test Pit B holds four.
+Test Pit A holds one record of each of the eleven kinds `push_records` takes; Test Pit B holds four. The four kinds every phone reads (settings, people, units and area sheets) are written in the shape the server checks before it takes them, and `supabase/tests/scan_seed.db.mjs` holds the seed's records to that: one set aside stops the seed.
 
 ## How the gateway behaves, and where that comes from
 

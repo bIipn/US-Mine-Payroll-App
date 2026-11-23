@@ -88,7 +88,7 @@ export async function smoke(secrets, files) {
   const shift = { id: 'shift-smoke', employeeId: 'emp-1', clockIn: Date.now(), clockOut: null, edits: [] };
   const pushed = await rpc('push_records', tokens.A2, { company_id: A.id, changes: [
     { key: 'shift:shift-smoke', kind: 'shift', id: 'shift-smoke', rev: 'a1b2c3d4e5f60718293a', record: shift },
-    { key: 'employee:emp-9', kind: 'employee', id: 'emp-9', rev: 'b1b2c3d4e5f60718293a', record: { id: 'emp-9', first: 'Bo', last: 'Ellison', role: 'supervisor', active: true } },
+    { key: 'employee:emp-9', kind: 'employee', id: 'emp-9', rev: 'b1b2c3d4e5f60718293a', record: { id: 'emp-9', firstName: 'Bo', lastName: 'Ellison', role: 'supervisor', active: true } },
     { key: 'shift:shift-rate', kind: 'shift', id: 'shift-rate', rev: 'c1b2c3d4e5f60718293a', record: { ...shift, id: 'shift-rate', payRate: 4200 } },
   ] });
   check('a new shift is accepted, a roster record is a supervisor\'s, a record with a pay rate is private', pushed, 200,
