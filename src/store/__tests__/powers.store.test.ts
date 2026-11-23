@@ -37,7 +37,7 @@ afterEach(() => jest.useRealTimers());
 const DASHBOARD =
   'On a phone joined to a company, people are added, taken off and given a role or a payroll ID on the dashboard’s Roster page, which changes the sign-in roster too. This phone gets the change the next time it has signal.';
 const CREW_SIGN_IN =
-  'This phone is joined with a crew sign-in, so the company’s server would not take this. Change it on the office dashboard, or join this phone with a supervisor’s sign-in on Company account.';
+  'This phone is joined with a crew sign-in, so the company’s server would not take this. A supervisor changes it on the office dashboard.';
 const NOT_YET = 'This phone has not got the company’s roster, fleet and sheets yet. Try again once it has had signal.';
 
 describe('a supervisor’s powers on a connected phone', () => {

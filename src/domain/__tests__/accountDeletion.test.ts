@@ -9,6 +9,8 @@ import {
   offRosterWords,
   sendable,
   signOutBlockers,
+  signOutWarnings,
+  signOutWords,
   whoseSignIn,
   type DeletionCheckCompany,
   type DeletionInput,
@@ -367,7 +369,7 @@ describe('a phone that never joined, signed in to the server under another email
     expect([plan.serverToo, plan.needsPassword, plan.passwordLabel]).toEqual([false, false, undefined]);
     expect(plan.deletes.join(' ')).not.toMatch(/sam@example\.com/);
     expect(plan.warnings).toContain(
-      'This phone is signed in to MineMuster’s server as sam@example.com, not as riley@example.com, so that sign-in is not deleted with your account. If it is yours, delete it on Company account.',
+      'This phone is signed in to MineMuster’s server as sam@example.com, not as riley@example.com, so that sign-in is not deleted with your account. If it is yours, delete it at app.minemuster.com/account.',
     );
     // Nothing of the server is in the way, so no signal is needed.
     expect(deletionPlan(waitingToJoin({ sync: { online: false, waiting: 0, notTaken: 0, stuck: 0, trouble: null } })).blockers).toEqual([]);
@@ -587,5 +589,115 @@ describe('signing out of a phone', () => {
     const words = 'Your shift of 2026-11-17 has no clock-out. It counts no hours until a supervisor sets its end.';
     expect(signOutBlockers(out({ staleShift: stale }))).toEqual({ blockers: [], warnings: [words] });
     expect(deletionPlan(input({ staleShift: stale })).warnings).toContain(words);
+    // The same warning, for the question asked before signing out, when nothing holds it up and the phone is emptied.
+    expect(signOutWarnings({ staleShift: stale, fmtDay: day })).toEqual([words]);
+    expect(signOutWarnings({ fmtDay: day })).toEqual([]);
+  });
+});
+
+describe('a crew member’s passcode sign-in', () => {
+  // A crew member signs in with the company code, a name and a passcode, and has no email: the phone holds
+  // no address for the sign-in (the server's hidden one never reaches it), and the app account the sign-in
+  // opened has none either. Lee Park is made up.
+  const LEE: Employee = { id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true };
+  const LEES_SIGN_IN = { id: 'u-lee', email: '', kind: 'passcode' as const };
+  const leesPit = { id: 'c-a', name: 'Test Pit A', role: 'employee' as const, userId: 'u-lee', email: '' };
+  /** Lee's own phone: joined with Lee's passcode sign-in, which opened Lee's account here. */
+  const leesPhone = (over: Partial<DeletionInput> = {}) =>
+    input({
+      me: LEE,
+      account: { email: '' },
+      linked: leesPit,
+      standing: { role: 'employee', name: { firstName: 'Lee', lastName: 'Park' } },
+      serverAccount: LEES_SIGN_IN,
+      check: [{ id: 'c-a', name: 'Test Pit A', role: 'employee', lastSupervisor: false, successors: [], canClose: false, closeFrom: null, running: null }],
+      ...over,
+    });
+  /** Every line the plan shows. */
+  const said = (plan: ReturnType<typeof deletionPlan>) =>
+    [plan.title, plan.intro, plan.keepsTitle, plan.keep, ...plan.deletes, ...plan.keeps, plan.legal, ...plan.phone, ...plan.warnings, ...plan.blockers.flatMap((b) => [b.title, b.body]), plan.passwordLabel ?? ''].join(' ');
+
+  it('is theirs, with no address, wherever the phone has it', () => {
+    expect(whoseSignIn(leesPhone())).toEqual({ kind: 'theirs', email: '', passcode: true, connected: true });
+    // A phone that never joined: a passcode has no email to match, and the passcode shows whose it is.
+    expect(whoseSignIn(input({ serverAccount: LEES_SIGN_IN }))).toEqual({ kind: 'theirs', email: '', passcode: true, connected: false });
+    // Signed out on the phone: no address to name.
+    expect(whoseSignIn(leesPhone({ serverAccount: null }))).toEqual({ kind: 'theirs_signed_out', email: null });
+  });
+
+  it('deletes with the passcode, and says what goes and what stays with no email or password in it', () => {
+    const plan = deletionPlan(leesPhone());
+    expect(plan.title).toBe('Delete my account');
+    expect([plan.serverToo, plan.needsPasscode, plan.needsPassword, plan.passwordLabel]).toEqual([true, true, false, undefined]);
+    expect(plan.deletes).toEqual([
+      'Your sign-in on this phone.',
+      'Your hourly rate, kept only on this phone.',
+      'Your company sign-in and its passcode, on MineMuster’s server. It stops working on every phone.',
+      'Your requests to join a company.',
+    ]);
+    expect(plan.keeps).toEqual([
+      'Your name on Test Pit A’s roster. A supervisor takes it off when you leave.',
+      'Your punches, paid leave, equipment checklists, pre shift exams and maintenance requests, with your name on them.',
+      'MineMuster keeps them for Test Pit A while it uses MineMuster, and deletes them when the company asks.',
+    ]);
+    expect(plan.keep).toBe('Keep my account');
+    expect(said(plan)).not.toMatch(/@|e-?mail|password/i);
+  });
+
+  it('is deleted by someone taken off the roster who has no account open on the phone, and says what stays', () => {
+    // Off the company's roster: nothing more can be sent with the sign-in, so the record waiting stays on the phone.
+    const plan = deletionPlan(
+      leesPhone({ me: null, account: null, hasRate: false, standing: { role: 'none', name: { firstName: 'Lee', lastName: 'Park' } }, check: [], sync: { online: true, waiting: 1, notTaken: 0, stuck: 0, trouble: 'not_member' } }),
+    );
+    expect(plan.signIn).toEqual({ kind: 'theirs', email: '', passcode: true, connected: true });
+    expect(plan.title).toBe('Delete my account');
+    expect(plan.intro).toBe('Deleting your account takes your sign-in off MineMuster’s server and signs this phone out of it. It cannot be undone.');
+    expect(plan.blockers).toEqual([]);
+    expect(plan.needsPasscode).toBe(true);
+    expect(plan.keepsTitle).toBe('What stays with Test Pit A');
+    expect(plan.keeps[0]).toBe('Your name on Test Pit A’s roster. A supervisor takes it off when you leave.');
+    expect(plan.warnings).toContain('1 record cannot be sent to Test Pit A, so it stays on this phone.');
+    expect(said(plan)).not.toMatch(/@|e-?mail|password/i);
+    // Before the phone knows who is signed in to it, it waits.
+    expect(kinds(deletionPlan(leesPhone({ me: null, account: null, serverAccount: undefined })))).toEqual(['checking']);
+  });
+
+  it('says how to delete a signed-out passcode sign-in without naming an address', () => {
+    const plan = deletionPlan(leesPhone({ serverAccount: null }));
+    expect(plan.serverToo).toBe(false);
+    expect(plan.warnings).toContain(
+      'Your company sign-in is signed out on this phone, so it is not deleted here. Sign in to it on Company account first to delete it too, or ask a supervisor to delete it on the office dashboard.',
+    );
+    expect(said(plan)).not.toMatch(/@|password/i);
+  });
+
+  it('names on More what goes with the account, by what it signs in with', () => {
+    expect(moreRowWords({ keepsTime: true, sample: false, company: 'Test Pit A', secret: 'passcode' }).sub).toBe('Your sign-in, passcode and hourly rate. Your work records stay with Test Pit A.');
+    expect(moreRowWords({ keepsTime: false, sample: false, company: 'Test Pit A', secret: 'passcode' }).sub).toBe('Your sign-in and passcode. Your checklists, exams and requests stay with Test Pit A.');
+    // Signed out of the company server, nothing is said of a secret the phone cannot delete now.
+    expect(moreRowWords({ keepsTime: true, sample: false, company: 'Test Pit A', secret: null }).sub).toBe('Your sign-in and hourly rate. Your work records stay with Test Pit A.');
+    expect(moreRowWords({ keepsTime: false, sample: false, company: 'Test Pit A', secret: null }).sub).toBe('Your sign-in. Your checklists, exams and requests stay with Test Pit A.');
+  });
+});
+
+describe('the question before signing out of a phone', () => {
+  it('says the phone is emptied once everything has reached the company, and that signing back in needs signal', () => {
+    expect(signOutWords({ company: 'Test Pit A', connected: true, keepsTime: true, hasRate: true })).toEqual({
+      title: 'Sign out of this phone?',
+      body: 'Once everything on this phone has reached Test Pit A, the phone is emptied and goes back to how the app starts. Your hourly rate, kept only on this phone, goes with it. Your records stay with Test Pit A.',
+      signal: 'Signing back in needs signal.',
+      confirm: 'Sign out of this phone',
+      keep: 'Stay signed in',
+      held: 'Not signed out yet',
+      heldBody: 'Nothing has been taken off this phone.',
+    });
+    // No rate, or a company that keeps no time: no rate named.
+    expect(signOutWords({ company: 'Test Pit A', connected: true, keepsTime: false, hasRate: true }).body).toBe(
+      'Once everything on this phone has reached Test Pit A, the phone is emptied and goes back to how the app starts. Your records stay with Test Pit A.',
+    );
+    // A phone not joined to a company keeps everything it holds.
+    const apart = signOutWords({ company: '', connected: false, keepsTime: true, hasRate: true });
+    expect(apart.body).toBe('This phone is not connected to a company, so everything on it stays here for when you sign in again.');
+    expect(apart.signal).toBe('Signing back in needs signal.');
   });
 });

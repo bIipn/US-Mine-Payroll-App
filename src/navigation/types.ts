@@ -39,12 +39,15 @@ export type RootStackParamList = {
   Roster: undefined;
   Fleet: undefined;
   Company: undefined;
-  /** Signing this phone in to the company's server, and connecting it. Only in a build that names a server. */
+  /**
+   * Where this phone stands with its company's server: signing a signed-out company sign-in in again,
+   * signing out of this phone, and deleting. Only in a build that connects (CAN_CONNECT).
+   */
   CompanyAccount: undefined;
   /**
    * Delete my account: the account on this phone, and the person's own company sign-in with it. With
-   * `signInOnly`, from Company account: the company sign-in alone, with its password, and nothing of
-   * whoever is signed in to the app.
+   * `signInOnly`, from the company sign-in screen: an email sign-in on no company's roster, alone, with
+   * its password, and nothing of whoever is signed in to the app.
    */
   DeleteAccount: { signInOnly?: true } | undefined;
 };

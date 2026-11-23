@@ -572,7 +572,7 @@ describe('notTakenWords', () => {
 
   it('says why, and what to do', () => {
     expect(notTakenWords(change('leave:lv1'), 'supervisor_only', data).why).toBe(
-      'Only a supervisor’s company sign-in can send this. Enter it on the dashboard, or join this phone with a supervisor’s sign-in on Company account.',
+      'Only a supervisor’s company sign-in can send this. A supervisor enters it on the office dashboard.',
     );
     expect(notTakenWords(change('shift:sh1'), 'not_yours', data).why).toBe('Another person’s record: the company keeps theirs.');
     expect(notTakenWords(change('shift:sh1'), 'signed', data).why).toBe('Already signed: a signed record is not changed.');

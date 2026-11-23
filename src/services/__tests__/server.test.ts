@@ -95,7 +95,8 @@ const SAM_USER = {
   app_metadata: { provider: 'email', providers: ['email'], sign_in: 'passcode' },
   user_metadata: {},
 };
-const SAM = { id: 'u-sam', email: SAM_USER.email, kind: 'passcode' as const };
+/** Sam's account, as the app has it: a passcode account's hidden address never reaches it. */
+const SAM = { id: 'u-sam', email: '', kind: 'passcode' as const };
 
 beforeEach(() => {
   mockRpc.mockReset();
@@ -138,27 +139,12 @@ describe('the account', () => {
     expect(await server.signIn('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, error: expect.stringMatching(/could not be reached/) });
   });
 
-  it('says to confirm the email when a new account has no session yet, and when the email already has an account', async () => {
-    mockAuth.signUp.mockResolvedValueOnce({ data: { user: { email: 'avery@example.com', identities: [{ id: 'i1' }] }, session: null }, error: null });
-    expect(await server.signUp('avery@example.com', 'haulroad88')).toEqual({ ok: true, confirm: true });
-    mockAuth.signUp.mockResolvedValueOnce({ data: { user: {}, session: { user: {} } }, error: null });
-    expect(await server.signUp('avery@example.com', 'haulroad88')).toEqual({ ok: true, confirm: false });
-    mockAuth.signUp.mockResolvedValueOnce({ data: { user: null, session: null }, error: { code: 'weak_password', status: 422 } });
-    expect(await server.signUp('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, error: expect.stringMatching(/stronger password/) });
-    // With email confirmation on, an address that already has an account comes back as a user with no identities, and no email is sent.
-    mockAuth.signUp.mockResolvedValueOnce({ data: { user: { email: 'avery@example.com', identities: [] }, session: null }, error: null });
-    expect(await server.signUp('avery@example.com', 'haulroad88')).toEqual({ ok: false, error: 'That email already has an account. Sign in, or tap Forgot password.' });
-  });
-
-  it('sends the link to set a new password, and the confirmation link again', async () => {
+  it('sends the link to set a new password', async () => {
     mockAuth.resetPasswordForEmail.mockResolvedValueOnce({ data: {}, error: null });
     expect(await server.resetPassword(' Avery@Example.com ')).toEqual({ ok: true });
     expect(mockAuth.resetPasswordForEmail).toHaveBeenCalledWith('avery@example.com');
     mockAuth.resetPasswordForEmail.mockResolvedValueOnce({ data: null, error: { status: 429, message: 'slow down' } });
     expect(await server.resetPassword('avery@example.com')).toMatchObject({ ok: false, error: expect.stringMatching(/Too many tries/) });
-    mockAuth.resend.mockResolvedValueOnce({ data: {}, error: null });
-    expect(await server.resendConfirmation('avery@example.com')).toEqual({ ok: true });
-    expect(mockAuth.resend).toHaveBeenCalledWith({ type: 'signup', email: 'avery@example.com' });
   });
 
   it('signs out of this phone only, and takes the session off the phone even with no signal', async () => {
@@ -329,6 +315,28 @@ describe('crew sign-in by passcode', () => {
     expect(heard).toEqual([SAM, SAM, AVERY_ACCOUNT]);
   });
 
+  it('never hands the app a passcode account’s hidden address', async () => {
+    // From a session crew-auth answered, from the session the phone holds, from supabase-js, and from
+    // the session kept on the phone while there is no signal to refresh it.
+    mockAuth.setSession.mockResolvedValueOnce({ data: { user: SAM_USER, session: { access_token: 'a-sam', refresh_token: 'r-sam', user: SAM_USER } }, error: null });
+    const kept = await server.startCrewSession({ accessToken: 'a-sam', refreshToken: 'r-sam', expiresAt: 1_795_000_000, userId: 'u-sam' });
+    mockAuth.getSession.mockResolvedValueOnce({ data: { session: { access_token: 'a-sam', refresh_token: 'r-sam', user: SAM_USER } }, error: null });
+    const heard: unknown[] = [];
+    const stop = server.onAccountChange((account) => heard.push(account));
+    await new Promise((r) => setTimeout(r, 0));
+    authEvent('TOKEN_REFRESHED', { access_token: 'a-2', refresh_token: 'r-2', user: SAM_USER });
+    stop();
+    await safeStorage.setItem('minemuster-server-session', JSON.stringify({ access_token: 'a-sam', refresh_token: 'r-sam', user: SAM_USER }));
+    mockAuth.getSession.mockResolvedValueOnce({ data: { session: null }, error: offline });
+    const offlineHeard: unknown[] = [];
+    const stopOffline = server.onAccountChange((account) => offlineHeard.push(account));
+    await new Promise((r) => setTimeout(r, 0));
+    stopOffline();
+    await safeStorage.removeItem('minemuster-server-session');
+    expect({ kept, heard, offlineHeard }).toEqual({ kept: { ok: true, account: SAM }, heard: [SAM, SAM], offlineHeard: [SAM] });
+    expect(JSON.stringify({ kept, heard, offlineHeard })).not.toContain('crew.minemuster.com');
+  });
+
   it('signOutOtherSessions signs the account’s other sessions out and keeps this phone’s', async () => {
     mockAuth.signOut.mockResolvedValueOnce({ error: null });
     expect(await server.signOutOtherSessions()).toEqual({ ok: true });
@@ -344,24 +352,6 @@ describe('crew sign-in by passcode', () => {
 });
 
 describe('the company', () => {
-  it('joins with the code and the name, and reads the answer', async () => {
-    mockRpc.mockResolvedValueOnce({ data: { status: 'pending', company_name: 'Test Pit A', reason: 'not_on_roster' }, error: null });
-    expect(await server.joinCompany('ABCD2345', 'Blake', 'Rook')).toEqual({
-      ok: true,
-      answer: { status: 'pending', companyName: 'Test Pit A', reason: 'not_on_roster' },
-    });
-    expect(mockRpc).toHaveBeenCalledWith('join_company', { code: 'ABCD2345', first_name: 'Blake', last_name: 'Rook' });
-  });
-
-  it('says what went wrong when the server refuses', async () => {
-    mockRpc.mockResolvedValueOnce({ data: null, error: { code: '22023', message: 'name not allowed' } });
-    expect(await server.joinCompany('ABCD2345', 'B​lake', 'Rook')).toMatchObject({ ok: false, error: expect.stringMatching(/ordinary letters/) });
-    mockRpc.mockResolvedValueOnce({ data: { status: 'surprise' }, error: null });
-    expect(await server.joinCompany('ABCD2345', 'Blake', 'Rook')).toMatchObject({ ok: false });
-    mockRpc.mockRejectedValueOnce(new TypeError('Network request failed'));
-    expect(await server.joinCompany('ABCD2345', 'Blake', 'Rook')).toMatchObject({ ok: false, error: expect.stringMatching(/could not be reached/) });
-  });
-
   it('lists the companies the account is on', async () => {
     mockRpc.mockResolvedValueOnce({ data: [{ id: 'c-a', name: 'Test Pit A', state: 'NV', role: 'employee' }], error: null });
     expect(await server.myCompanies()).toEqual({ ok: true, companies: [{ id: 'c-a', name: 'Test Pit A', state: 'NV', role: 'employee' }] });
@@ -666,6 +656,24 @@ describe('deleting the company sign-in', () => {
       });
     });
 
+    it('asks nothing of crew-auth for a passcode that cannot be one, so it costs no wrong try', async () => {
+      for (const typed of ['5820', '58203x', '5820391234567']) {
+        expect(await server.deleteAccountWithPasscode(typed)).toEqual({ ok: false, answer: { kind: 'wrong_password' }, error: 'Your passcode is 6 to 12 digits. Type the one you sign in with.' });
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('says delete-account’s answers in words with no email or password in them', async () => {
+      confirmed();
+      mockInvoke.mockResolvedValueOnce(httpError(403, { error: 'password_needed' }));
+      expect(await server.deleteAccountWithPasscode('582039')).toEqual({
+        ok: false,
+        answer: { kind: 'password_needed' },
+        error: 'Enter your passcode again. It has to be typed within ten minutes of deleting.',
+      });
+    });
+
     it('says why nothing was deleted, in the crew sign-in’s own words for a wrong or locked passcode', async () => {
       const tryAgain = {
         ok: false,
@@ -856,17 +864,20 @@ describe('staying signed in', () => {
     expect(appFiles(src).filter((file) => /\bauth\.signOut\(/.test(fs.readFileSync(file, 'utf8'))).map(rel)).toEqual(['services/server.ts']);
     // ... which is asked for only when the person disconnects or signs out, and once their sign-in is deleted.
     expect(appFiles(src).flatMap((file) => callers(file, /\b(?:server|link)\??\.signOut\(/g).map((fn) => `${rel(file)} ${fn}`)).sort()).toEqual([
-      // Sign out of the server, on Company account.
-      'screens/more/CompanyAccountScreen.tsx AccountRow',
-      // Disconnect on Company account, and clearing the phone on More.
+      // Sign out of the server, on Company account: another account than the phone's own, signed in there.
+      'screens/more/CompanyAccountScreen.tsx SignOutOfServer',
+      // Clearing the phone on More, and signing out of a phone with nobody's account open on it.
       'services/connection.ts disconnect',
       // The sign-in is deleted.
       'services/connection.ts forgetDeletedSignIn',
+      // Sign out of this phone, once the phone is emptied: nothing on it was lost.
+      'services/connection.ts signOutNow',
     ]);
-    // ... and the account's other sessions are signed out only by the company sign-in screen, once a
-    // passcode reset could not do it on the server (R19).
+    // ... and the account's other sessions are signed out only where a crew sign-in's session is kept (the
+    // company sign-in screen's, and Company account's Sign in again), once a passcode reset could not do it
+    // on the server (R19).
     expect(appFiles(src).flatMap((file) => callers(file, /\b(?:server|link)\??\.signOutOtherSessions\(/g).map((fn) => `${rel(file)} ${fn}`))).toEqual([
-      'screens/auth/CompanySignInScreen.tsx CompanySignInScreen',
+      'screens/auth/CrewSignIn.tsx keepCrewSession',
     ]);
   });
 });

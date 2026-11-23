@@ -10,21 +10,17 @@ import { ownPersonHere, signInPerson } from '../../domain/access';
 import type { ConnectedCompany } from '../../domain/server';
 import { joinWords, pickCompany, type ServerCompany, type WaitingRequest } from '../../domain/serverAnswers';
 import type { ScreenProps } from '../../navigation/types';
-import { checkAccount, disconnect, server, useServerAccount, type AccountState } from '../../services/connection';
+import { checkAccount, server, signOutOfPhone, useServerAccount, type AccountState } from '../../services/connection';
 import { syncNow, useSyncStatus } from '../../services/sync';
 import { useStore } from '../../store/useStore';
 import { color, space, TAP } from '../../theme/theme';
-import { CrewSignIn, type CrewTyped, type SignedIn } from './CrewSignIn';
+import { SignOutHeldUp, type HeldUp } from '../more/SignOutOfPhone';
+import { CrewSignIn, keepCrewSession, passcodesHere, type CrewTyped, type SignedIn } from './CrewSignIn';
 import { CompanyChoice, EmailSignIn, useConnectCompany, Waiting } from './ServerSignIn';
 
 type ServerAccount = NonNullable<AccountState['account']>;
 /** The company a crew sign-in named, for the account it signed in. */
 type Hint = { userId: string; company: { id: string; name: string } | null };
-
-/** Passcodes are offered on iOS and Android only: crew-auth turns down a request from a web page. */
-const onPhone = () => Platform.OS === 'ios' || Platform.OS === 'android';
-
-const OTHERS_STILL_IN = 'You are signed in. Any other phone signed in as you could not be signed out. If one is lost, tell a supervisor.';
 
 /**
  * The first screen of a build that connects to a company server (CAN_CONNECT). Crew type the company's
@@ -41,56 +37,45 @@ export function CompanySignInScreen({ navigation }: ScreenProps<'CompanySignIn'>
   const company = useStore((s) => s.settings.company);
   const linked = useStore((s) => s.connectedCompany);
   const { known, account } = useServerAccount();
+  // Signing out of this phone from anywhere (More, say): the phone is still signed in to the server until that is over.
+  const signingOutHere = useServerAccount((s) => s.signingOut);
   const [hint, setHint] = useState<Hint | null>(null);
   const [withEmail, setWithEmail] = useState(false);
-  const [signingOut, setSigningOut] = useState(false);
+  const [asked, setAsked] = useState(false);
+  const [held, setHeld] = useState<HeldUp | null>(null);
   if (!server) return null;
-  const link = server;
-  const phone = onPhone();
+  const phone = passcodesHere();
+  const signingOut = asked || signingOutHere;
   const deleteAccount = () => navigation.navigate('DeleteAccount');
   const deleteSignIn = () => navigation.navigate('DeleteAccount', { signInOnly: true });
 
   /**
-   * Sign this phone out of the company server, back to the company code. Until the server's sign-out is
-   * over the account is still signed in here, so the card says the phone is signing out, and nothing
-   * looks for the company or connects to it meanwhile. Nothing on the phone is lost: what it holds stays
-   * on it (disconnect). Someone taken off the roster can still have their account open here, though this
-   * screen is all they are shown; it is closed too, so the app does not open again for them once the
-   * phone is no longer connected.
+   * Sign this phone out of the company server, back to the company code (signOutOfPhone). Until the
+   * server's sign-out is over the account is still signed in here, so the card says the phone is signing
+   * out, and nothing looks for the company or connects to it meanwhile. Nothing on the phone is lost: with
+   * nobody's account open what it holds stays on it, and the account of someone taken off the roster, which
+   * can still be open here, is closed, so the app does not open again for them. That account empties the
+   * phone only once nothing on it would be lost; until then the card says what holds it up.
    */
-  const signOutOfPhone = () => {
+  const signOut = () => {
     if (signingOut) return;
-    setSigningOut(true);
-    useStore.getState().signOut();
-    void disconnect().finally(() => setSigningOut(false));
+    setAsked(true);
+    setHeld(null);
+    void signOutOfPhone()
+      .then((done) => {
+        if (!done.ok) setHeld(done);
+      })
+      .finally(() => setAsked(false));
   };
+  const leave = { held, onDelete: deleteAccount, onPress: signOut };
 
   /**
    * Keep the session a crew sign-in answered, and say what went wrong if it could not be kept. Which
    * company it named is noted first, as the account is signed in the moment the session is kept.
    */
-  const keep = async (answer: SignedIn, typed: CrewTyped, afterReset: boolean): Promise<string | null> => {
+  const keep = (answer: SignedIn, typed: CrewTyped, afterReset: boolean): Promise<string | null> => {
     setHint({ userId: answer.session.userId, company: answer.company });
-    if (answer.waiting && answer.company) {
-      // So the request can be checked on, with its company named, after the app is closed and opened again.
-      useStore.getState().setJoinAsked({
-        code: typed.code,
-        firstName: typed.firstName,
-        lastName: typed.lastName,
-        companyName: answer.company.name,
-        ...(answer.join?.reason ? { reason: answer.join.reason } : null),
-        accountId: answer.session.userId,
-        at: Date.now(),
-      });
-    }
-    const kept = await link.startCrewSession(answer.session);
-    if (!kept.ok) return kept.error;
-    // A new passcode: once the account's other sessions are signed out, a lost or old phone stops working.
-    if (afterReset || !answer.othersSignedOut) {
-      const others = await link.signOutOtherSessions();
-      if (!others.ok) useStore.getState().showToast(OTHERS_STILL_IN, 'warn');
-    }
-    return null;
+    return keepCrewSession(answer, typed, afterReset);
   };
 
   const signedOut = known && !account && !signingOut;
@@ -113,15 +98,9 @@ export function CompanySignInScreen({ navigation }: ScreenProps<'CompanySignIn'>
               <SupervisorSignIn web={!phone} />
             )
           ) : !linked ? (
-            <FindCompany
-              account={account}
-              hint={hint?.userId === account.id ? hint.company : null}
-              onDeleteAccount={deleteAccount}
-              onDeleteSignIn={deleteSignIn}
-              onSignOut={signOutOfPhone}
-            />
+            <FindCompany account={account} hint={hint?.userId === account.id ? hint.company : null} onDeleteAccount={deleteAccount} onDeleteSignIn={deleteSignIn} leave={leave} />
           ) : (
-            <Opening account={account} linked={linked} onDeleteAccount={deleteAccount} onSignOut={signOutOfPhone} />
+            <Opening account={account} linked={linked} onDeleteAccount={deleteAccount} leave={leave} />
           )}
         </View>
 
@@ -180,12 +159,12 @@ type Found =
  * otherwise a crew account is off the roster and an email account has an invitation to accept first.
  * Asked again with Check again, and once signal comes back.
  */
-function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, onSignOut }: {
+function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, leave }: {
   account: ServerAccount;
   hint: { id: string; name: string } | null;
   onDeleteAccount: () => void;
   onDeleteSignIn: () => void;
-  onSignOut: () => void;
+  leave: Leave;
 }) {
   const asked = useStore((s) => (s.joinAsked?.accountId === account.id ? s.joinAsked : null));
   const connector = useConnectCompany({ id: account.id, email: account.email });
@@ -295,7 +274,7 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, onSignOut
   return (
     <View style={styles.gap}>
       {body}
-      <SignOutOfPhone onPress={onSignOut} />
+      <SignOutOfPhone {...leave} />
       {connector.ask}
     </View>
   );
@@ -307,7 +286,7 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, onSignOut
  * why it cannot: the sign-in is off the roster, MineMuster stopped for the company, or the person is not
  * on the roster this phone got.
  */
-function Opening({ account, linked, onDeleteAccount, onSignOut }: { account: ServerAccount; linked: ConnectedCompany; onDeleteAccount: () => void; onSignOut: () => void }) {
+function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerAccount; linked: ConnectedCompany; onDeleteAccount: () => void; leave: Leave }) {
   const receiving = useStore((s) => (s.receiving?.company === linked.id ? s.receiving : null));
   const employees = useStore((s) => s.employees);
   const sync = useSyncStatus();
@@ -355,7 +334,7 @@ function Opening({ account, linked, onDeleteAccount, onSignOut }: { account: Ser
   return (
     <View style={styles.gap}>
       {body}
-      <SignOutOfPhone onPress={onSignOut} />
+      <SignOutOfPhone {...leave} />
     </View>
   );
 }
@@ -375,9 +354,21 @@ function OffRoster({ company, onDelete }: { company: string | null; onDelete: ()
   );
 }
 
-/** Sign out of this phone, on every card after a sign-in: the screen does it (signOutOfPhone). */
-function SignOutOfPhone({ onPress }: { onPress: () => void }) {
-  return <Button testID="company-sign-out" label="Sign out of this phone" icon={LogOut} kind="quiet" size="md" style={styles.tall} onPress={onPress} />;
+/** Signing out of this phone from a card: the screen's, and what held it up the last time it was asked. */
+type Leave = { held: HeldUp | null; onDelete: () => void; onPress: () => void };
+
+/**
+ * Sign out of this phone, on every card after a sign-in: the screen does it (signOutOfPhone), and says
+ * here what holds it up, if anything does. From here, a record waiting is sent and an account deleted;
+ * nothing else on that list can be put right from this screen.
+ */
+function SignOutOfPhone({ held, onDelete, onPress }: Leave) {
+  return (
+    <View style={styles.gap}>
+      {held ? <SignOutHeldUp held={held} actions={{ delete: onDelete }} /> : null}
+      <Button testID="company-sign-out" label="Sign out of this phone" icon={LogOut} kind="quiet" size="md" style={styles.tall} onPress={onPress} />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({

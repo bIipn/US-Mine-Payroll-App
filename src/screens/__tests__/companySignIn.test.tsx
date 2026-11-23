@@ -56,7 +56,7 @@ jest.mock('react-native-safe-area-context', () => require('react-native-safe-are
 // who is signed in to it on this phone, which a sign-in changes as supabase-js would tell it.
 jest.mock('../../services/connection', () => {
   const { create } = require('zustand');
-  const useServerAccount = create(() => ({ known: true, account: null, notOnLinked: false, checking: false, unchecked: false, joinCode: null }));
+  const useServerAccount = create(() => ({ known: true, account: null, notOnLinked: false, checking: false, unchecked: false, joinCode: null, signingOut: false }));
   const fn = () => jest.fn();
   return {
     CAN_CONNECT: true,
@@ -65,17 +65,15 @@ jest.mock('../../services/connection', () => {
       startCrewSession: fn(),
       signOutOtherSessions: fn(),
       signIn: fn(),
-      signUp: fn(),
-      resendConfirmation: fn(),
       resetPassword: fn(),
       myCompanies: fn(),
       myJoinRequests: fn(),
-      joinCompany: fn(),
       signOut: fn(),
     },
     useServerAccount,
     checkAccount: jest.fn(),
     disconnect: jest.fn(),
+    signOutOfPhone: jest.fn(),
   };
 });
 
@@ -110,6 +108,7 @@ const connection = require('../../services/connection') as {
   useServerAccount: typeof import('../../services/connection').useServerAccount;
   disconnect: jest.Mock;
   checkAccount: jest.Mock;
+  signOutOfPhone: jest.Mock;
 };
 const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Promise<void> }).act;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -143,6 +142,7 @@ beforeEach(() => {
   for (const call of Object.values(server)) call.mockReset();
   connection.disconnect.mockReset();
   connection.checkAccount.mockReset();
+  connection.signOutOfPhone.mockReset();
   useSyncStatus.setState({ online: true, trouble: null });
   // A code is looked up as it is typed: Test Pit A's is ABCD 2345, and no company has any other.
   server.crewAuth.mockImplementation(async (action: string, body: { code: string }) =>
@@ -162,12 +162,15 @@ beforeEach(() => {
   });
   server.myCompanies.mockResolvedValue({ ok: true, companies: [] });
   server.myJoinRequests.mockResolvedValue({ ok: true, requests: [] });
-  // Signing out of this phone: it stops sending to the company and signs out of the server.
-  connection.disconnect.mockImplementation(async () => {
+  // Signing out of this phone (connection.ts): any account still open is closed, the phone stops sending to
+  // the company, and it signs out of the server. What empties a phone, and when, is connection.test.ts's.
+  connection.signOutOfPhone.mockImplementation(async () => {
+    useStore.getState().signOut();
     useStore.getState().disconnectCompany();
     useServerAccount.setState({ account: null });
+    return { ok: true };
   });
-  useServerAccount.setState({ known: true, account: null, notOnLinked: false, checking: false, unchecked: false, joinCode: null });
+  useServerAccount.setState({ known: true, account: null, notOnLinked: false, checking: false, unchecked: false, joinCode: null, signingOut: false });
 });
 afterEach(async () => {
   const r = root;
@@ -460,10 +463,33 @@ describe('signing up and signing in with a passcode', () => {
     expect(byId('company-off-roster')).not.toHaveLength(0);
 
     await press('company-sign-out');
-    expect(connection.disconnect).toHaveBeenCalledTimes(1);
+    expect(connection.signOutOfPhone).toHaveBeenCalledTimes(1);
     expect({ session: useStore.getState().session, connected: useStore.getState().connectedCompany }).toEqual({ session: null, connected: null });
     expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
     expect(byId('crew-code')).not.toHaveLength(0);
+  });
+
+  it('says what holds signing out of this phone up, with Delete my account for what cannot reach the company', async () => {
+    const ref = await freshPhone();
+    await atPitA('sign_in');
+    await type('crew-passcode', '582039');
+    server.crewAuth.mockResolvedValueOnce(signedIn());
+    await press('crew-submit');
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+    const offRoster = {
+      kind: 'not_member',
+      title: 'This phone’s company sign-in is off Test Pit A’s roster',
+      body: '1 record on this phone cannot reach the company now, and signing out would lose it. Delete your account instead: it stays on this phone.',
+      action: 'delete',
+    };
+    connection.signOutOfPhone.mockResolvedValueOnce({ ok: false, reason: 'unsent', error: `${offRoster.title}. ${offRoster.body}`, blockers: [offRoster], warnings: [] });
+    await press('company-sign-out');
+    expect(byId('sign-out-blocker-not_member')).not.toHaveLength(0);
+    expect(shown()).toContain('Delete your account instead: it stays on this phone.');
+    // Still signed in: nothing was signed out.
+    expect(useServerAccount.getState().account).toEqual(SAM);
+    await press('sign-out-delete');
+    expect(ref.getCurrentRoute()?.name).toBe('DeleteAccount');
   });
 
   it('signs out of this phone from a card, back to the company code', async () => {
@@ -473,7 +499,7 @@ describe('signing up and signing in with a passcode', () => {
     server.crewAuth.mockResolvedValueOnce(signedIn());
     await press('crew-submit');
     await press('company-sign-out');
-    expect(connection.disconnect).toHaveBeenCalledTimes(1);
+    expect(connection.signOutOfPhone).toHaveBeenCalledTimes(1);
     expect(byId('crew-code')).not.toHaveLength(0);
   });
 });
@@ -611,10 +637,11 @@ describe('signing out of this phone', () => {
     // The company is dropped at once, but the server's sign-out takes a moment: meanwhile the account is
     // still signed in, and the company it is on could be found again.
     let signedOut: () => void = () => undefined;
-    connection.disconnect.mockImplementation(async () => {
+    connection.signOutOfPhone.mockImplementation(async () => {
       useStore.getState().disconnectCompany();
       await new Promise<void>((resolve) => (signedOut = resolve));
       useServerAccount.setState({ account: null });
+      return { ok: true };
     });
     server.myCompanies.mockResolvedValue({ ok: true, companies: [PIT_A] });
     const looked = server.myCompanies.mock.calls.length;
@@ -629,6 +656,19 @@ describe('signing out of this phone', () => {
     expect(useStore.getState().connectedCompany).toBeNull();
     expect(server.myCompanies).toHaveBeenCalledTimes(looked);
     expect(byId('crew-code')).not.toHaveLength(0);
+  });
+
+  it('waits the same way while the phone signs out from anywhere else, such as More', async () => {
+    await freshPhone();
+    // More emptied the phone, and its server sign-out is under way: the account is still signed in meanwhile.
+    await act(async () => useServerAccount.setState({ known: true, account: SAM, signingOut: true }));
+    await settle();
+    expect(byId('company-signing-out')).not.toHaveLength(0);
+    expect(server.myCompanies).not.toHaveBeenCalled();
+    await act(async () => useServerAccount.setState({ account: null, signingOut: false }));
+    await settle();
+    expect(byId('crew-code')).not.toHaveLength(0);
+    expect(server.myCompanies).not.toHaveBeenCalled();
   });
 });
 
@@ -806,23 +846,5 @@ describe('in a build with no server', () => {
     expect(navigator).toMatch(
       /process\.env\.EXPO_PUBLIC_SUPABASE_URL && process\.env\.EXPO_PUBLIC_SUPABASE_KEY && process\.env\.EXPO_PUBLIC_DEMO === '0'\n\s+\? require\('\.\.\/screens\/auth\/CompanySignInScreen'\)\.CompanySignInScreen/,
     );
-  });
-});
-
-describe('Company account', () => {
-  it('signs in with the same email form', async () => {
-    // The real Company account screen, signed out of the server: its sign-in is the company sign-in's own.
-    const { CompanyAccountScreen } = jest.requireActual('../more/CompanyAccountScreen') as typeof import('../more/CompanyAccountScreen');
-    useStore.getState().resetDemo();
-    root = createRoot();
-    const r = root;
-    const navigation = { goBack: jest.fn(), navigate: jest.fn() };
-    await act(async () => {
-      r.render(React.createElement(nav.NavigationContainer, null, React.createElement(CompanyAccountScreen, { navigation, route: { key: 'CompanyAccount', name: 'CompanyAccount' } } as never)));
-    });
-    await type('server-email', 'avery@example.test');
-    await type('server-password', 'haulroad88');
-    await press('server-submit');
-    expect(server.signIn).toHaveBeenCalledWith('avery@example.test', 'haulroad88');
   });
 });

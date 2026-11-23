@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 
 import { CircleCheck, LogIn, RotateCcw, UserPlus } from '../../components/icons';
 import { Button, Field, Notice, Segmented, Txt } from '../../components/ui';
@@ -9,6 +9,7 @@ import { cleanText } from '../../domain/roster';
 import { checkJoinCode, checkJoinName, crewWords, normalJoinCode, spacedJoinCode, type CrewAnswer, type CrewFields } from '../../domain/serverAnswers';
 import { server } from '../../services/connection';
 import { haptic } from '../../services/haptics';
+import { useStore } from '../../store/useStore';
 import { color, radius, space, TAP } from '../../theme/theme';
 
 /** A sign-in crew-auth answered: the session to keep, the company and whether a supervisor has yet to let the person in. */
@@ -34,6 +35,42 @@ const ASK_AGAIN: readonly CrewAnswer['kind'][] = ['busy', 'unreachable', 'server
 /** The company a code is for, as the person sees it: "Test Pit A · Nevada". */
 const companyLine = ({ name, state }: { name: string; state: string }) => (state ? `${name} · ${stateName(state) || state}` : name);
 
+/** Passcodes are offered on iOS and Android only: crew-auth turns down a request from a web page. */
+export const passcodesHere = () => Platform.OS === 'ios' || Platform.OS === 'android';
+
+const OTHERS_STILL_IN = 'You are signed in. Any other phone signed in as you could not be signed out. If one is lost, tell a supervisor.';
+
+/**
+ * Keep the session a crew sign-in answered as this phone's own, and answer what went wrong if it could not
+ * be kept: the company sign-in screen's, and Company account's Sign in again. A sign-in still waiting for a
+ * supervisor is noted first, so it can be checked on, with its company named, after the app is closed and
+ * opened again. After a new passcode the account's other sessions are signed out, so a lost or old phone
+ * stops working: the sign-in made with a passcode just set by a reset (`afterReset`), or one whose reset
+ * could not sign them out itself.
+ */
+export async function keepCrewSession(answer: SignedIn, typed: CrewTyped, afterReset: boolean): Promise<string | null> {
+  if (!server) return 'This build has no company server.';
+  const link = server;
+  if (answer.waiting && answer.company) {
+    useStore.getState().setJoinAsked({
+      code: typed.code,
+      firstName: typed.firstName,
+      lastName: typed.lastName,
+      companyName: answer.company.name,
+      ...(answer.join?.reason ? { reason: answer.join.reason } : null),
+      accountId: answer.session.userId,
+      at: Date.now(),
+    });
+  }
+  const kept = await link.startCrewSession(answer.session);
+  if (!kept.ok) return kept.error;
+  if (afterReset || !answer.othersSignedOut) {
+    const others = await link.signOutOtherSessions();
+    if (!others.ok) useStore.getState().showToast(OTHERS_STILL_IN, 'warn');
+  }
+  return null;
+}
+
 /**
  * Crew get in with the company's code, their name and a passcode, and never an email. The code is
  * looked up as it is typed, and the company's name shown, so a wrong one is caught first; only a
@@ -42,14 +79,21 @@ const companyLine = ({ name, state }: { name: string; state: string }) => (state
  * twice). What can be checked on the phone is checked before anything is sent, and what crew-auth
  * answers is said in its own words (crewWords). A sign-in hands its session to `onSignedIn`, which
  * keeps it, and answers what went wrong if anything did; `afterReset` asks it to sign the account's
- * other sessions out, as for the sign-in made with a passcode just set by a reset.
+ * other sessions out, as for the sign-in made with a passcode just set by a reset. `startOn` is the form
+ * it opens on: Sign up, or Sign in for a sign-in that is signing in again.
  */
-export function CrewSignIn({ onSignedIn }: { onSignedIn: (answer: SignedIn, typed: CrewTyped, afterReset: boolean) => Promise<string | null> }) {
+export function CrewSignIn({
+  onSignedIn,
+  startOn = 'sign_up',
+}: {
+  onSignedIn: (answer: SignedIn, typed: CrewTyped, afterReset: boolean) => Promise<string | null>;
+  startOn?: 'sign_up' | 'sign_in';
+}) {
   const [code, setCode] = useState('');
   // What the code typed last answered, and for which asking of it: Try again asks once more.
   const [lookup, setLookup] = useState<{ code: string; asked: number; answer: CrewAnswer } | null>(null);
   const [asked, setAsked] = useState(0);
-  const [mode, setMode] = useState<Mode>('sign_up');
+  const [mode, setMode] = useState<Mode>(startOn);
   const [first, setFirst] = useState('');
   const [last, setLast] = useState('');
   // The passcode, or on Forgot your passcode? the new one: a reset that sets it signs in with it next.

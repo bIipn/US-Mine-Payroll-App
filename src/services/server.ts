@@ -4,8 +4,8 @@ import { AppState, Platform } from 'react-native';
 
 import { SERVER } from '../config';
 import type { DeletionAnswer, DeletionCheckCompany } from '../domain/accountDeletion';
+import { PASSCODE_MAX, PASSCODE_MIN, passcodeProblem } from '../domain/passcode';
 import {
-  ALREADY_AN_ACCOUNT,
   authWords,
   crewWords,
   deletionAnswerWords,
@@ -14,7 +14,6 @@ import {
   readCrewAnswer,
   readDeletionAnswer,
   readDeletionCheck,
-  readJoinAnswer,
   readCompanyRow,
   readPushAnswer,
   readRows,
@@ -26,7 +25,6 @@ import {
   type CrewAnswer,
   type CrewFields,
   type CrewSession,
-  type JoinAnswer,
   type ServerCompany,
   type ServerProblem,
   type WaitingRequest,
@@ -36,8 +34,9 @@ import { safeStorage } from './storage';
 
 /**
  * The company's server, a Supabase project: signing in (with email, or as
- * crew with the company's code, a name and a passcode), joining the company,
- * and sending this phone's records.
+ * crew with the company's code, a name and a passcode, which crew-auth joins
+ * to the company), finding the account's company, and sending this phone's
+ * records.
  *
  * Only a build that names a server has this file at all: `connection.ts`
  * loads it when EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_KEY are both
@@ -130,7 +129,11 @@ const noAnswer = (problem: ServerProblem) => problem.name === 'AuthRetryableFetc
 /** The account signed in to the server on this phone. */
 export interface ServerAccount {
   id: string;
-  /** Its address. A passcode account's is a hidden one that nobody reads or types. */
+  /**
+   * Its email, for an account that signs in with one. Empty for a passcode account: its address on the
+   * server is a hidden one that nobody reads or types, and the app is never handed it (accountOf), so no
+   * screen, message or record on the phone can show it.
+   */
   email: string;
   /** How it signs in: a crew member's company code, name and passcode, or an email and a password. */
   kind: 'passcode' | 'email';
@@ -139,11 +142,12 @@ export interface ServerAccount {
 /**
  * The account a Supabase Auth user is. crew-auth makes each crew member's account with
  * app_metadata.sign_in 'passcode'; only the server writes app_metadata, so nobody can change it
- * from a phone.
+ * from a phone. A passcode account's hidden address is left behind here: nothing on the phone needs it.
  */
 function accountOf(user: { id: string; email?: string | null; app_metadata?: unknown }, email = ''): ServerAccount {
   const meta = user.app_metadata && typeof user.app_metadata === 'object' ? (user.app_metadata as { sign_in?: unknown }) : {};
-  return { id: user.id, email: user.email ?? email, kind: meta.sign_in === 'passcode' ? 'passcode' : 'email' };
+  if (meta.sign_in === 'passcode') return { id: user.id, email: '', kind: 'passcode' };
+  return { id: user.id, email: user.email ?? email, kind: 'email' };
 }
 
 const listeners = new Set<(account: ServerAccount | null) => void>();
@@ -196,36 +200,6 @@ export async function signIn(email: string, password: string): Promise<Done<{ ac
     const { data, error } = await api().auth.signInWithPassword({ email: address, password });
     if (error || !data.session) return { ok: false, error: authWords(problemOf(error)) };
     return { ok: true, account: accountOf(data.session.user, address) };
-  } catch (error) {
-    return { ok: false, error: authWords(problemOf(error)) };
-  }
-}
-
-/**
- * Make an account. The server may ask for the email to be confirmed first: then
- * there is no session yet (`confirm`), and the person signs in once they have
- * opened the link.
- */
-export async function signUp(email: string, password: string): Promise<Done<{ confirm: boolean }>> {
-  try {
-    const { data, error } = await api().auth.signUp({ email: email.trim().toLowerCase(), password });
-    if (error) return { ok: false, error: authWords(problemOf(error)) };
-    // With email confirmation on, the server answers an address that already has an account as if it
-    // were new, with a user that has no identities, and sends no email.
-    if (!data.session && data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-      return { ok: false, error: ALREADY_AN_ACCOUNT };
-    }
-    return { ok: true, confirm: !data.session };
-  } catch (error) {
-    return { ok: false, error: authWords(problemOf(error)) };
-  }
-}
-
-/** Send the link that confirms a new account's email again. */
-export async function resendConfirmation(email: string): Promise<Done> {
-  try {
-    const { error } = await api().auth.resend({ type: 'signup', email: email.trim().toLowerCase() });
-    return error ? { ok: false, error: authWords(problemOf(error)) } : { ok: true };
   } catch (error) {
     return { ok: false, error: authWords(problemOf(error)) };
   }
@@ -379,19 +353,6 @@ export async function myJoinRequests(): Promise<Done<{ requests: WaitingRequest[
   }
 }
 
-/** Ask to join the company with this join code, under the name as it is on its roster. */
-export async function joinCompany(code: string, firstName: string, lastName: string): Promise<Done<{ answer: JoinAnswer }>> {
-  try {
-    const { data, error } = await api().rpc('join_company', { code, first_name: firstName, last_name: lastName });
-    if (error) return { ok: false, error: serverWords(problemOf(error)) };
-    const answer = readJoinAnswer(data);
-    if (!answer) return { ok: false, error: serverWords({ code: 'unknown' }) };
-    return { ok: true, answer };
-  } catch (error) {
-    return { ok: false, error: serverWords(problemOf(error)) };
-  }
-}
-
 // ---- Sending and receiving records ----------------------------------------------------------
 
 type Answer = { data: unknown; error: unknown; status?: number };
@@ -539,9 +500,13 @@ export async function deleteAccount(email: string, password: string): Promise<De
  * sign-in's own words. As after a password, `connection.ts` stops sending and signs out.
  */
 export async function deleteAccountWithPasscode(passcode: string): Promise<Deletion> {
-  // No address is named: a passcode account's is hidden, and the one answer whose words name it (a
-  // wrong password) has the crew sign-in's words here instead.
-  const fail = (answer: DeletionAnswer, error = deletionAnswerWords(answer, { email: '' })) => ({ ok: false as const, answer, error });
+  // No address and no password is named: a passcode account's address is hidden, and a wrong or locked
+  // passcode has the crew sign-in's own words.
+  const fail = (answer: DeletionAnswer, error = deletionAnswerWords(answer, { passcode: true })) => ({ ok: false as const, answer, error });
+  // A passcode that cannot be one is not sent, so it never counts as a wrong try. One the server would
+  // turn down as easy to guess may still be someone's, so it goes.
+  const shape = passcodeProblem(passcode);
+  if (shape && shape !== 'easy') return fail({ kind: 'wrong_password' }, `Your passcode is ${PASSCODE_MIN} to ${PASSCODE_MAX} digits. Type the one you sign in with.`);
   let mine: { token: string; id: string };
   try {
     const { data, error } = await api().auth.getSession();

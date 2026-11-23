@@ -110,9 +110,6 @@ export function readJoinAnswer(raw: unknown): JoinAnswer | null {
   };
 }
 
-/** Whether an answer means the person is on the company's roster now, so the phone can connect. */
-export const joinedAnswer = (answer: JoinAnswer) => answer.status === 'joined' || answer.status === 'already_member';
-
 /** Why a request waits for a supervisor, in plain words. */
 function waitingBecause(reason: string | undefined, company: string): string {
   switch (reason) {
@@ -458,15 +455,22 @@ export function readDeletionAnswer(status: number, body: unknown): DeletionAnswe
   return { kind: 'try_again', closed: ids(b.closed) };
 }
 
-/** What to tell the person about a deletion that did not go through, or went only part way. */
-export function deletionAnswerWords(answer: DeletionAnswer, { email }: { email: string }): string {
+/**
+ * What to tell the person about a deletion that did not go through, or went only part way. `who` is the
+ * company sign-in: its email, or a crew member's passcode sign-in, which has none.
+ */
+export function deletionAnswerWords(answer: DeletionAnswer, who: { email: string } | { passcode: true }): string {
+  // A crew member's sign-in has no email, and is checked with its passcode: no address or password is named.
+  const passcode = 'passcode' in who;
   switch (answer.kind) {
     case 'deleted':
       return 'Your account is deleted.';
     case 'wrong_password':
-      return `That is not the password for ${email}. Try again.`;
+      return passcode ? 'That is not your passcode. Try again.' : `That is not the password for ${'email' in who ? who.email : ''}. Try again.`;
     case 'password_needed':
-      return 'Enter your password again. It has to be typed within ten minutes of deleting.';
+      return passcode
+        ? 'Enter your passcode again. It has to be typed within ten minutes of deleting.'
+        : 'Enter your password again. It has to be typed within ten minutes of deleting.';
     case 'last_supervisor': {
       const names = answer.companies.length ? answer.companies : ['The company'];
       const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;

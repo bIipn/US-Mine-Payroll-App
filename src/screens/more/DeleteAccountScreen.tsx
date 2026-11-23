@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { CloudUpload, Eye, EyeOff, OctagonAlert, RotateCcw, TriangleAlert, UserX } from '../../components/icons';
 import { Button, Field, IconButton, Notice, Page, Panel, Sheet, Txt } from '../../components/ui';
-import { ACCOUNT_PAGE, DELETED_TOAST, deletionPlan, LOCAL_CONFIRM, PASSWORD_HINT, whoseSignIn, type Blocker, type DeletionCheckCompany } from '../../domain/accountDeletion';
+import { ACCOUNT_PAGE, DELETED_TOAST, deletionPlan, LOCAL_CONFIRM, PASSCODE_LABEL, SECRET_HINT, whoseSignIn, type Blocker, type DeletionCheckCompany } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
 import { unitsCheckedOut } from '../../domain/fleet';
 import type { ScreenProps } from '../../navigation/types';
@@ -20,11 +20,13 @@ import { fmtDate, fmtTime } from '../../util/format';
  * Delete my account: what goes, what stays with the company and why, and what happens to this
  * phone, before anything is deleted. The company sign-in is deleted on MineMuster's server first,
  * when it is the person's own, and then the account on the phone; if the server does not delete it,
- * nothing on the phone is touched. In every build: an account kept on the phone alone is deleted
- * here too. With `signInOnly` (from Company account) only the company sign-in is deleted, and nothing
- * of whoever is signed in to the app. The server is reached only through `src/services/connection.ts`.
- * Once the account on the phone is deleted the session ends, and the navigator takes this screen off
- * with the rest of the signed-in view.
+ * nothing on the phone is touched. The server checks the sign-in's own secret first: a crew member's
+ * passcode, typed on the number pad, or the password of a sign-in by email. In every build: an account
+ * kept on the phone alone is deleted here too. From the company sign-in screen there may be no account
+ * open on the phone (someone taken off the roster): then the company sign-in is deleted alone, and so it
+ * is with `signInOnly` (an email sign-in on no company's roster), with nothing of whoever is signed in to
+ * the app. The server is reached only through `src/services/connection.ts`. Once deleted the screen goes
+ * back to where it was opened from, and the navigator takes it off with the signed-in view.
  */
 export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAccount'>) {
   const signInOnly = !!route.params?.signInOnly;
@@ -45,6 +47,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
   const sync = useSyncStatus();
   const [check, setCheck] = useState<DeletionCheckCompany[] | 'checking' | 'unknown' | 'failed'>('unknown');
   const [password, setPassword] = useState('');
+  const [passcode, setPasscode] = useState('');
   const [show, setShow] = useState(false);
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -53,6 +56,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
 
   const now = Date.now();
   const standing = receiving ? { role: receiving.role, name: receiving.name } : null;
+  // The sign-in signed in here, with how it signs in: a crew member's passcode sign-in has no address to name.
   const signedInServer = CAN_CONNECT ? (known ? serverAccount : undefined) : null;
   const signIn = whoseSignIn({ canConnect: CAN_CONNECT, linked, standing, serverAccount: signedInServer, me, account });
 
@@ -102,6 +106,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
   });
   const appAccount = !!me && !!account;
   const blocked = plan.blockers.length > 0;
+  const asksSecret = plan.needsPassword || plan.needsPasscode;
   const store = useStore.getState();
 
   /** The phone's part, once the server's is done or there is none. */
@@ -119,6 +124,9 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
         plan.clearsPhone && !done.cleared ? `${DELETED_TOAST} This phone was not cleared: it holds records that have not reached the company yet.` : DELETED_TOAST,
         plan.clearsPhone && !done.cleared ? 'warn' : 'ok',
       );
+      // Opened from the company sign-in screen (someone taken off the roster), the signed-out view stays:
+      // back to it, rather than this screen for an account that is gone.
+      if (navigation.canGoBack()) navigation.goBack();
       return;
     }
     navigation.goBack();
@@ -128,9 +136,14 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
 
   const deleteIt = async () => {
     if (busyRef.current || blocked) return;
-    if (plan.serverToo && !password) {
+    if (plan.needsPassword && !password) {
       haptic.error();
-      setProblem({ error: `Enter the password for ${signIn.kind === 'theirs' ? signIn.email : 'your company sign-in'}.` });
+      setProblem({ error: `Enter the password for ${signIn.kind === 'theirs' && signIn.email ? signIn.email : 'your company sign-in'}.` });
+      return;
+    }
+    if (plan.needsPasscode && !passcode) {
+      haptic.error();
+      setProblem({ error: 'Enter your passcode.' });
       return;
     }
     busyRef.current = true;
@@ -138,8 +151,9 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     setProblem(null);
     try {
       if (plan.serverToo) {
-        const result = await deleteMyServerAccount({ password });
+        const result = await deleteMyServerAccount(plan.needsPasscode ? { passcode } : { password });
         setPassword('');
+        setPasscode('');
         if (!result.ok) {
           haptic.error();
           setProblem({ error: result.error, reason: result.reason });
@@ -272,21 +286,31 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
                 secureTextEntry={!show}
                 autoCapitalize="none"
                 autoComplete="current-password"
-                hint={PASSWORD_HINT}
+                hint={SECRET_HINT}
                 onSubmitEditing={() => void deleteIt()}
                 right={<IconButton icon={show ? EyeOff : Eye} label={show ? 'Hide password' : 'Show password'} onPress={() => setShow((v) => !v)} tint={color.silica} />}
               />
             ) : null}
-            <Button
-              testID="delete-confirm"
-              label={appAccount ? 'Delete my account' : 'Delete this company sign-in'}
-              icon={UserX}
-              kind="red"
-              loading={busy}
-              disabled={busy}
-              onPress={() => (plan.needsPassword ? void deleteIt() : setAsking(true))}
-            />
-            <Button testID="delete-keep" label={appAccount ? 'Keep my account' : 'Keep my company sign-in'} kind="outline" onPress={navigation.goBack} />
+            {plan.needsPasscode ? (
+              // The number pad, hidden as it is typed, and nothing a keyboard or password manager fills in.
+              <Field
+                testID="delete-passcode"
+                label={PASSCODE_LABEL}
+                value={passcode}
+                onChangeText={(text) => {
+                  setPasscode(text);
+                  setProblem(null);
+                }}
+                keyboardType="number-pad"
+                secureTextEntry
+                autoComplete="off"
+                autoCorrect={false}
+                hint={SECRET_HINT}
+                onSubmitEditing={() => void deleteIt()}
+              />
+            ) : null}
+            <Button testID="delete-confirm" label={plan.title} icon={UserX} kind="red" loading={busy} disabled={busy} onPress={() => (asksSecret ? void deleteIt() : setAsking(true))} />
+            <Button testID="delete-keep" label={plan.keep} kind="outline" onPress={navigation.goBack} />
           </View>
         ) : null}
       </View>

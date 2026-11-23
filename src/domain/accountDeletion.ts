@@ -17,8 +17,13 @@ import type { Account, Employee, Role, Shift } from './types';
  * is this person's, or the one it is signed in with when it never joined a
  * company and its email is the app account's (the password, checked by the
  * server, shows it is theirs). On a phone joined with someone else's sign-in,
- * that sign-in is never touched. Company account deletes a company sign-in
- * alone, with its password, and never the app's.
+ * that sign-in is never touched. A company sign-in alone, with no account open
+ * on the phone (someone taken off the roster, or a sign-in on no company's
+ * roster), is deleted with its own password or passcode, and never the app's.
+ *
+ * A crew member's sign-in has no email: they sign in with the company code,
+ * their name and a passcode, and the passcode is what the server checks before
+ * it deletes. No line here names an address or a password for it.
  *
  * The company keeps its records and the person's roster row; on the server
  * only the link to the account is cleared. A company always keeps a
@@ -82,8 +87,12 @@ export type CloseRefusal = 'wrong_name' | 'someone_can_take_over' | 'subscriptio
 export type SignInHere =
   /** No company sign-in here, or a build with no server. */
   | { kind: 'none' }
-  /** Theirs: it is deleted with the account. `connected` when this phone sends with it. */
-  | { kind: 'theirs'; email: string; connected: boolean }
+  /**
+   * Theirs: it is deleted with the account. `connected` when this phone sends with it. `passcode` for a
+   * crew member's, which signs in with the company code, a name and a passcode: it has no email (`email`
+   * is empty), and its passcode is what the server checks first.
+   */
+  | { kind: 'theirs'; email: string; connected: boolean; passcode?: true }
   /** This phone sends with their sign-in, but it is not signed in now: it stays, and the person is told. */
   | { kind: 'theirs_signed_out'; email: string | null }
   /** Another person's: never touched. */
@@ -119,8 +128,11 @@ export interface DeletionInput {
   linked: ConnectedCompany | null;
   /** Who the phone's company sign-in is to the company, as the last read found. */
   standing: SignInStanding | null;
-  /** The company sign-in signed in on this phone: undefined while the phone still looks. */
-  serverAccount: { id: string; email: string } | null | undefined;
+  /**
+   * The company sign-in signed in on this phone: undefined while the phone still looks. `kind` is how it
+   * signs in; a crew member's passcode sign-in has an empty `email`.
+   */
+  serverAccount: { id: string; email: string; kind?: 'passcode' | 'email' } | null | undefined;
   /** Other accounts on this phone. */
   otherAccounts: number;
   /** Other people on the clock on this phone. */
@@ -162,6 +174,8 @@ export interface Blocker {
 export interface DeletionPlan {
   title: string;
   intro: string;
+  /** The button that leaves without deleting. */
+  keep: string;
   /** The title over what stays: the company, or each of them. */
   keepsTitle: string;
   signIn: SignInHere;
@@ -176,9 +190,11 @@ export interface DeletionPlan {
   blockers: Blocker[];
   /** Nothing on this phone would be lost, so it is cleared after the deletion and starts as the app does. */
   clearsPhone: boolean;
-  /** The server checks the company sign-in's password first. */
+  /** The server checks the company sign-in's password first: one that signs in with an email. */
   needsPassword: boolean;
   passwordLabel?: string;
+  /** The server checks a crew member's passcode first, never a password. */
+  needsPasscode: boolean;
   /** The last supervisor somewhere: they finish on the office dashboard. */
   finishOnDashboard: boolean;
 }
@@ -189,6 +205,8 @@ const checkedOutWords = (unit: string) => `You still have ${unit} checked out. E
 /** The phone's company sign-in, signed out of MineMuster's server here, and where to sign in to it again. */
 const signedOutWords = (email: string | null) => `Your company sign-in${email ? `, ${email},` : ''} is signed out on this phone`;
 const SIGN_IN_AGAIN = 'Sign in to it on Company account first';
+/** Where a company sign-in with no email to sign in with on the dashboard is deleted, when not from the app. */
+const ASK_A_SUPERVISOR = 'ask a supervisor to delete it on the office dashboard';
 
 /** An old shift never clocked out: only a supervisor can set its end now. */
 const staleShiftWords = (stale: Shift, fmtDay: (ms: number) => string) =>
@@ -268,19 +286,31 @@ export function legalLine(company: string, keepsTime: boolean, several = false):
 export function whoseSignIn(input: Pick<DeletionInput, 'canConnect' | 'linked' | 'standing' | 'serverAccount' | 'me' | 'account'>): SignInHere {
   const { canConnect, linked, standing, serverAccount, me, account } = input;
   if (!canConnect) return { kind: 'none' };
+  const passcode = serverAccount?.kind === 'passcode';
+  // A passcode sign-in has no address: none is named for it, whatever the phone was handed.
+  const theirs = (signedIn: { email: string }, connected: boolean): SignInHere =>
+    passcode ? { kind: 'theirs', email: '', passcode: true, connected } : { kind: 'theirs', email: signedIn.email, connected };
   if (linked) {
-    if (!me || !standing?.name) return { kind: 'unknown' };
+    if (!me) {
+      // The company sign-in alone, with no account open on the phone (someone taken off the roster, say):
+      // whoever is signed in to it here shows it is theirs with its own passcode or password.
+      if (serverAccount === undefined) return { kind: 'unknown' };
+      if (!serverAccount) return { kind: 'none' };
+      return theirs(serverAccount, serverAccount.id === linked.userId);
+    }
+    if (!standing?.name) return { kind: 'unknown' };
     if (!signInIsTheirs(me, standing)) return { kind: 'someone_else', name: full(standing.name) };
     if (serverAccount === undefined) return { kind: 'unknown' };
-    if (serverAccount && serverAccount.id === linked.userId) return { kind: 'theirs', email: serverAccount.email, connected: true };
-    return { kind: 'theirs_signed_out', email: linked.email ?? null };
+    if (serverAccount && serverAccount.id === linked.userId) return theirs(serverAccount, true);
+    return { kind: 'theirs_signed_out', email: linked.email || null };
   }
   if (serverAccount === undefined) return { kind: 'unknown' };
   if (!serverAccount) return { kind: 'none' };
   // A phone that never joined says nothing of whose its sign-in is: a supervisor may be signed in to join it.
-  // It goes with the app account only when it is under the same email; on its own, the password shows whose it is.
-  if (me && account && !sameEmail(account.email, serverAccount.email)) return { kind: 'other_email', email: serverAccount.email };
-  return { kind: 'theirs', email: serverAccount.email, connected: false };
+  // It goes with the app account only when it is under the same email; on its own, the password shows whose
+  // it is. A passcode sign-in has no email to match: its passcode shows whose it is.
+  if (!passcode && me && account && !sameEmail(account.email, serverAccount.email)) return { kind: 'other_email', email: serverAccount.email };
+  return theirs(serverAccount, false);
 }
 
 /** What deleting this person's account means, what stops it now, and the words for each. */
@@ -290,14 +320,20 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   const company = input.company || linked?.name || companies[0]?.name || 'your company';
   const signIn = whoseSignIn(input);
   const serverToo = signIn.kind === 'theirs';
+  // A crew member's sign-in: its passcode is checked, and no address or password is named for it.
+  const passcode = signIn.kind === 'theirs' && !!signIn.passcode;
   const appAccount = !!me && !!account;
   // An account in more than one company keeps its records with each of them.
   const several = serverToo && companies.length > 1;
   const names = companies.map((c) => c.name);
 
-  const title = appAccount ? 'Delete my account' : 'Delete this company sign-in';
+  // A crew member's passcode sign-in is their account, as they know it, with or without an account open on the phone.
+  const mine = appAccount || passcode;
+  const title = mine ? 'Delete my account' : 'Delete this company sign-in';
   const intro = !appAccount
-    ? 'Deleting your company sign-in takes it off MineMuster’s server and signs this phone out of it. It cannot be undone.'
+    ? passcode
+      ? 'Deleting your account takes your sign-in off MineMuster’s server and signs this phone out of it. It cannot be undone.'
+      : 'Deleting your company sign-in takes it off MineMuster’s server and signs this phone out of it. It cannot be undone.'
     : serverToo
       ? 'Deleting your account takes your sign-in off this phone and off MineMuster’s server. It cannot be undone.'
       : 'Deleting your account takes your sign-in off this phone. It cannot be undone.';
@@ -305,7 +341,8 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   const legal = legalLine(company, keepsTime, several);
   const keepsTitle = several ? 'What stays with each company' : `What stays with ${company}`;
 
-  const base = { title, intro, keepsTitle, signIn, serverToo, legal, finishOnDashboard: false };
+  const keep = mine ? 'Keep my account' : 'Keep my company sign-in';
+  const base = { title, intro, keep, keepsTitle, signIn, serverToo, legal, finishOnDashboard: false };
   if (input.sample) {
     return {
       ...base,
@@ -316,20 +353,31 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
       blockers: [{ kind: 'sample', title: 'This is a made-up sample account', body: 'Sample accounts are not deleted. To start over, reset the sample data on More.', action: 'reset' }],
       clearsPhone: false,
       needsPassword: false,
+      needsPasscode: false,
     };
   }
 
   // ---- What is deleted, and what stays --------------------------------------------------------
   const deletes: string[] = [];
-  if (appAccount) deletes.push(account.passwordHash ? `Your sign-in on this phone, ${account.email}, and its password.` : `Your sign-in on this phone, ${account.email}.`);
+  // An account the phone opened by itself, from the company sign-in, has no email and no password of its own.
+  if (appAccount) {
+    deletes.push(
+      !account.email ? 'Your sign-in on this phone.' : account.passwordHash ? `Your sign-in on this phone, ${account.email}, and its password.` : `Your sign-in on this phone, ${account.email}.`,
+    );
+  }
   if (appAccount && input.hasRate && keepsTime) deletes.push('Your hourly rate, kept only on this phone.');
   if (serverToo) {
-    deletes.push(`Your company sign-in, ${signIn.email}, on MineMuster’s server. It stops working on every phone and on the office dashboard.`);
+    deletes.push(
+      passcode
+        ? 'Your company sign-in and its passcode, on MineMuster’s server. It stops working on every phone.'
+        : `Your company sign-in${signIn.email ? `, ${signIn.email},` : ''} on MineMuster’s server. It stops working on every phone and on the office dashboard.`,
+    );
     deletes.push('Your requests to join a company.');
   }
 
   const keeps: string[] = [];
-  const onARoster = !!me || companies.length > 0;
+  // A phone joined to its company says whose roster, though no account is open on it (someone taken off it).
+  const onARoster = !!me || !!linked || companies.length > 0;
   if (onARoster) {
     keeps.push(
       several
@@ -435,13 +483,14 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
     }
   }
   if (signIn.kind === 'theirs_signed_out' && appAccount) {
+    // With no email to sign in with on the dashboard (a crew member's passcode sign-in), a supervisor deletes it there.
     warnings.push(
-      `${signedOutWords(signIn.email)}, so it is not deleted here. ${SIGN_IN_AGAIN} to delete it too, or delete it at ${ACCOUNT_PAGE_WORDS}.`,
+      `${signedOutWords(signIn.email)}, so it is not deleted here. ${SIGN_IN_AGAIN} to delete it too, or ${signIn.email ? `delete it at ${ACCOUNT_PAGE_WORDS}` : ASK_A_SUPERVISOR}.`,
     );
   }
   if (signIn.kind === 'other_email' && appAccount) {
     warnings.push(
-      `This phone is signed in to MineMuster’s server as ${signIn.email}, not as ${account.email}, so that sign-in is not deleted with your account. If it is yours, delete it on Company account.`,
+      `This phone is signed in to MineMuster’s server as ${signIn.email}, not as ${account.email}, so that sign-in is not deleted with your account. If it is yours, delete it at ${ACCOUNT_PAGE_WORDS}.`,
     );
   }
 
@@ -453,8 +502,9 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
     warnings,
     blockers,
     clearsPhone,
-    needsPassword: serverToo,
-    ...(serverToo ? { passwordLabel: `Password for ${signIn.email}` } : null),
+    needsPassword: serverToo && !passcode,
+    ...(serverToo && !passcode ? { passwordLabel: `Password for ${signIn.email}` } : null),
+    needsPasscode: passcode,
     finishOnDashboard: lastIn.length > 0,
   };
 }
@@ -534,19 +584,53 @@ export function signOutBlockers(input: SignOutInput): { blockers: Blocker[]; war
       });
     }
   }
-  const warnings = input.staleShift ? [staleShiftWords(input.staleShift, input.fmtDay)] : [];
-  return { blockers, warnings };
+  return { blockers, warnings: signOutWarnings(input) };
 }
 
-/** The row on More that opens it. */
-export function moreRowWords({ keepsTime, sample, company }: { keepsTime: boolean; sample: boolean; company: string }): { title: string; sub: string } {
+/**
+ * What to look at before signing out of a phone: an old shift never clocked out, which only a supervisor can
+ * end now. Said in the question too, before anything is emptied, since nothing holds signing out up for it.
+ */
+export function signOutWarnings(input: Pick<SignOutInput, 'staleShift' | 'fmtDay'>): string[] {
+  return input.staleShift ? [staleShiftWords(input.staleShift, input.fmtDay)] : [];
+}
+
+/**
+ * The question before signing out of a phone (Sign out, on More and on Company account): what happens to
+ * the phone, and that signing back in needs signal. `connected` when the phone is joined to its company,
+ * which empties it once everything has reached the company; a phone joined to none keeps what it holds.
+ * `held` is the title over what holds it up, when it is refused.
+ */
+export function signOutWords({ company, connected, keepsTime, hasRate }: { company: string; connected: boolean; keepsTime: boolean; hasRate: boolean }) {
+  const theirs = company || 'your company';
+  return {
+    title: 'Sign out of this phone?',
+    body: connected
+      ? `Once everything on this phone has reached ${theirs}, the phone is emptied and goes back to how the app starts.${keepsTime && hasRate ? ' Your hourly rate, kept only on this phone, goes with it.' : ''} Your records stay with ${theirs}.`
+      : 'This phone is not connected to a company, so everything on it stays here for when you sign in again.',
+    signal: 'Signing back in needs signal.',
+    confirm: 'Sign out of this phone',
+    keep: 'Stay signed in',
+    held: 'Not signed out yet',
+    heldBody: 'Nothing has been taken off this phone.',
+  };
+}
+
+/**
+ * The row on More that opens it. `secret` is what goes with the sign-in: its password, a crew member's
+ * passcode, or neither, for a company sign-in signed out on the phone, which is not deleted from it.
+ */
+export function moreRowWords({ keepsTime, sample, company, secret = 'password' }: { keepsTime: boolean; sample: boolean; company: string; secret?: 'password' | 'passcode' | null }): {
+  title: string;
+  sub: string;
+} {
   const theirs = company || 'your company';
   if (sample) return { title: 'Delete my account', sub: 'A made-up sample account. Reset the sample data to start over.' };
+  const goes = ['Your sign-in', ...(secret ? [secret] : []), ...(keepsTime ? ['hourly rate'] : [])];
+  const what = goes.length === 1 ? goes[0] : `${goes.slice(0, -1).join(', ')} and ${goes[goes.length - 1]}`;
   return {
     title: 'Delete my account',
-    sub: keepsTime
-      ? `Your sign-in, password and hourly rate. Your work records stay with ${theirs}.`
-      : `Your sign-in and password. Your checklists, exams and requests stay with ${theirs}.`,
+    sub: keepsTime ? `${what}. Your work records stay with ${theirs}.` : `${what}. Your checklists, exams and requests stay with ${theirs}.`,
   };
 }
 
@@ -572,5 +656,8 @@ export const LOCAL_CONFIRM = {
   body: 'Your sign-in on this phone is deleted. This cannot be undone.',
 } as const;
 
-/** The password field's hint, for the company sign-in. */
-export const PASSWORD_HINT = 'Checked with MineMuster’s server to show this is you. Not kept on this phone.';
+/** The hint under the company sign-in's password, or under a crew member's passcode. */
+export const SECRET_HINT = 'Checked with MineMuster’s server to show this is you. Not kept on this phone.';
+
+/** The box a crew member types their passcode in, to delete their account. */
+export const PASSCODE_LABEL = 'Your passcode';

@@ -2,43 +2,32 @@ import { useNavigation } from '@react-navigation/native';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Building2, CloudCheck, CloudUpload, Eye, EyeOff, LogIn, LogOut, RotateCcw, Users, UserX, WifiOff } from '../../components/icons';
-import { Button, Field, IconButton, Notice, Panel, Page, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
+import { Building2, CloudCheck, CloudUpload, HardHat, LogIn, LogOut, RotateCcw, UserCog, UserX, WifiOff } from '../../components/icons';
+import { Button, Notice, Panel, Page, Row, Tag, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { companyAccountView, signInIsTheirs } from '../../domain/access';
 import { keepsTime } from '../../domain/company';
-import {
-  checkEmail,
-  checkJoinCode,
-  checkJoinName,
-  checkPassword,
-  joinedAnswer,
-  joinWords,
-  normalJoinCode,
-  pickCompany,
-  roleWords,
-  spacedJoinCode,
-  type JoinAnswer,
-  type ServerCompany,
-  type WaitingRequest,
-} from '../../domain/serverAnswers';
-import { cleanText } from '../../domain/roster';
+import { roleWords, spacedJoinCode } from '../../domain/serverAnswers';
 import { receiveWords, syncWords, type SyncStatus } from '../../domain/sync';
 import type { ScreenProps } from '../../navigation/types';
-import { checkAccount, disconnect, server, useServerAccount } from '../../services/connection';
-import { haptic } from '../../services/haptics';
+import { checkAccount, server, useServerAccount, type AccountState } from '../../services/connection';
 import { syncNow, useSyncStatus } from '../../services/sync';
 import { useMe, useStore } from '../../store/useStore';
-import { color, font, space } from '../../theme/theme';
-import { fmtDate, fmtTime } from '../../util/format';
-import { CompanyChoice, EmailSignIn, useConnectCompany, Waiting } from '../auth/ServerSignIn';
+import { color, font, space, TAP } from '../../theme/theme';
+import { fmtTime, fullName } from '../../util/format';
+import { CrewSignIn, keepCrewSession, passcodesHere } from '../auth/CrewSignIn';
+import { EmailSignIn, Waiting } from '../auth/ServerSignIn';
+import { SignOutSheet } from './SignOutOfPhone';
 
-type Mode = 'signin' | 'signup';
+type ServerAccount = NonNullable<AccountState['account']>;
 
 /**
- * Connecting this phone to the company's server: sign in or make an account,
- * join the company with its join code, then see where the records stand.
- * Only in a build that names a server and is not a preview.
+ * Where this phone stands with its company's server: the company and the role, where the records stand,
+ * what is sent and what is received, signing out of this phone and deleting the account. A phone is
+ * joined to its company from the company sign-in screen; here a company sign-in that is signed out of the
+ * server signs in again, with the company code, the name and the passcode (crew) or the email and password
+ * (supervisors). A crew member's sign-in is named by the person's name, never by an address. Only in a
+ * build that names a server and is not a preview.
  */
 export function CompanyAccountScreen({ navigation }: ScreenProps<'CompanyAccount'>) {
   const linked = useStore((s) => s.connectedCompany);
@@ -48,411 +37,122 @@ export function CompanyAccountScreen({ navigation }: ScreenProps<'CompanyAccount
   const same = !!linked && !!account && linked.userId === account.id;
   // The company sign-in belongs to the phone's person: who sees what of it (companyAccountView).
   const { view, words } = companyAccountView({ connected: !!linked, me: me ?? null, receiving, serverSignedIn: same });
-  // Opened from the sign-in screen to connect: once connected, back to it, to make an account.
-  const connectedHere = !!linked;
-  const [startedOut] = useState(!linked && !me);
-  useEffect(() => {
-    if (startedOut && connectedHere) navigation.goBack();
-  }, [startedOut, connectedHere, navigation]);
 
   if (!server) return null;
   return (
-    <Page testID="company-account-screen" title="Company account" sub={linked && account ? linked.name : undefined} onBack={navigation.goBack}>
+    <Page testID="company-account-screen" title="Company account" sub={linked ? linked.name : undefined} onBack={navigation.goBack}>
       <View style={{ gap: space.xl }}>
         {view === 'read_only' ? (
           <ReadOnly words={words ?? (me ? 'This phone has not heard from the company yet. It does once it has signal.' : 'Sign in to the app to see this phone’s company account.')} canSend={!!me} />
         ) : !known ? (
-          <Waiting text="Looking for the account on this phone…" />
-        ) : !account ? (
-          <SignInForm />
+          <Waiting text="Looking for the sign-in on this phone…" />
         ) : !linked ? (
-          <JoinForm email={account.email} accountId={account.id} />
+          <NotConnected />
+        ) : !account ? (
+          <SignInAgain />
         ) : same ? (
-          <Connected email={account.email} />
+          <Connected account={account} />
         ) : notOnLinked ? (
-          <OtherAccount email={account.email} />
+          <OtherAccount />
         ) : (
-          <Checking email={account.email} />
+          <Checking />
         )}
       </View>
     </Page>
   );
 }
 
+/** The person a phone's company sign-in is, by the name the company has for it, or the person signed in here. */
+function useSignInName(): string | null {
+  const name = useStore((s) => s.receiving?.name ?? null);
+  const me = useMe();
+  return name ? `${name.firstName} ${name.lastName}` : me ? fullName(me) : null;
+}
+
 /**
- * Signed out: sign in, which is the company sign-in screen's own email sign-in (ServerSignIn), or make
- * an account.
+ * Signed in to the app on a phone joined to no company: an account from before the company sign-in, say.
+ * Everything on it stays here; it is joined to the company by signing in on the company sign-in screen.
  */
-function SignInForm() {
-  const linked = useStore((s) => s.connectedCompany);
-  const [mode, setMode] = useState<Mode>('signin');
-  // Making an account: its address, its password, and the address the link to confirm it went to.
-  const [address, setAddress] = useState('');
-  const [password, setPassword] = useState('');
-  const [show, setShow] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirmTo, setConfirmTo] = useState<string | null>(null);
-  const [resendError, setResendError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'submit' | 'resend' | null>(null);
-  if (!server) return null;
-  const link = server;
-  // Connected to a company: only the account on its roster sends its records, so there is no new account to make here.
-  const signUp = mode === 'signup' && !linked;
-
-  const create = async () => {
-    const problem = checkEmail(address) ?? checkPassword(password, true);
-    if (problem) {
-      haptic.error();
-      setError(problem);
-      return;
-    }
-    setBusy('submit');
-    setError(null);
-    const result = await link.signUp(address, password);
-    setBusy(null);
-    if (!result.ok) {
-      haptic.error();
-      setError(result.error);
-      return;
-    }
-    haptic.success();
-    setPassword('');
-    if (result.confirm) {
-      // No session until the email is confirmed: the person signs in after opening the link.
-      setConfirmTo(address.trim().toLowerCase());
-      setMode('signin');
-    }
-  };
-
-  const resend = async () => {
-    if (!confirmTo) return;
-    setBusy('resend');
-    setResendError(null);
-    const result = await link.resendConfirmation(confirmTo);
-    setBusy(null);
-    if (!result.ok) {
-      haptic.error();
-      setResendError(result.error);
-      return;
-    }
-    haptic.success();
-    useStore.getState().showToast(`Sent the link to ${confirmTo} again.`, 'info');
-  };
-
+function NotConnected() {
   return (
     <>
-      {linked ? (
+      <View testID="company-not-connected">
         <Notice
-          tone="warn"
-          icon={LogIn}
-          title="Signed out of the company server"
-          body={`Sign in${linked.email ? ` as ${linked.email}` : ''} to keep sending this phone’s records to ${linked.name}. They are all saved on this phone meanwhile.`}
+          tone="info"
+          icon={Building2}
+          title="This phone is not connected to a company"
+          body="Everything on it stays saved here. To send it to your company, sign out of this phone, then sign in with your company code, or as a supervisor with email."
         />
-      ) : (
-        <View style={{ gap: space.xs }}>
-          <Txt v="lead">Send this phone’s records to your company</Txt>
-          <Txt v="body" c={color.inkSoft}>
-            Sign in, or create an account. Then join your company with the code a supervisor gives you. Everything is saved on this phone either way.
-          </Txt>
-        </View>
-      )}
-      {confirmTo ? (
-        <View testID="server-confirm" style={{ gap: space.sm }}>
-          <Notice tone="info" title="Check your email" body={`We sent a link to ${confirmTo}. Open it, then come back here and sign in with the same password.`} />
-          <Button testID="server-resend" label="Send the link again" kind="quiet" size="md" loading={busy === 'resend'} onPress={() => void resend()} style={styles.tall} />
-          {resendError ? (
-            <Txt v="smallStrong" c={color.red} testID="server-resend-error" accessibilityLiveRegion="polite">{resendError}</Txt>
-          ) : null}
-        </View>
-      ) : null}
-      <Panel>
-        <View style={{ gap: space.lg }}>
-          {linked ? null : (
-            <Segmented
-              testID="server-mode"
-              value={mode}
-              onChange={(next) => {
-                setMode(next);
-                setError(null);
-              }}
-              options={[
-                { value: 'signin', label: 'Sign in' },
-                { value: 'signup', label: 'Create account' },
-              ]}
-            />
-          )}
-          {signUp ? (
-            <>
-              <Field
-                testID="server-email"
-                label="Email"
-                value={address}
-                onChangeText={(text) => {
-                  setAddress(text);
-                  setError(null);
-                }}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoComplete="email"
-                autoCorrect={false}
-              />
-              <Field
-                testID="server-password"
-                label="Password"
-                value={password}
-                onChangeText={(text) => {
-                  setPassword(text);
-                  setError(null);
-                }}
-                secureTextEntry={!show}
-                autoCapitalize="none"
-                autoComplete="new-password"
-                hint="At least 8 characters."
-                onSubmitEditing={() => void create()}
-                right={
-                  <IconButton
-                    icon={show ? EyeOff : Eye}
-                    label={show ? 'Hide password' : 'Show password'}
-                    onPress={() => setShow((v) => !v)}
-                    tint={color.silica}
-                  />
-                }
-              />
-              {error ? (
-                <Txt v="smallStrong" c={color.red} testID="server-error" accessibilityLiveRegion="polite">{error}</Txt>
-              ) : null}
-              <Button testID="server-submit" label="Create account" icon={LogIn} loading={busy === 'submit'} onPress={() => void create()} />
-            </>
-          ) : (
-            // A phone that is connected signs back in as the account that joined, so its address is filled in.
-            <EmailSignIn email={linked?.email ?? address} />
-          )}
-        </View>
-      </Panel>
-      {linked ? <DisconnectButton /> : null}
+      </View>
+      <SignOutButton />
     </>
   );
 }
 
-/** Signed in, connected to no company: the companies the account is on, and the join code. */
-function JoinForm({ email, accountId }: { email: string; accountId: string }) {
-  const me = useMe();
-  // A request another account made on this phone is theirs to check on, not this one's.
-  const asked = useStore((s) => (s.joinAsked && s.joinAsked.accountId === accountId ? s.joinAsked : null));
-  const online = useSyncStatus((s) => s.online);
-  const { setJoinAsked } = useStore.getState();
-  // Connecting to one of the account's companies, as the company sign-in screen does (ServerSignIn).
-  const connector = useConnectCompany({ id: accountId, email });
-  const [companies, setCompanies] = useState<ServerCompany[] | null>(null);
-  const [listProblem, setListProblem] = useState<string | null>(null);
-  const [waiting, setWaiting] = useState<WaitingRequest[]>([]);
-  const [code, setCode] = useState(asked?.code ?? '');
-  const [first, setFirst] = useState(asked?.firstName ?? me?.firstName ?? '');
-  const [last, setLast] = useState(asked?.lastName ?? me?.lastName ?? '');
-  const [error, setError] = useState<string | null>(null);
-  // A request still waiting from an earlier visit is shown until it is checked again.
-  const [answer, setAnswer] = useState<(JoinAnswer & { code: string }) | null>(
-    asked ? { status: 'pending', companyName: asked.companyName, reason: asked.reason, code: asked.code } : null,
-  );
-  const [busy, setBusy] = useState(false);
-  const [tries, setTries] = useState(0);
-
-  // The account's companies, and its requests still waiting: again when signal comes back.
-  useEffect(() => {
-    let live = true;
-    if (!server || !online) return undefined;
-    void server.myCompanies().then((result) => {
-      if (!live) return;
-      setCompanies(result.ok ? result.companies : null);
-      setListProblem(result.ok ? null : result.error);
-    });
-    void server.myJoinRequests().then((result) => {
-      if (live && result.ok) setWaiting(result.requests);
-    });
-    return () => {
-      live = false;
-    };
-  }, [email, online, tries]);
-
-  if (!server) return null;
-  const link = server;
-
-  /** What was typed changed: an answer about the old code or name no longer stands. */
-  const edited = () => {
-    setError(null);
-    setAnswer(null);
-  };
-
-  const join = async () => {
-    setAnswer(null);
-    const problem = checkJoinCode(code) ?? checkJoinName(first, last);
-    if (problem) {
-      haptic.error();
-      setError(problem);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    const typed = normalJoinCode(code);
-    const result = await link.joinCompany(typed, cleanText(first), cleanText(last));
-    if (!result.ok) {
-      setBusy(false);
-      haptic.error();
-      setError(result.error);
-      return;
-    }
-    setAnswer({ ...result.answer, code: typed });
-    if (!joinedAnswer(result.answer)) {
-      setBusy(false);
-      if (result.answer.status === 'pending') {
-        haptic.warning();
-        setJoinAsked({
-          code: typed,
-          firstName: cleanText(first),
-          lastName: cleanText(last),
-          companyName: result.answer.companyName,
-          reason: result.answer.reason,
-          accountId,
-          at: Date.now(),
-        });
-      } else {
-        haptic.error();
-        if (asked?.code === typed) setJoinAsked(null);
-      }
-      return;
-    }
-    // On the roster now: find the company among the account's own, and connect to it.
-    const mine = await link.myCompanies();
-    setBusy(false);
-    if (!mine.ok) {
-      haptic.error();
-      setError(mine.error);
-      return;
-    }
-    setCompanies(mine.companies);
-    const company = pickCompany(mine.companies, result.answer);
-    if (!company) {
-      haptic.error();
-      setError('You are on the roster, but this phone could not find the company. Tap Join company again.');
-      return;
-    }
-    if (!connector.connect(company)) setError(null);
-  };
-
-  const words = answer && !joinedAnswer(answer) ? joinWords(answer) : null;
-  const checking = answer?.status === 'pending' && answer.code === normalJoinCode(code);
-  // A request left from another phone, or before this one remembered it: the code has to be typed again.
-  const elsewhere = !answer && !asked && waiting.length ? waiting[0] : null;
+/**
+ * The phone's company sign-in is signed out of the server: nothing is sent until it signs in again, and it
+ * all waits on the phone. A supervisor's sign-in is by email and password, its address filled in. A crew
+ * member's is the company code, their name and their passcode (the company sign-in screen's own form), or
+ * email for one who signed up with an email before passcodes; on the web it is email alone, as crew-auth
+ * turns down a web page.
+ */
+function SignInAgain() {
+  const linked = useStore((s) => s.connectedCompany);
+  const [withEmail, setWithEmail] = useState(false);
+  if (!linked) return null;
+  // A supervisor's sign-in is always by email (a passcode sign-in never holds a supervisor's row), so its
+  // address is filled in; anyone else's is typed, so no address is ever filled in for a passcode sign-in.
+  const supervisor = linked.role === 'supervisor';
+  const byEmail = supervisor || withEmail || !passcodesHere();
   return (
     <>
-      {listProblem ? (
-        <Notice tone="warn" icon={WifiOff} title="Could not load your companies" body={`${listProblem}`}>
-          <Button testID="server-companies-retry" label="Try again" icon={RotateCcw} kind="outline" size="md" onPress={() => setTries((n) => n + 1)} style={styles.noticeButton} />
-        </Notice>
-      ) : null}
-      {companies && companies.length ? <CompanyChoice companies={companies} error={connector.error} onPick={(company) => connector.connect(company)} /> : null}
-
-      <Panel title="Join your company">
-        <View style={{ gap: space.lg }}>
-          <Txt v="body" c={color.inkSoft}>
-            A supervisor gives you the company code. A company and its code are set up in the MineMuster office dashboard.
-          </Txt>
-          {elsewhere ? (
-            <Notice
-              tone="info"
-              title="A request is waiting for a supervisor"
-              body={`You asked to join a company on ${fmtDate(elsewhere.at)}. Type its company code again and tap Join company to see where it stands.`}
-            />
-          ) : null}
-          <Field
-            testID="server-code"
-            label="Company code"
-            hint="8 letters and numbers. Your supervisor has it."
-            value={code}
-            onChangeText={(text) => {
-              setCode(text);
-              edited();
-            }}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            maxLength={16}
-          />
-          <View style={styles.names}>
-            <View style={{ flex: 1 }}>
-              <Field
-                testID="server-first"
-                label="First name"
-                value={first}
-                onChangeText={(text) => {
-                  setFirst(text);
-                  edited();
-                }}
-                autoCapitalize="words"
-                autoComplete="given-name"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Field
-                testID="server-last"
-                label="Last name"
-                value={last}
-                onChangeText={(text) => {
-                  setLast(text);
-                  edited();
-                }}
-                autoCapitalize="words"
-                autoComplete="family-name"
-              />
-            </View>
-          </View>
-          <Txt v="small" c={color.silica}>Your name the way it is on the company’s roster.</Txt>
-          {words ? (
-            <View testID="server-answer">
-              <Notice tone={words.tone} title={words.title} body={words.body} />
-            </View>
-          ) : null}
-          {error ? (
-            <Txt v="smallStrong" c={color.red} testID="server-error" accessibilityLiveRegion="polite">{error}</Txt>
-          ) : null}
-          <Button
-            testID="server-join"
-            label={checking ? 'Check again' : 'Join company'}
-            icon={Building2}
-            loading={busy}
-            onPress={() => void join()}
-          />
+      <Notice
+        tone="warn"
+        icon={LogIn}
+        title="Signed out of the company server"
+        body={`Sign in again to keep sending this phone’s records to ${linked.name}. They are all saved on this phone meanwhile. Signing in needs signal.`}
+      />
+      <Panel title="Sign in again">
+        <View testID="company-sign-in-again">
+          {byEmail ? <EmailSignIn email={supervisor ? linked.email ?? '' : ''} /> : <CrewSignIn onSignedIn={keepCrewSession} startOn="sign_in" />}
         </View>
       </Panel>
-
-      {/* Never joined: deleting the company sign-in alone, with its password, whoever is signed in to the app. */}
-      <AccountRow email={email} deletes="sign_in" />
-
-      {connector.ask}
+      {supervisor || !passcodesHere() ? null : (
+        <Panel flush>
+          {withEmail ? (
+            <Row testID="company-again-with-code" left={<HardHat color={color.ink} size={24} />} title="Sign in with the company code and your passcode" chevron onPress={() => setWithEmail(false)} />
+          ) : (
+            <Row testID="company-again-with-email" left={<UserCog color={color.ink} size={24} />} title="Signed up with email? Sign in with email" chevron onPress={() => setWithEmail(true)} />
+          )}
+        </Panel>
+      )}
+      <SignOutButton />
     </>
   );
 }
 
 /** Another account than the one that joined is signed in, and it is not on the company's roster. */
-function OtherAccount({ email }: { email: string }) {
+function OtherAccount() {
   const linked = useStore((s) => s.connectedCompany);
+  const name = useStore((s) => s.receiving?.name ?? null);
   if (!linked) return null;
+  const whose = name ? `${name.firstName} ${name.lastName}’s company sign-in` : 'the company sign-in it was joined with';
   return (
     <>
       <View testID="server-other-account">
         <Notice
           tone="bo"
-          title={`This account is not on ${linked.name}’s roster`}
-          body={`This phone sends ${linked.name}’s records only as an account on its roster${linked.email ? `, such as ${linked.email}` : ''}. Sign out and sign in as that account, or disconnect this phone. Nothing is sent meanwhile, and nothing is lost.`}
+          title={`This sign-in is not on ${linked.name}’s roster`}
+          body={`This phone sends ${linked.name}’s records only with ${whose}. Sign out of the company server, then sign in again with that one. Nothing is sent meanwhile, and nothing is lost.`}
         />
       </View>
-      <AccountRow email={email} />
-      <DisconnectButton />
+      <SignOutOfServer />
     </>
   );
 }
 
 /** Another account is signed in: checking it against the company's roster before anything is sent as it. */
-function Checking({ email }: { email: string }) {
+function Checking() {
   const linked = useStore((s) => s.connectedCompany);
   const { checking, unchecked } = useServerAccount();
   useEffect(() => checkAccount(), []);
@@ -460,19 +160,20 @@ function Checking({ email }: { email: string }) {
   return (
     <>
       {unchecked && !checking ? (
-        <Notice tone="warn" icon={WifiOff} title={`Could not check ${email} with ${linked.name}`} body="This needs signal. Nothing is sent until it is checked, and nothing is lost.">
+        <Notice tone="warn" icon={WifiOff} title={`Could not check this sign-in with ${linked.name}`} body="This needs signal. Nothing is sent until it is checked, and nothing is lost.">
           <Button testID="server-check-retry" label="Try again" icon={RotateCcw} kind="outline" size="md" onPress={checkAccount} style={styles.noticeButton} />
         </Notice>
       ) : (
-        <Waiting text={`Checking that ${email} is on ${linked.name}’s roster…`} />
+        <Waiting text={`Checking this sign-in with ${linked.name}…`} />
       )}
-      <AccountRow email={email} />
+      <SignOutOfServer />
     </>
   );
 }
 
-/** Connected: the company, the role, where the records stand, and disconnecting. */
-function Connected({ email }: { email: string }) {
+/** Connected: the company, the role, who is signed in, where the records stand, signing out and deleting. */
+function Connected({ account }: { account: ServerAccount }) {
+  const navigation = useNavigation();
   const linked = useStore((s) => s.connectedCompany);
   const time = useStore((s) => keepsTime(s.settings.company));
   const joinCode = useServerAccount((s) => s.joinCode);
@@ -480,6 +181,7 @@ function Connected({ email }: { email: string }) {
   const sync = useSyncStatus();
   const me = useMe();
   const receiving = useStore((s) => s.receiving);
+  const who = useSignInName();
   // Deleting the sign-in is its own person's: by the name the company has for it.
   const theirs = !!me && signInIsTheirs(me, receiving ? { role: receiving.role, name: receiving.name } : null);
   // The role, the company's name and a supervisor's join code, as the server has them now.
@@ -488,7 +190,9 @@ function Connected({ email }: { email: string }) {
   const records = syncWords(sync, fmtTime);
   const RecordsIcon = !sync.online ? WifiOff : records.done ? CloudCheck : CloudUpload;
   const supervisor = linked.role === 'supervisor';
-  const fromCompany = receiveLine(sync, linked.name, linked.email ?? null);
+  // A crew member's sign-in has no address to show: the person's name says whose it is.
+  const address = account.kind === 'email' ? account.email : '';
+  const fromCompany = receiveLine(sync, linked.name, address || null);
 
   return (
     <>
@@ -496,8 +200,8 @@ function Connected({ email }: { email: string }) {
         <View testID="server-off-roster">
           <Notice
             tone="bo"
-            title={`${email} is not on ${linked.name}’s roster now`}
-            body="The server takes nothing more from this account. See your supervisor. Everything stays saved on this phone."
+            title={`This phone’s company sign-in is not on ${linked.name}’s roster now`}
+            body="The server takes nothing more from it. See your supervisor. Everything stays saved on this phone."
           />
         </View>
       ) : null}
@@ -509,7 +213,8 @@ function Connected({ email }: { email: string }) {
             <View style={styles.tagLine}>
               <Tag label={roleWords(linked.role)} tone={supervisor ? 'ink' : 'neutral'} solid={supervisor} />
             </View>
-            <Txt v="small" c={color.silica}>Signed in as {email}</Txt>
+            <Txt v="small" c={color.silica} testID="server-signed-in-as">{who ? `Signed in as ${who}` : 'Signed in to the company server'}</Txt>
+            <Txt v="small" c={color.silica}>{address ? `With ${address}` : 'With the company code and a passcode'}</Txt>
           </View>
         </View>
       </Panel>
@@ -566,8 +271,10 @@ function Connected({ email }: { email: string }) {
 
       <WebPageLinks testID="server-pages" />
 
-      <DisconnectButton />
-      <AccountRow email={email} deletes={theirs ? 'account' : undefined} />
+      <SignOutButton />
+      {theirs ? (
+        <Button testID="server-delete-sign-in" label="Delete my account" icon={UserX} kind="quiet" style={styles.tall} onPress={() => navigation.navigate('DeleteAccount')} />
+      ) : null}
     </>
   );
 }
@@ -634,68 +341,30 @@ function ReadOnly({ words, canSend }: { words: string; canSend: boolean }) {
   );
 }
 
-/** Disconnecting, asked first. */
-function DisconnectButton() {
-  const linked = useStore((s) => s.connectedCompany);
-  const showToast = useStore((s) => s.showToast);
-  const sync = useSyncStatus();
+/**
+ * Sign out of this phone, asked first (SignOutSheet): the same as More's Sign out. It waits until everything
+ * on the phone has reached the company, then empties the phone and signs out of the server.
+ */
+function SignOutButton() {
   const [asking, setAsking] = useState(false);
-  if (!linked) return null;
   return (
     <>
-      <Button testID="server-disconnect" label="Disconnect this phone" icon={LogOut} kind="outline" onPress={() => setAsking(true)} />
-      <Sheet testID="server-disconnect-sheet" visible={asking} onClose={() => setAsking(false)} title="Disconnect this phone?">
-        <Txt v="body" c={color.inkSoft}>
-          This phone stops sending records to {linked.name} and signs out of the company server. Everything stays saved on this phone.
-        </Txt>
-        {sync.server && sync.waiting > 0 ? (
-          <Txt v="strong" c={color.red} testID="server-unsent">
-            {sync.waiting} {sync.waiting === 1 ? 'record has' : 'records have'} not reached the server yet. {sync.waiting === 1 ? 'It sends' : 'They send'} if you connect again.
-          </Txt>
-        ) : null}
-        <Button
-          testID="server-confirm-disconnect"
-          label="Disconnect"
-          kind="red"
-          onPress={() => {
-            setAsking(false);
-            void disconnect().then(() => showToast('Disconnected. Everything stays saved on this phone.', 'info'));
-          }}
-        />
-        <Button testID="server-keep" label="Keep connected" kind="outline" onPress={() => setAsking(false)} />
-      </Sheet>
+      <Button testID="server-sign-out-phone" label="Sign out of this phone" icon={LogOut} kind="outline" onPress={() => setAsking(true)} />
+      <SignOutSheet visible={asking} onClose={() => setAsking(false)} from="company_account" />
     </>
   );
 }
 
-/**
- * Who is signed in to the server on this phone, and signing out. With `deletes`, deleting: `sign_in`,
- * the company sign-in alone, on a phone that never joined a company; `account`, the person's whole
- * account with their own sign-in, on one joined with it.
- */
-function AccountRow({ email, deletes }: { email: string; deletes?: 'sign_in' | 'account' }) {
-  const navigation = useNavigation();
-  return (
-    <View style={{ gap: space.md }}>
-      <Panel flush>
-        <Row testID="server-account" left={<Users color={color.ink} size={24} />} title={email} sub="Signed in to the company server" subLines={3} />
-      </Panel>
-      <Button testID="server-sign-out" label="Sign out of the server" icon={LogOut} kind="quiet" onPress={() => void server?.signOut()} />
-      {deletes === 'sign_in' ? (
-        <Button testID="server-delete-sign-in" label="Delete this company sign-in" icon={UserX} kind="quiet" onPress={() => navigation.navigate('DeleteAccount', { signInOnly: true })} />
-      ) : deletes === 'account' ? (
-        <Button testID="server-delete-sign-in" label="Delete my account" icon={UserX} kind="quiet" onPress={() => navigation.navigate('DeleteAccount')} />
-      ) : null}
-    </View>
-  );
+/** Sign another account out of the server, so the phone's own company sign-in can sign in again. Nothing on the phone changes. */
+function SignOutOfServer() {
+  return <Button testID="server-sign-out" label="Sign out of the company server" icon={LogOut} kind="quiet" style={styles.tall} onPress={() => void server?.signOut()} />;
 }
 
 const styles = StyleSheet.create({
-  names: { flexDirection: 'row', gap: space.md },
   company: { flexDirection: 'row', alignItems: 'flex-start', gap: space.lg },
   tagLine: { flexDirection: 'row' },
   code: { fontFamily: font.condBold, fontSize: 40, lineHeight: 46, letterSpacing: 4, color: color.ink },
-  noticeButton: { marginTop: space.sm, alignSelf: 'flex-start', minHeight: 56, paddingHorizontal: space.lg },
+  noticeButton: { marginTop: space.sm, alignSelf: 'flex-start', minHeight: TAP, paddingHorizontal: space.lg },
   // The quiet buttons here are a full tap target for a gloved thumb.
-  tall: { minHeight: 56 },
+  tall: { minHeight: TAP },
 });

@@ -610,7 +610,7 @@ export function notTakenWords(
   }
   const why =
     reason === 'supervisor_only'
-      ? 'Only a supervisor’s company sign-in can send this. Enter it on the dashboard, or join this phone with a supervisor’s sign-in on Company account.'
+      ? 'Only a supervisor’s company sign-in can send this. A supervisor enters it on the office dashboard.'
       : reason === 'not_yours'
         ? 'Another person’s record: the company keeps theirs.'
         : reason === 'signed'

@@ -138,6 +138,8 @@ const waitingCounts = (): Pick<SyncStatus, 'waiting' | 'stuck'> => {
 };
 /** What the company would not take from this sign-in: held at the version refused, or passed over for its role. */
 export const notTakenChanges = (): Change[] => sortedNow().notTaken;
+/** What waits that the server will not take as it is: stuck at the version it turned down. */
+export const stuckChanges = (): Change[] => waitingNow().filter((c) => stuck.get(c.key) === c.rev);
 const notTakenNow = (): number => notTakenChanges().length;
 
 /** How long a round reads the company's records before it lets the next round carry on. */

@@ -529,7 +529,8 @@ describe('deleting the company sign-in from the phone', () => {
     const stopLink = app.connection.watchConnection();
     running = () => (stopLink(), stopSync());
     await settle();
-    expect(app.connection.useServerAccount.getState().account).toEqual({ ...BLAKE, kind: 'passcode' });
+    // A passcode account's address on the server is a hidden one: the phone is never handed it.
+    expect(app.connection.useServerAccount.getState().account).toEqual({ id: BLAKE.id, email: '', kind: 'passcode' });
     expect(app.sync.useSyncStatus.getState().server).toBe(true);
     const fresh = { access_token: 'a-fresh', refresh_token: 'r-fresh', expires_at: 1_795_000_000, user_id: BLAKE.id };
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ status: 'signed_in', session: fresh }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -609,6 +610,23 @@ describe('deleting the company sign-in from the phone', () => {
     stopLink();
   });
 
+  it('says the phone is signing out while it lets go of a sign-in or disconnects, so nothing connects it again meanwhile', async () => {
+    const { app, stop } = await joinedPhone();
+    const seen: boolean[] = [];
+    const note = async () => {
+      seen.push(app.connection.useServerAccount.getState().signingOut);
+      return { error: null };
+    };
+    mockSignOut.mockImplementationOnce(note).mockImplementationOnce(note);
+    await app.connection.forgetDeletedSignIn(AVERY.id);
+    signedInAs(AVERY);
+    mockAuthEvent('SIGNED_IN', sessionOf(AVERY));
+    await app.connection.disconnect();
+    expect(seen).toEqual([true, true]);
+    expect(app.connection.useServerAccount.getState().signingOut).toBe(false);
+    stop();
+  });
+
   it('lets go of a sign-in the server deleted already, without asking it anything', async () => {
     const { app, useStore, stop } = await joinedPhone();
     await app.connection.forgetDeletedSignIn(AVERY.id);
@@ -623,5 +641,179 @@ describe('deleting the company sign-in from the phone', () => {
     expect(app.connection.server).toBeNull();
     expect(await app.connection.deleteMyServerAccount({ password: 'haulroad88' })).toMatchObject({ ok: false, reason: 'no_server' });
     expect(mockSignInWithPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe('signing out of this phone', () => {
+  // One person per phone: signing out empties the phone, so it waits until everything on it has reached the
+  // company, and only then signs out of the server. Avery Quill and Blake Rook are made up.
+  let running: (() => void) | null = null;
+  afterEach(() => {
+    running?.();
+    running = null;
+  });
+  /** Avery's own phone: joined to Test Pit A with Avery's sign-in, sending, and Avery's account opened by a round. */
+  async function averysPhone(shifts = 0) {
+    const app = build(CONNECTS);
+    const pushes = fakeServer();
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    if (shifts) useStore.setState({ shifts: shiftsOf(shifts) });
+    useStore.getState().connectCompany(PIT_A, AVERY);
+    const stopSync = app.sync.startSync();
+    const stopLink = app.connection.watchConnection();
+    running = () => (stopLink(), stopSync());
+    await settle();
+    expect(signedInName(useStore)).toBe('Avery Quill');
+    return { app, pushes, useStore };
+  }
+
+  it('is refused while anything is unsent, with everything that holds it up, and signs nothing out', async () => {
+    const { app, useStore } = await averysPhone();
+    app.sync.useSyncStatus.setState({ online: false });
+    // On the clock, and two records made with no signal.
+    const me = useStore.getState().session!.employeeId;
+    const open = { id: 'sh-open', employeeId: me, clockIn: { at: Date.now() - 3_600_000 }, lunches: [], breaks: [] };
+    useStore.setState({ shifts: [...shiftsOf(2), open] });
+    const before = { session: useStore.getState().session, linked: useStore.getState().connectedCompany, shifts: useStore.getState().shifts };
+
+    const done = await app.connection.signOutOfPhone();
+    expect(done).toEqual({
+      ok: false,
+      reason: 'no_signal',
+      error: 'Clock out first. You are on the clock. Clock out, then sign out.',
+      blockers: [
+        { kind: 'on_clock', title: 'Clock out first', body: 'You are on the clock. Clock out, then sign out.', action: 'clock' },
+        { kind: 'waiting', title: '3 records have not reached Test Pit A yet', body: 'They are sent before this phone is signed out, so the company has them. This needs signal.', action: 'send' },
+      ],
+      warnings: [],
+    });
+    expect({ session: useStore.getState().session, linked: useStore.getState().connectedCompany, shifts: useStore.getState().shifts }).toEqual(before);
+    expect(mockSignOut).not.toHaveBeenCalled();
+    expect(app.connection.useServerAccount.getState()).toMatchObject({ account: { ...AVERY, kind: 'email' }, signingOut: false });
+  });
+
+  it('sends what waits first, then empties the phone, and only then signs out of the server', async () => {
+    const { app, pushes, useStore } = await averysPhone();
+    app.sync.useSyncStatus.setState({ online: false });
+    useStore.setState({ shifts: shiftsOf(2) });
+    app.sync.useSyncStatus.setState({ online: true });
+    const sent = pushes.length;
+    // While the server's sign-out is under way, the phone says it is signing out, so nothing finds the company again meanwhile.
+    let signingOutThen: boolean | null = null;
+    mockSignOut.mockImplementationOnce(async () => {
+      signingOutThen = app.connection.useServerAccount.getState().signingOut;
+      return { error: null };
+    });
+
+    expect(await app.connection.signOutOfPhone()).toEqual({ ok: true });
+    expect(pushes.length).toBeGreaterThan(sent);
+    const pushed = mockRpc.mock.invocationCallOrder[mockRpc.mock.calls.map(([fn]) => fn).lastIndexOf('push_records')];
+    expect(pushed).toBeLessThan(mockSignOut.mock.invocationCallOrder[0]);
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(signingOutThen).toBe(true);
+    // Empty, as a new phone starts: nobody signed in, no account, no records and no company.
+    expect(useStore.getState()).toMatchObject({ session: null, accounts: [], shifts: [], connectedCompany: null, syncedWith: null, receiving: null });
+    expect(app.connection.useServerAccount.getState()).toMatchObject({ account: null, signingOut: false });
+    expect(app.sync.useSyncStatus.getState().server).toBe(false);
+  });
+
+  it('with nobody’s account open, signs out of the server and keeps what the phone holds', async () => {
+    const app = build(CONNECTS);
+    fakeServer({ companies: [] });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    useStore.setState({ shifts: shiftsOf(2) });
+    // Joined with Avery's sign-in, and nobody's account open yet.
+    useStore.getState().connectCompany(PIT_A, AVERY);
+    expect(useStore.getState().session).toBeNull();
+    expect(await app.connection.signOutOfPhone()).toEqual({ ok: true });
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(useStore.getState().connectedCompany).toBeNull();
+    expect(useStore.getState().shifts).toHaveLength(2);
+  });
+
+  it('runs once for two taps', async () => {
+    const { app } = await averysPhone();
+    const [first, second] = [app.connection.signOutOfPhone(), app.connection.signOutOfPhone()];
+    expect(await first).toEqual({ ok: true });
+    expect(await second).toEqual({ ok: true });
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('has nothing to sign out of in a build with no server', async () => {
+    const app = build({ ...SERVER_ENV, EXPO_PUBLIC_ROSTER: ROSTER });
+    expect(await app.connection.signOutOfPhone()).toMatchObject({ ok: false, reason: 'no_server' });
+  });
+});
+
+describe('a crew member’s passcode sign-in', () => {
+  // Blake signs in with the company code, his name and a passcode. Supabase Auth holds a hidden address for
+  // the account, which the phone is never handed. Made up, like everyone here.
+  const HIDDEN = 'crew-0a1b2c3d@crew.example.test';
+  const blakeUser = { id: BLAKE.id, email: HIDDEN, app_metadata: { provider: 'email', sign_in: 'passcode' } };
+  let running: (() => void) | null = null;
+  afterEach(() => {
+    running?.();
+    running = null;
+  });
+  async function blakesPhone() {
+    signedInAs(blakeUser);
+    const app = build(CONNECTS);
+    fakeServer({ companies: [{ ...PIT_A, role: 'employee' }] });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    const stopLink = app.connection.watchConnection();
+    const stopSync = app.sync.startSync();
+    running = () => (stopLink(), stopSync());
+    await settle();
+    return { app, useStore };
+  }
+
+  it('is never held on the phone by its hidden address', async () => {
+    const { app, useStore } = await blakesPhone();
+    const account = app.connection.useServerAccount.getState().account!;
+    expect(account).toEqual({ id: BLAKE.id, email: '', kind: 'passcode' });
+    // Connected as the company sign-in screen connects it, and a round read the company's records.
+    expect(useStore.getState().connectCompany({ ...PIT_A, role: 'employee' }, account)).toEqual({ ok: true });
+    await settle();
+    expect(signedInName(useStore)).toBe('Blake Rook');
+    const kept = useStore.persist.getOptions().partialize!(useStore.getState());
+    expect(JSON.stringify(kept)).not.toContain(HIDDEN);
+    expect(JSON.stringify(app.connection.useServerAccount.getState())).not.toContain(HIDDEN);
+  });
+
+  it('is forgotten by a phone joined before the app left it behind, once the sign-in is signed in here', async () => {
+    // Joined on an earlier build, which kept the hidden address with the company the phone sends to.
+    signedInAs(blakeUser);
+    const app = build(CONNECTS);
+    fakeServer({ companies: [{ ...PIT_A, role: 'employee' }] });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    useStore.setState({ connectedCompany: { ...PIT_A, role: 'employee', userId: BLAKE.id, email: HIDDEN } });
+    const stopLink = app.connection.watchConnection();
+    running = stopLink;
+    await settle();
+    expect(useStore.getState().connectedCompany).toEqual({ ...PIT_A, role: 'employee', userId: BLAKE.id, email: '' });
+    expect(app.sync.useSyncStatus.getState()).toMatchObject({ server: true, trouble: null });
+  });
+
+  it('is deleted with its passcode only, and an email sign-in with its password only, saying so in plain words', async () => {
+    const { app } = await blakesPhone();
+    const passcodeOnly = await app.connection.deleteMyServerAccount({ password: 'haulroad88' });
+    expect(passcodeOnly).toEqual({ ok: false, reason: 'wrong_secret', error: 'This sign-in uses a passcode. Enter your passcode to delete it.' });
+    expect(mockSignInWithPassword).not.toHaveBeenCalled();
+
+    signedInAs(AVERY);
+    mockAuthEvent('SIGNED_IN', sessionOf(AVERY));
+    await settle();
+    expect(app.connection.useServerAccount.getState().account).toEqual({ ...AVERY, kind: 'email' });
+    expect(await app.connection.deleteMyServerAccount({ passcode: '582039' })).toEqual({
+      ok: false,
+      reason: 'wrong_secret',
+      error: 'This sign-in uses an email and a password. Enter the password to delete it.',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

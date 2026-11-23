@@ -4,7 +4,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
 import { accountHere, offTheRosterHere, ownPersonHere, signInPerson, supervisorHere } from '../domain/access';
-import { clockBlocker, signOutBlockers } from '../domain/accountDeletion';
+import { clockBlocker, signOutBlockers, type Blocker } from '../domain/accountDeletion';
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
@@ -69,6 +69,13 @@ export interface Toast {
 }
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
+
+/**
+ * Signing out of a phone joined to its company, held up by what is on it: the first thing, and what to do,
+ * as `error`, and everything that holds it up (signOutBlockers), with what to look at first, for the
+ * screen to list.
+ */
+export type SignOutHeld = { ok: false; error: string; blockers: Blocker[]; warnings: string[] };
 
 /** A sign-in whose password was right, for a person taken off the roster: they may delete the account from the sign-in screen. */
 export type OffRoster = { ok: false; error: string; offRoster: true };
@@ -239,11 +246,11 @@ interface Actions {
    * to its company, and only once nothing on it would be lost, on the deletion plan's own terms for
    * clearing a phone (signOutBlockers): no shift open and no unit checked out, nobody else's account here,
    * the company's records read to the end, nothing waiting and nothing the company turned down. It refuses
-   * with the first thing that holds it up and what to do. `round` is what only the round knows
-   * (useSyncStatus): whether there is signal, what the server will not take as it is, and why nothing can
-   * go now. Signing out of the company's server is connection.ts's.
+   * with the first thing that holds it up and what to do, and with everything that does (SignOutHeld).
+   * `round` is what only the round knows (useSyncStatus): whether there is signal, what the server will not
+   * take as it is, and why nothing can go now. Signing out of the company's server is connection.ts's.
    */
-  forgetPhone: (round?: Pick<SyncStatus, 'online' | 'stuck' | 'trouble'>) => Result;
+  forgetPhone: (round?: Pick<SyncStatus, 'online' | 'stuck' | 'trouble'>) => Result | SignOutHeld;
 
   /**
    * Where the phone was, or why it gave no location. With no boundary set it is
@@ -488,7 +495,7 @@ export const useStore = create<Store>()(
         if (receiving?.role !== 'supervisor') {
           return {
             ok: false,
-            error: 'This phone is joined with a crew sign-in, so the company’s server would not take this. Change it on the office dashboard, or join this phone with a supervisor’s sign-in on Company account.',
+            error: 'This phone is joined with a crew sign-in, so the company’s server would not take this. A supervisor changes it on the office dashboard.',
           };
         }
         if (receiving.caughtUpAt == null) return { ok: false, error: 'This phone has not got the company’s roster, fleet and sheets yet. Try again once it has had signal.' };
@@ -764,7 +771,7 @@ export const useStore = create<Store>()(
           // as it is, and why nothing can go, are the round's. A sign-in off the roster, as its own row says, sends nothing.
           const sorted = sortedHere(r);
           const now = Date.now();
-          const { blockers } = signOutBlockers({
+          const { blockers, warnings } = signOutBlockers({
             now,
             company: connectedCompany.name,
             openShift: openShiftOf(shifts, session.employeeId, now),
@@ -783,7 +790,7 @@ export const useStore = create<Store>()(
             fmtDay: fmtDate,
           });
           const first = blockers[0];
-          if (first) return { ok: false, error: `${first.title}. ${first.body}` };
+          if (first) return { ok: false, error: `${first.title}. ${first.body}`, blockers, warnings };
           // The clearDevice path, open to the person here because nothing on the phone is lost.
           get().resetDemo();
           return { ok: true };

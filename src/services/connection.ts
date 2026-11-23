@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { CAN_SEND } from '../config';
-import { NO_SIGNAL_BLOCKER, sendable, waitingBlocker, type DeletionAnswer } from '../domain/accountDeletion';
+import { NO_SIGNAL_BLOCKER, sendable, waitingBlocker, type Blocker, type DeletionAnswer } from '../domain/accountDeletion';
 import type { ConnectedCompany } from '../domain/server';
 import { useStore } from '../store/useStore';
 import type * as Server from './server';
@@ -48,6 +48,12 @@ export interface AccountState {
   unchecked: boolean;
   /** The company's join code, for a supervisor to hand out. Held in memory only, never saved. */
   joinCode: string | null;
+  /**
+   * The phone is signing out of the company server: signing out of this phone, letting go of its company,
+   * or of a sign-in that was deleted. Until that is over the account is still signed in here, so the company
+   * sign-in screen neither looks for its company nor connects to it.
+   */
+  signingOut: boolean;
 }
 
 export const useServerAccount = create<AccountState>(() => ({
@@ -57,6 +63,7 @@ export const useServerAccount = create<AccountState>(() => ({
   checking: false,
   unchecked: false,
   joinCode: null,
+  signingOut: false,
 }));
 
 /** Whether this account is the one the phone joined its company with. */
@@ -101,6 +108,11 @@ export function watchConnection(): () => void {
       if (!linked) setSyncTransport(null);
       else if (ready) setSyncTransport(link.companyTransport(linked.id));
       else setSyncTransport(null, why);
+    }
+    // A phone joined on an earlier build kept a passcode sign-in's hidden address: it is left behind here
+    // too, once the sign-in is signed in, so nothing on the phone can show it.
+    if (ready && account!.kind === 'passcode' && linked!.email) {
+      useStore.getState().confirmConnection({ userId: account!.id, email: '', role: linked!.role, name: linked!.name });
     }
     if (linked && account && !sameAccount(linked, account)) verify(linked, account, false);
   };
@@ -171,13 +183,88 @@ export function watchConnection(): () => void {
  * over before the phone signs out.
  */
 export async function disconnect(): Promise<void> {
-  useStore.getState().disconnectCompany();
-  await syncSettled();
-  await server?.signOut();
+  await signingOutWhile(async () => {
+    useStore.getState().disconnectCompany();
+    await syncSettled();
+    await server?.signOut();
+  });
+}
+
+/** How many sign-outs are under way: one ending does not end another's. */
+let signingOutNow = 0;
+
+/**
+ * While the phone lets go of its company and signs out of the server, it says so (`signingOut`): until the
+ * server's sign-out is over the account is still signed in here, and the company sign-in screen would find
+ * its company again and connect the phone to it.
+ */
+async function signingOutWhile<T>(work: () => Promise<T>): Promise<T> {
+  signingOutNow += 1;
+  useServerAccount.setState({ signingOut: true });
+  try {
+    return await work();
+  } finally {
+    signingOutNow -= 1;
+    useServerAccount.setState({ signingOut: signingOutNow > 0 });
+  }
+}
+
+/**
+ * Signing this phone out, or why it did not: `unsent` while something on it has not reached the company
+ * or is still open on it, `no_signal` when that needs signal first, each thing that holds it up in
+ * `blockers` with what to do (signOutBlockers), and `refused` for a phone this person cannot sign out.
+ * Nothing is signed out of the server unless it is `ok`.
+ */
+export type PhoneSignOut =
+  | { ok: true }
+  | { ok: false; reason: 'no_server' | 'unsent' | 'no_signal' | 'refused'; error: string; blockers: Blocker[]; warnings: string[] };
+
+let signingOut: Promise<PhoneSignOut> | null = null;
+
+/**
+ * Sign out of this phone: More's Sign out, Company account's, and the company sign-in screen's. One
+ * person per phone. With the person's own account open on a phone joined to its company, a round sends
+ * what waits first; then the store empties the phone (forgetPhone), only once nothing on it would be lost,
+ * while the phone is still connected, as forgetPhone needs; and only then is the phone signed out of the
+ * server, the way disconnect() does it. Refused, nothing is signed out, and the answer carries everything
+ * that holds it up. With nobody's account open, or on a phone joined to no company, nothing is emptied:
+ * what the phone holds stays on it, any account still open is closed (someone taken off the roster), and
+ * the phone signs out of the server. A second call while one runs gets the same answer.
+ */
+export function signOutOfPhone(): Promise<PhoneSignOut> {
+  if (!signingOut) signingOut = signOutNow().finally(() => (signingOut = null));
+  return signingOut;
+}
+
+async function signOutNow(): Promise<PhoneSignOut> {
+  if (!server) return { ok: false, reason: 'no_server', error: 'This build has no company server.', blockers: [], warnings: [] };
+  const link = server;
+  const { connectedCompany, session } = useStore.getState();
+  if (!connectedCompany || !session) {
+    useStore.getState().signOut();
+    await disconnect();
+    return { ok: true };
+  }
+  await syncNow();
+  const round = useSyncStatus.getState();
+  return signingOutWhile(async (): Promise<PhoneSignOut> => {
+    const done = useStore.getState().forgetPhone(round);
+    if (!done.ok) {
+      const held = 'blockers' in done ? done : { ...done, blockers: [], warnings: [] };
+      const reason = !held.blockers.length ? 'refused' : round.online ? 'unsent' : 'no_signal';
+      return { ok: false, reason, error: held.error, blockers: held.blockers, warnings: held.warnings };
+    }
+    // Emptied, so the round under way stops at once (watchConnection lets go of the company); it is over before the phone signs out.
+    await syncSettled();
+    await link.signOut();
+    return { ok: true };
+  });
 }
 
 /** Why the company sign-in was not deleted: what stops it on the phone, or what the server answered. */
-export type ServerDeletion = { ok: true } | { ok: false; reason: 'no_server' | 'signed_out' | 'waiting' | 'no_signal' | DeletionAnswer['kind']; error: string };
+export type ServerDeletion =
+  | { ok: true }
+  | { ok: false; reason: 'no_server' | 'signed_out' | 'wrong_secret' | 'waiting' | 'no_signal' | DeletionAnswer['kind']; error: string };
 
 /**
  * Delete the company sign-in signed in on this phone from MineMuster's server, for good. A phone that
@@ -186,12 +273,19 @@ export type ServerDeletion = { ok: true } | { ok: false; reason: 'no_server' | '
  * email (`server.deleteAccount`) or a crew member's passcode (`server.deleteAccountWithPasscode`), and
  * deletes the account the session is; only once it has does the phone stop sending with it and sign
  * out. Nothing of the app's own account is touched here: the screen deletes that next, from the store.
+ * The secret has to be the sign-in's own kind: a passcode for a crew member's passcode sign-in, which has
+ * no password, and a password for one that signs in with email.
  */
 export async function deleteMyServerAccount(secret: { password: string } | { passcode: string }): Promise<ServerDeletion> {
   if (!server) return { ok: false, reason: 'no_server', error: 'This build has no company server.' };
   const link = server;
   const account = useServerAccount.getState().account;
   if (!account) return { ok: false, reason: 'signed_out', error: 'Sign in to your company sign-in on Company account first.' };
+  const passcode = account.kind === 'passcode';
+  if ('passcode' in secret !== passcode) {
+    const error = passcode ? 'This sign-in uses a passcode. Enter your passcode to delete it.' : 'This sign-in uses an email and a password. Enter the password to delete it.';
+    return { ok: false, reason: 'wrong_secret', error };
+  }
   const linked = useStore.getState().connectedCompany;
   if (linked && linked.userId === account.id) {
     await syncNow();
@@ -217,13 +311,15 @@ export async function deleteMyServerAccount(secret: { password: string } | { pas
  * stops at once, and is over before the phone signs out.
  */
 export async function forgetDeletedSignIn(accountId: string | undefined = useServerAccount.getState().account?.id): Promise<void> {
-  const store = useStore.getState();
-  if (accountId && store.connectedCompany?.userId === accountId) {
-    // Who the sign-in was to the company goes with it: the next account here is not made under its name.
-    store.signInDeleted();
-    store.disconnectCompany();
-  }
-  if (accountId && store.joinAsked?.accountId === accountId) store.setJoinAsked(null);
-  await syncSettled();
-  await server?.signOut();
+  await signingOutWhile(async () => {
+    const store = useStore.getState();
+    if (accountId && store.connectedCompany?.userId === accountId) {
+      // Who the sign-in was to the company goes with it: the next account here is not made under its name.
+      store.signInDeleted();
+      store.disconnectCompany();
+    }
+    if (accountId && store.joinAsked?.accountId === accountId) store.setJoinAsked(null);
+    await syncSettled();
+    await server?.signOut();
+  });
 }

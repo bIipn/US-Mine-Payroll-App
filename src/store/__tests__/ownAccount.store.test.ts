@@ -245,8 +245,11 @@ describe('forgetting the phone', () => {
     expect(phone.g().session?.employeeId).toBe('emp-lee');
     return phone;
   }
-  /** What forgetPhone refuses with: the first thing that holds signing out up, and what to do (signOutBlockers). */
-  const refused = (title: string, body: string) => ({ ok: false, error: `${title}. ${body}` });
+  /**
+   * What forgetPhone refuses with when one thing holds signing out up: it first, and what to do, and
+   * everything that does (signOutBlockers), for the screen to list.
+   */
+  const refused = (title: string, body: string) => ({ ok: false, error: `${title}. ${body}`, blockers: [expect.objectContaining({ title, body })], warnings: [] });
   const NOT_SENT = (n: number) =>
     refused(`${n === 1 ? '1 record has' : `${n} records have`} not reached Test Pit A yet`, 'They are sent before this phone is signed out, so the company has them.');
 
@@ -281,7 +284,14 @@ describe('forgetting the phone', () => {
     // What the server will not take as it is, as the round found it (stuck).
     const stuck = leesPhone();
     stuck.useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10)), shiftOf('sh-b', at(11), at(14))] });
-    expect(stuck.g().forgetPhone({ online: true, stuck: 1, trouble: null })).toEqual(NOT_SENT(1));
+    // Every thing that holds it up, not only the first.
+    expect(stuck.g().forgetPhone({ online: true, stuck: 1, trouble: null })).toEqual({
+      ...NOT_SENT(1),
+      blockers: [
+        expect.objectContaining({ kind: 'waiting', title: '1 record has not reached Test Pit A yet' }),
+        expect.objectContaining({ kind: 'not_taken', title: 'Test Pit A turned down 1 record' }),
+      ],
+    });
     expect(stuck.g().forgetPhone({ online: true, stuck: 2, trouble: null })).toEqual(
       refused('Test Pit A turned down 2 records', 'Signing out would take them off this phone. A supervisor can look at them with you.'),
     );

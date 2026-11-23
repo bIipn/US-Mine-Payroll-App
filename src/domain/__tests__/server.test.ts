@@ -10,8 +10,6 @@ import {
   checkJoinCode,
   checkJoinName,
   checkPassword,
-  JOIN_STATUSES,
-  joinedAnswer,
   joinWords,
   normalJoinCode,
   pickCompany,
@@ -128,11 +126,6 @@ describe('what join_company answered', () => {
     expect(readJoinAnswer(null)).toBeNull();
     expect(readJoinAnswer({ status: 'welcome' })).toBeNull();
     expect(readJoinAnswer('joined')).toBeNull();
-  });
-
-  it('connects on joined and already_member only', () => {
-    const connects = JOIN_STATUSES.filter((status) => joinedAnswer({ status }));
-    expect(connects).toEqual(['already_member', 'joined']);
   });
 
   it('says in plain words what each status means and what to do', () => {
@@ -499,6 +492,26 @@ describe('deleting a company sign-in', () => {
       'The company is closed. MineMuster’s server did not say in time whether your company sign-in was deleted too. Try again in a minute.',
     );
     for (const closed of [[], ['c-a']]) expect(deletionAnswerWords({ kind: 'not_known', closed }, at)).not.toMatch(/Nothing was deleted/);
+  });
+
+  it('says it for a crew member’s passcode sign-in with no email or password in it', () => {
+    const crew = { passcode: true } as const;
+    expect(deletionAnswerWords({ kind: 'wrong_password' }, crew)).toBe('That is not your passcode. Try again.');
+    expect(deletionAnswerWords({ kind: 'password_needed' }, crew)).toBe('Enter your passcode again. It has to be typed within ten minutes of deleting.');
+    const every: DeletionAnswer[] = [
+      { kind: 'deleted', closed: [] },
+      { kind: 'wrong_password' },
+      { kind: 'password_needed' },
+      { kind: 'last_supervisor', companies: ['Test Pit A'] },
+      { kind: 'already_deleted' },
+      { kind: 'signed_out' },
+      { kind: 'unreachable' },
+      { kind: 'not_known', closed: [] },
+      { kind: 'too_many' },
+      { kind: 'not_ready' },
+      { kind: 'try_again', closed: [] },
+    ];
+    for (const answer of every) expect({ kind: answer.kind, words: deletionAnswerWords(answer, crew) }).not.toEqual({ kind: answer.kind, words: expect.stringMatching(/@|e-?mail|password/i) });
   });
 
   it('reads a company the office dashboard asked to close and the server did not, with why and what went before it', () => {

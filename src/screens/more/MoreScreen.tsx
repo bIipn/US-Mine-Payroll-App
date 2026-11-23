@@ -21,6 +21,17 @@ import { SAMPLE_CREW_IDS } from '../../store/seed';
 import { openShiftOf, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
+import type { SignOutSheetProps } from './SignOutOfPhone';
+
+/**
+ * Signing out of a phone joined to its company, asked first: in a build only when it names a server and is
+ * not a preview, behind the same folded condition as the server code and Company account (RootNavigator).
+ * Every other build signs out of the account kept on the phone, as it always has.
+ */
+const SignOutSheet: React.ComponentType<SignOutSheetProps> | null =
+  process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_KEY && process.env.EXPO_PUBLIC_DEMO === '0'
+    ? require('./SignOutOfPhone').SignOutSheet
+    : null;
 
 /**
  * Starting a preview over. With the sample crew that reloads their sample history. Without
@@ -57,6 +68,7 @@ export function MoreScreen() {
   const [chart, setChart] = useState(false);
   const [rateOpen, setRateOpen] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const sync = useSyncStatus();
   // A company that uses the app for the safety forms only has no clock, hours, rate or lunch reminders here.
   const time = keepsTime(settings.company);
@@ -85,7 +97,7 @@ export function MoreScreen() {
   // Where this phone stands with its company: said here, not only on the account screen, so a
   // phone that has stopped sending says so where the person looks.
   const serverLine = !linked
-    ? { sub: 'Sign in to send records to your company', warn: false }
+    ? { sub: 'Not connected to a company. Sign out, then sign in to it.', warn: false }
     : server.known && !server.account
       ? { sub: `Signed out. Sign in to keep sending to ${linked.name}.`, warn: true }
       : server.notOnLinked
@@ -93,8 +105,13 @@ export function MoreScreen() {
         : { sub: `Connected to ${linked.name}`, warn: false };
   // Clearing a device that keeps real records is a supervisor's to do: what has not reached the server is lost.
   const canClear = DEMO_MODE || (CAN_CONNECT && supervisor);
-  // Every account can be deleted from here, but a made-up sample person's, which is reset instead.
-  const deleteRow = moreRowWords({ keepsTime: time, sample: SAMPLE_CREW_IDS.has(me.id), company: settings.company.name || linked?.name || '' });
+  // Every account can be deleted from here, but a made-up sample person's, which is reset instead. What goes
+  // with it is the sign-in's own secret: a crew member's passcode, or a password; none named for a company
+  // sign-in signed out here, which is not deleted from this phone.
+  const secret = !CAN_CONNECT || account?.passwordHash ? 'password' : server.account ? (server.account.kind === 'passcode' ? 'passcode' : 'password') : null;
+  const deleteRow = moreRowWords({ keepsTime: time, sample: SAMPLE_CREW_IDS.has(me.id), company: settings.company.name || linked?.name || '', secret });
+  // A build that connects signs out of the phone, which waits until everything on it has reached the company.
+  const connects = CAN_CONNECT && SignOutSheet != null;
 
   const toggleReminders = async (on: boolean) => {
     setLunchReminders(on);
@@ -115,7 +132,8 @@ export function MoreScreen() {
             <View style={{ flex: 1, gap: 2 }}>
               <Txt v="h3">{fullName(me)}</Txt>
               {me.title ? <Txt v="small" c={color.silica}>{me.title}</Txt> : null}
-              {account ? <Txt v="small" c={color.silica}>{account.email}</Txt> : null}
+              {/* An account the phone opened from the company sign-in has no address: the name is the person's. */}
+              {account?.email ? <Txt v="small" c={color.silica}>{account.email}</Txt> : null}
             </View>
             {me.role === 'supervisor' ? <Tag label="Supervisor" tone="ink" solid /> : null}
           </View>
@@ -253,12 +271,13 @@ export function MoreScreen() {
           />
         </Panel>
 
-        <Button testID="sign-out" label="Sign out" icon={LogOut} kind="outline" onPress={signOut} />
+        <Button testID="sign-out" label="Sign out" icon={LogOut} kind="outline" onPress={connects ? () => setSigningOut(true) : signOut} />
         <Txt v="small" c={color.silica} center testID="build-note">
           {APP_NAME}{!DEMO_MODE ? '' : SAMPLE_CREW ? ', preview build on sample data' : ', preview build. What you enter stays on this device.'}
         </Txt>
       </ScrollView>
 
+      {connects && SignOutSheet ? <SignOutSheet visible={signingOut} onClose={() => setSigningOut(false)} from="more" /> : null}
       <DecimalChart visible={chart} onClose={() => setChart(false)} />
       <RateSheet visible={rateOpen} onClose={() => setRateOpen(false)} />
       <Sheet testID="reset-sheet" visible={confirmReset} onClose={() => setConfirmReset(false)} title={RESET.ask}>
