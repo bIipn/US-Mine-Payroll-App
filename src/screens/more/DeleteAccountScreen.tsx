@@ -136,7 +136,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     setProblem(null);
     try {
       if (plan.serverToo) {
-        const result = await deleteMyServerAccount(password);
+        const result = await deleteMyServerAccount({ password });
         setPassword('');
         if (!result.ok) {
           haptic.error();

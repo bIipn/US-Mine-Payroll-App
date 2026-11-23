@@ -182,11 +182,12 @@ export type ServerDeletion = { ok: true } | { ok: false; reason: 'no_server' | '
 /**
  * Delete the company sign-in signed in on this phone from MineMuster's server, for good. A phone that
  * sends with it sends what waits first, while the sign-in still can, and nothing is asked of the
- * server while anything still waits. The server checks the password and deletes the account the
- * session is (`server.deleteAccount`); only once it has does the phone stop sending with it and sign
+ * server while anything still waits. The server checks the secret, the password of a sign-in by
+ * email (`server.deleteAccount`) or a crew member's passcode (`server.deleteAccountWithPasscode`), and
+ * deletes the account the session is; only once it has does the phone stop sending with it and sign
  * out. Nothing of the app's own account is touched here: the screen deletes that next, from the store.
  */
-export async function deleteMyServerAccount(password: string): Promise<ServerDeletion> {
+export async function deleteMyServerAccount(secret: { password: string } | { passcode: string }): Promise<ServerDeletion> {
   if (!server) return { ok: false, reason: 'no_server', error: 'This build has no company server.' };
   const link = server;
   const account = useServerAccount.getState().account;
@@ -204,7 +205,7 @@ export async function deleteMyServerAccount(password: string): Promise<ServerDel
     }
   }
   if (!useSyncStatus.getState().online) return { ok: false, reason: 'no_signal', error: `${NO_SIGNAL_BLOCKER.title}. ${NO_SIGNAL_BLOCKER.body}` };
-  const deleted = await link.deleteAccount(account.email, password);
+  const deleted = 'passcode' in secret ? await link.deleteAccountWithPasscode(secret.passcode) : await link.deleteAccount(account.email, secret.password);
   if (!deleted.ok) return { ok: false, reason: deleted.answer.kind, error: deleted.error };
   await forgetDeletedSignIn(account.id);
   return { ok: true };

@@ -5,6 +5,7 @@ const mockSignOut = jest.fn(async (_options?: unknown) => ({ error: null }));
 const mockRpc = jest.fn();
 const mockGetSession = jest.fn();
 const mockSignInWithPassword = jest.fn();
+const mockSetSession = jest.fn();
 const mockInvoke = jest.fn();
 let mockAuthEvent: (event: string, session: unknown) => void = () => undefined;
 /** Each sign-in's own row of the company's roster, by account; none is not on the roster. */
@@ -34,6 +35,7 @@ jest.mock('@supabase/supabase-js', () => ({
       signOut: mockSignOut,
       getSession: mockGetSession,
       signInWithPassword: (...args: unknown[]) => mockSignInWithPassword(...args),
+      setSession: (...args: unknown[]) => mockSetSession(...args),
       getUser: async () => ({ data: { user: null }, error: null }),
       onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
         mockAuthEvent = cb;
@@ -48,6 +50,16 @@ jest.mock('expo-network', () => ({
   getNetworkStateAsync: async () => ({ isConnected: true }),
   addNetworkStateListener: () => ({ remove() {} }),
 }));
+/** The crew-auth function, which the phone asks with fetch: answered here, so no request leaves the test. */
+const realFetch = globalThis.fetch;
+const mockFetch = jest.fn<Promise<Response>, [string, RequestInit]>();
+beforeEach(() => {
+  mockFetch.mockReset();
+  globalThis.fetch = mockFetch as unknown as typeof fetch;
+});
+afterAll(() => {
+  globalThis.fetch = realFetch;
+});
 
 type Loaded = {
   config: typeof import('../../config');
@@ -152,6 +164,7 @@ const warned = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 beforeEach(() => {
   mockSignOut.mockClear();
   mockSignInWithPassword.mockReset();
+  mockSetSession.mockReset();
   mockInvoke.mockReset();
   mockRpc.mockReset();
   warned.mockClear();
@@ -485,7 +498,7 @@ describe('deleting the company sign-in from the phone', () => {
     useStore.getState().setJoinAsked({ code: 'ABCD2345', firstName: 'Avery', lastName: 'Quill', accountId: AVERY.id, at: 1 });
     deletedOk();
 
-    expect(await app.connection.deleteMyServerAccount('haulroad88')).toEqual({ ok: true });
+    expect(await app.connection.deleteMyServerAccount({ password: 'haulroad88' })).toEqual({ ok: true });
     expect(mockSignInWithPassword).toHaveBeenCalledWith({ email: 'avery@example.com', password: 'haulroad88' });
     // The body names nobody: the server deletes the account the session is.
     expect(mockInvoke).toHaveBeenCalledWith('delete-account', expect.objectContaining({ body: {} }));
@@ -505,12 +518,47 @@ describe('deleting the company sign-in from the phone', () => {
     stop();
   });
 
+  it('deletes a passcode sign-in with its passcode, never a password, and only then stops sending and signs out', async () => {
+    // Blake signed in with the company's code, his name and a passcode: crew-auth made his account.
+    const blakeUser = { ...BLAKE, app_metadata: { provider: 'email', sign_in: 'passcode' } };
+    signedInAs(blakeUser);
+    const app = build(CONNECTS);
+    fakeServer({ companies: [{ ...PIT_A, role: 'employee' }] });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    useStore.getState().connectCompany({ ...PIT_A, role: 'employee' }, BLAKE);
+    const stopSync = app.sync.startSync();
+    const stopLink = app.connection.watchConnection();
+    running = () => (stopLink(), stopSync());
+    await settle();
+    expect(app.connection.useServerAccount.getState().account).toEqual({ ...BLAKE, kind: 'passcode' });
+    expect(app.sync.useSyncStatus.getState().server).toBe(true);
+    const fresh = { access_token: 'a-fresh', refresh_token: 'r-fresh', expires_at: 1_795_000_000, user_id: BLAKE.id };
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ status: 'signed_in', session: fresh }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    mockSetSession.mockResolvedValueOnce({ data: { user: blakeUser, session: { access_token: 'a-fresh', refresh_token: 'r-fresh', user: blakeUser } }, error: null });
+    mockInvoke.mockResolvedValueOnce({ data: { deleted: true, closed: [] }, error: null });
+
+    expect(await app.connection.deleteMyServerAccount({ passcode: '582039' })).toEqual({ ok: true });
+    // The passcode went to crew-auth, for the account signed in here; no password went anywhere.
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('https://example.supabase.co/functions/v1/crew-auth');
+    expect(JSON.parse(String(init.body))).toEqual({ action: 'confirm', passcode: '582039' });
+    expect(new Headers(init.headers).get('authorization')).toBe('Bearer a');
+    expect(mockSignInWithPassword).not.toHaveBeenCalled();
+    expect(mockSetSession).toHaveBeenCalledWith({ access_token: 'a-fresh', refresh_token: 'r-fresh' });
+    expect(mockInvoke).toHaveBeenCalledWith('delete-account', expect.objectContaining({ body: {} }));
+    expect(mockInvoke.mock.invocationCallOrder[0]).toBeLessThan(mockSignOut.mock.invocationCallOrder[0]);
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(useStore.getState().connectedCompany).toBeNull();
+    expect(app.sync.useSyncStatus.getState().server).toBe(false);
+  });
+
   it('calls nothing while records wait to reach the company, and says so', async () => {
     const { app, useStore, stop } = await joinedPhone();
     app.sync.useSyncStatus.setState({ online: false });
     // Two punches made with no signal.
     useStore.setState({ shifts: shiftsOf(2) });
-    const result = await app.connection.deleteMyServerAccount('haulroad88');
+    const result = await app.connection.deleteMyServerAccount({ password: 'haulroad88' });
     expect(result).toEqual({
       ok: false,
       reason: 'waiting',
@@ -525,7 +573,7 @@ describe('deleting the company sign-in from the phone', () => {
   it('needs signal with nothing waiting, and calls nothing without it', async () => {
     const { app, stop } = await joinedPhone();
     app.sync.useSyncStatus.setState({ online: false });
-    expect(await app.connection.deleteMyServerAccount('haulroad88')).toMatchObject({ ok: false, reason: 'no_signal' });
+    expect(await app.connection.deleteMyServerAccount({ password: 'haulroad88' })).toMatchObject({ ok: false, reason: 'no_signal' });
     expect(mockInvoke).not.toHaveBeenCalled();
     stop();
   });
@@ -537,7 +585,7 @@ describe('deleting the company sign-in from the phone', () => {
       data: null,
       error: { name: 'FunctionsHttpError', context: { status: 409, json: async () => ({ error: 'last_supervisor', companies: [{ id: 'c-a', name: 'Test Pit A', successors: [] }] }) } },
     });
-    expect(await app.connection.deleteMyServerAccount('haulroad88')).toEqual({
+    expect(await app.connection.deleteMyServerAccount({ password: 'haulroad88' })).toEqual({
       ok: false,
       reason: 'last_supervisor',
       error: 'Test Pit A has no other supervisor now. Finish on the office dashboard.',
@@ -555,9 +603,9 @@ describe('deleting the company sign-in from the phone', () => {
     const stopLink = app.connection.watchConnection();
     running = stopLink;
     await settle();
-    expect(app.connection.useServerAccount.getState().account).toEqual(AVERY);
+    expect(app.connection.useServerAccount.getState().account).toEqual({ ...AVERY, kind: 'email' });
     deletedOk();
-    expect(await app.connection.deleteMyServerAccount('haulroad88')).toEqual({ ok: true });
+    expect(await app.connection.deleteMyServerAccount({ password: 'haulroad88' })).toEqual({ ok: true });
     expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(app.connection.useServerAccount.getState().account).toBeNull();
     stopLink();
@@ -575,7 +623,7 @@ describe('deleting the company sign-in from the phone', () => {
   it('has nothing to delete from in a build with no server', async () => {
     const app = build({ ...SERVER_ENV, EXPO_PUBLIC_ROSTER: ROSTER });
     expect(app.connection.server).toBeNull();
-    expect(await app.connection.deleteMyServerAccount('haulroad88')).toMatchObject({ ok: false, reason: 'no_server' });
+    expect(await app.connection.deleteMyServerAccount({ password: 'haulroad88' })).toMatchObject({ ok: false, reason: 'no_server' });
     expect(mockSignInWithPassword).not.toHaveBeenCalled();
   });
 });

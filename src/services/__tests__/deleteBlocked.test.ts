@@ -136,7 +136,7 @@ it('does not keep the deletion blocked for good by a record the server will neve
     await app.sync.syncNow();
     mockSignInWithPassword.mockResolvedValue({ data: { session: { access_token: 'a2', refresh_token: 'r2', user: AVERY }, user: AVERY }, error: null });
     mockInvoke.mockResolvedValue({ data: { deleted: true, closed: [] }, error: null });
-    const result = await app.connection.deleteMyServerAccount('haulroad88');
+    const result = await app.connection.deleteMyServerAccount({ password: 'haulroad88' });
 
     // Before: the only blocker said the record "is sent before your company sign-in is deleted", and the
     // service answered 'waiting' every time. Now the record stays on the phone, and the deletion goes ahead.
@@ -178,7 +178,7 @@ it('does not keep it blocked for good once the sign-in is off the roster and not
     expect(app.sync.useSyncStatus.getState()).toMatchObject({ trouble: 'not_member', waiting: 2 });
     mockSignInWithPassword.mockResolvedValue({ data: { session: { access_token: 'a2', refresh_token: 'r2', user: AVERY }, user: AVERY }, error: null });
     mockInvoke.mockResolvedValue({ data: { deleted: true, closed: [] }, error: null });
-    const result = await app.connection.deleteMyServerAccount('haulroad88');
+    const result = await app.connection.deleteMyServerAccount({ password: 'haulroad88' });
     // Before: 'waiting' for good, since no round will ever send them.
     expect(result.ok ? 'deleted' : result.reason).toBe('deleted');
   } finally {

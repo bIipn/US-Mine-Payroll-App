@@ -7,9 +7,11 @@ import type { DeletionAnswer, DeletionCheckCompany } from '../domain/accountDele
 import {
   ALREADY_AN_ACCOUNT,
   authWords,
+  crewWords,
   deletionAnswerWords,
   pushTrouble,
   readCompanies,
+  readCrewAnswer,
   readDeletionAnswer,
   readDeletionCheck,
   readJoinAnswer,
@@ -20,16 +22,20 @@ import {
   readWaitingRequests,
   serverWords,
   settleDeletion,
+  type CrewAction,
+  type CrewAnswer,
+  type CrewSession,
   type JoinAnswer,
   type ServerCompany,
   type ServerProblem,
   type WaitingRequest,
 } from '../domain/serverAnswers';
-import { sendError, type SyncTransport } from '../domain/sync';
+import { callWithin, SEND_TIMEOUT_MS, sendError, type SyncTransport } from '../domain/sync';
 import { safeStorage } from './storage';
 
 /**
- * The company's server, a Supabase project: signing in, joining the company,
+ * The company's server, a Supabase project: signing in (with email, or as
+ * crew with the company's code, a name and a passcode), joining the company,
  * and sending this phone's records.
  *
  * Only a build that names a server has this file at all: `connection.ts`
@@ -38,8 +44,11 @@ import { safeStorage } from './storage';
  * them carries none of it and none of supabase-js.
  *
  * The session (the tokens Supabase hands back at sign-in) is kept on the
- * phone in the app's own storage, so the phone stays signed in. A password is
- * sent to Supabase and nowhere else; it is never written down on the phone.
+ * phone in the app's own storage, so the phone stays signed in: through a
+ * restart, days with no signal and an access token that has expired, which
+ * supabase-js refreshes once there is signal. Nothing here signs anyone out
+ * but `signOut`. A password is sent to Supabase and a passcode to crew-auth,
+ * and nowhere else; neither is ever written down on the phone.
  *
  * React Native needs no URL polyfill here: Expo's runtime puts a standard URL
  * and fetch on iOS and Android (expo/src/winter), and the browser has its own.
@@ -85,7 +94,7 @@ function api(): SupabaseClient {
       // The first reading is made by `onAccountChange` itself: with no signal, supabase-js reports
       // a session it cannot refresh as none, though it is still on the phone and still theirs.
       if (event === 'INITIAL_SESSION') return;
-      tell(session?.user ? { id: session.user.id, email: session.user.email ?? '' } : null);
+      tell(session?.user ? accountOf(session.user) : null);
     });
     watching = data.subscription;
     // A phone keeps the session fresh only while the app is open. A browser does this by itself.
@@ -111,12 +120,28 @@ const problemOf = (error: unknown): ServerProblem => {
   };
 };
 
+/** A call that got no answer: no signal, or the server could not be reached. */
+const noAnswer = (problem: ServerProblem) => problem.name === 'AuthRetryableFetchError' || problem.status === 0;
+
 // ---- The account ------------------------------------------------------------------------
 
 /** The account signed in to the server on this phone. */
 export interface ServerAccount {
   id: string;
+  /** Its address. A passcode account's is a hidden one that nobody reads or types. */
   email: string;
+  /** How it signs in: a crew member's company code, name and passcode, or an email and a password. */
+  kind: 'passcode' | 'email';
+}
+
+/**
+ * The account a Supabase Auth user is. crew-auth makes each crew member's account with
+ * app_metadata.sign_in 'passcode'; only the server writes app_metadata, so nobody can change it
+ * from a phone.
+ */
+function accountOf(user: { id: string; email?: string | null; app_metadata?: unknown }, email = ''): ServerAccount {
+  const meta = user.app_metadata && typeof user.app_metadata === 'object' ? (user.app_metadata as { sign_in?: unknown }) : {};
+  return { id: user.id, email: user.email ?? email, kind: meta.sign_in === 'passcode' ? 'passcode' : 'email' };
 }
 
 const listeners = new Set<(account: ServerAccount | null) => void>();
@@ -131,11 +156,12 @@ const tell = (account: ServerAccount | null) => listeners.forEach((heard) => hea
 async function accountNow(): Promise<ServerAccount | null> {
   const { data, error } = await api().auth.getSession();
   const user = data.session?.user;
-  if (user) return { id: user.id, email: user.email ?? '' };
+  if (user) return accountOf(user);
   if (error && problemOf(error).name === 'AuthRetryableFetchError') {
     try {
-      const kept = JSON.parse((await safeStorage.getItem(SESSION_KEY)) ?? 'null') as { user?: { id?: unknown; email?: unknown } } | null;
-      if (kept?.user && typeof kept.user.id === 'string') return { id: kept.user.id, email: typeof kept.user.email === 'string' ? kept.user.email : '' };
+      const kept = JSON.parse((await safeStorage.getItem(SESSION_KEY)) ?? 'null') as { user?: { id?: unknown; email?: unknown; app_metadata?: unknown } } | null;
+      const { id, email, app_metadata } = kept?.user ?? {};
+      if (typeof id === 'string') return accountOf({ id, email: typeof email === 'string' ? email : '', app_metadata });
     } catch {
       // Not a session this phone can read: nobody is signed in.
     }
@@ -167,7 +193,7 @@ export async function signIn(email: string, password: string): Promise<Done<{ ac
   try {
     const { data, error } = await api().auth.signInWithPassword({ email: address, password });
     if (error || !data.session) return { ok: false, error: authWords(problemOf(error)) };
-    return { ok: true, account: { id: data.session.user.id, email: data.session.user.email ?? address } };
+    return { ok: true, account: accountOf(data.session.user, address) };
   } catch (error) {
     return { ok: false, error: authWords(problemOf(error)) };
   }
@@ -250,6 +276,64 @@ async function forgetSession(): Promise<void> {
     // Storage that cannot list its keys: the ones supabase-js writes are named above.
   }
   for (const key of keys) await safeStorage.removeItem(key);
+}
+
+// ---- Crew sign-in by passcode -----------------------------------------------------------
+
+/**
+ * Ask the crew-auth edge function (supabase/functions/crew-auth): look up a company code; sign up or
+ * sign in with the code, a name and a passcode; set a new passcode with a supervisor's reset code; or
+ * confirm the passcode of the account signed in here, whose access token is then the `bearer`. The
+ * body is the action and exactly the fields given, under the server's own names (code, first_name,
+ * last_name, passcode, reset_code, new_passcode), as crew-auth takes no other. It goes as everything
+ * from the app goes, with no Origin, which crew-auth turns down as a web page's. With no answer in
+ * 30 seconds the request is aborted and, as with no signal, the server could not be reached.
+ */
+export async function crewAuth(action: CrewAction, body: Record<string, string>, bearer?: string): Promise<CrewAnswer> {
+  if (!SERVER) throw new Error('This build names no company server.');
+  const { url, key } = SERVER;
+  let answered: { status: number; text: string };
+  try {
+    answered = await callWithin(async (signal) => {
+      const response = await fetch(`${url}/functions/v1/crew-auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', apikey: key, ...(bearer ? { Authorization: `Bearer ${bearer}` } : null) },
+        body: JSON.stringify({ ...body, action }),
+        signal,
+      });
+      return { status: response.status, text: await response.text() };
+    }, SEND_TIMEOUT_MS);
+  } catch {
+    return { kind: 'unreachable' };
+  }
+  let read: unknown = null;
+  try {
+    read = JSON.parse(answered.text);
+  } catch {
+    // Not JSON (a gateway's page, say): the status alone is read.
+  }
+  return readCrewAnswer(answered.status, read);
+}
+
+/**
+ * Keep a session crew-auth answered as this phone's own. supabase-js keeps it in the app's storage
+ * and refreshes it from then on, as it does one from signing in with email, so the person stays
+ * signed in. The account comes back as the server has it, with its kind.
+ */
+export async function useCrewSession(session: CrewSession): Promise<Done<{ account: ServerAccount }>> {
+  const kept = await keepSession(session);
+  return 'account' in kept ? { ok: true, account: kept.account } : { ok: false, error: authWords(kept.problem) };
+}
+
+/** Hand supabase-js a session crew-auth answered: the account it is, or what went wrong. */
+async function keepSession(session: CrewSession): Promise<{ account: ServerAccount } | { problem: ServerProblem }> {
+  try {
+    const { data, error } = await api().auth.setSession({ access_token: session.accessToken, refresh_token: session.refreshToken });
+    const user = data.user ?? data.session?.user;
+    return !error && user ? { account: accountOf(user) } : { problem: problemOf(error) };
+  } catch (error) {
+    return { problem: problemOf(error) };
+  }
 }
 
 // ---- The company ------------------------------------------------------------------------
@@ -399,6 +483,9 @@ async function accountState(): Promise<'gone' | 'there' | 'unknown'> {
   }
 }
 
+/** What became of a deletion: deleted, and the companies closed with it; or why not, in words for the person. */
+type Deletion = { ok: true; closed: string[] } | { ok: false; answer: DeletionAnswer; error: string };
+
 /**
  * Delete this phone's company sign-in from MineMuster's server, for good. The password is checked
  * first by signing in with it again, which also gives the server a sign-in made just now: the
@@ -406,14 +493,14 @@ async function accountState(): Promise<'gone' | 'there' | 'unknown'> {
  * names nothing; the server deletes the account the session is. The phone is still signed in
  * afterwards, to an account that is gone: `connection.ts` stops sending and signs it out.
  */
-export async function deleteAccount(email: string, password: string): Promise<{ ok: true; closed: string[] } | { ok: false; answer: DeletionAnswer; error: string }> {
+export async function deleteAccount(email: string, password: string): Promise<Deletion> {
   const address = email.trim().toLowerCase();
   const fail = (answer: DeletionAnswer) => ({ ok: false as const, answer, error: deletionAnswerWords(answer, { email: address }) });
   try {
     const { data, error } = await api().auth.signInWithPassword({ email: address, password });
     if (error || !data.session) {
       const problem = problemOf(error);
-      if (problem.name === 'AuthRetryableFetchError' || problem.status === 0) return fail({ kind: 'unreachable' });
+      if (noAnswer(problem)) return fail({ kind: 'unreachable' });
       if (problem.status === 429 || problem.code === 'over_request_rate_limit') return fail({ kind: 'too_many' });
       // Supabase Auth answers a deleted account's password as it answers a wrong one.
       return fail((await accountState()) === 'gone' ? { kind: 'already_deleted' } : { kind: 'wrong_password' });
@@ -421,6 +508,73 @@ export async function deleteAccount(email: string, password: string): Promise<{ 
   } catch {
     return fail({ kind: 'unreachable' });
   }
+  return deleteSignedIn(fail);
+}
+
+/**
+ * Delete this phone's passcode sign-in (a crew member's, which crew-auth made) from MineMuster's
+ * server, for good. crew-auth's confirm checks the passcode of the account signed in here and
+ * answers a session made just now with the account's own password, as delete-account asks; the
+ * phone keeps that session, and asks delete-account as `deleteAccount` does, with the same answers.
+ * Nothing is deleted until the passcode is right, and a wrong or locked one is told in the crew
+ * sign-in's own words. As after a password, `connection.ts` stops sending and signs out.
+ */
+export async function deleteAccountWithPasscode(passcode: string): Promise<Deletion> {
+  // No address is named: a passcode account's is hidden, and the one answer whose words name it (a
+  // wrong password) has the crew sign-in's words here instead.
+  const fail = (answer: DeletionAnswer, error = deletionAnswerWords(answer, { email: '' })) => ({ ok: false as const, answer, error });
+  let mine: { token: string; id: string };
+  try {
+    const { data, error } = await api().auth.getSession();
+    if (!data.session) return fail(error && noAnswer(problemOf(error)) ? { kind: 'unreachable' } : { kind: 'signed_out' });
+    mine = { token: data.session.access_token, id: data.session.user.id };
+  } catch {
+    return fail({ kind: 'unreachable' });
+  }
+  const confirmed = await crewAuth('confirm', { passcode }, mine.token);
+  if (confirmed.kind !== 'signed_in') {
+    const { answer, words } = unconfirmed(confirmed);
+    return fail(answer, words);
+  }
+  // What is deleted is the account signed in here: a session for any other is never taken, nor
+  // deleted with if supabase-js finds it is another's.
+  if (confirmed.session.userId !== mine.id) return fail({ kind: 'try_again', closed: [] });
+  const kept = await keepSession(confirmed.session);
+  if ('problem' in kept) return fail(noAnswer(kept.problem) ? { kind: 'unreachable' } : { kind: 'try_again', closed: [] });
+  if (kept.account.id !== mine.id) return fail({ kind: 'try_again', closed: [] });
+  return deleteSignedIn(fail);
+}
+
+/**
+ * What a confirm that did not sign in means for the deletion: nothing was deleted. crew-auth's 401
+ * and 410 say what delete-account's do, and get deletion's own reasons and words; a wrong or locked
+ * passcode gets the crew sign-in's words.
+ */
+function unconfirmed(answer: Exclude<CrewAnswer, { kind: 'signed_in' }>): { answer: DeletionAnswer; words?: string } {
+  const told = ({ title, body }: { title: string; body?: string }) => (body ? `${title}. ${body}` : `${title}.`);
+  switch (answer.kind) {
+    case 'wrong':
+      return { answer: { kind: 'wrong_password' }, words: told(crewWords(answer, Date.now())) };
+    case 'locked':
+      return { answer: { kind: 'too_many' }, words: told(crewWords(answer, Date.now())) };
+    case 'busy':
+      return { answer: { kind: 'too_many' } };
+    case 'unreachable':
+      return { answer: { kind: 'unreachable' } };
+    case 'signed_out':
+      return { answer: { kind: 'signed_out' } };
+    case 'already_deleted':
+      return { answer: { kind: 'already_deleted' } };
+    default:
+      return { answer: { kind: 'try_again', closed: [] } };
+  }
+}
+
+/**
+ * Ask delete-account to delete the account of the session on the phone, which was made just now with
+ * the person's own password or passcode.
+ */
+async function deleteSignedIn(fail: (answer: DeletionAnswer) => Deletion): Promise<Deletion> {
   // What the person is told has to be true. An answer that does not say whether the account is still
   // there is checked with Supabase Auth first (settleDeletion): gone is deleted, and "Nothing was
   // deleted" only when nothing can have been.
@@ -456,8 +610,7 @@ export async function checkPassword(email: string, password: string): Promise<Do
   try {
     const { data, error } = await api().auth.signInWithPassword({ email: address, password });
     if (!error && data.session) return { ok: true };
-    const problem = problemOf(error);
-    if (problem.name === 'AuthRetryableFetchError' || problem.status === 0) return { ok: false, error: noSignal };
+    if (noAnswer(problemOf(error))) return { ok: false, error: noSignal };
     return { ok: false, error: `That is not the password for ${address}. Try again.` };
   } catch {
     return { ok: false, error: noSignal };
