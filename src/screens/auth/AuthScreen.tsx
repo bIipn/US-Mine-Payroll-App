@@ -3,7 +3,8 @@ import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CompanyLogoPlate, MineMusterLogo, ProviderMark } from '../../components/Brand';
+import { ProviderMark } from '../../components/Brand';
+import { SignInHeader, signInStyles } from '../../components/SignInHeader';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
@@ -45,7 +46,6 @@ export function AuthScreen() {
   const openAsOwner = useStore((s) => s.openAsOwner);
   const showToast = useStore((s) => s.showToast);
   const company = useStore((s) => s.settings.company);
-  const place = company.place;
 
   const [mode, setMode] = useState<Mode>('signin');
   const [firstName, setFirstName] = useState('');
@@ -124,23 +124,16 @@ export function AuthScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={signInStyles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         testID="auth-screen"
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingBottom: insets.bottom + space.xxl }}
       >
-        <View style={[styles.field, { paddingTop: insets.top + space.xxl }]}>
-          {company.logo ? <CompanyLogoPlate logo={company.logo} name={company.name} width={264} radius={10} /> : <MineMusterLogo width={280} />}
-          <Txt v="h1" c={color.white} style={{ marginTop: space.xl }}>
-            Clock in. Check your machine. Get paid right.
-          </Txt>
-          <Txt v="body" c={color.onDarkMuted} style={{ marginTop: space.sm }}>
-            Time, checklists and maintenance requests for the crew{place ? ` at ${place}` : ''}.
-          </Txt>
-        </View>
+        {/* The phone's own company, the build's or the one a supervisor set, is known from the start. */}
+        <SignInHeader company={company} />
 
-        <View style={styles.form}>
+        <View style={signInStyles.card}>
           <Segmented
             testID="auth-mode"
             value={mode}
@@ -346,18 +339,6 @@ export function AuthScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: color.kaolin },
-  field: { backgroundColor: color.ink, paddingHorizontal: space.xl, paddingBottom: 64 },
-  form: {
-    marginTop: -40,
-    marginHorizontal: space.lg,
-    padding: space.xl,
-    gap: space.lg,
-    backgroundColor: color.paper,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.rule,
-  },
   nameRow: { flexDirection: 'row', gap: space.md },
   error: { backgroundColor: color.redTint, borderRadius: radius.md, padding: space.md, borderLeftWidth: 6, borderLeftColor: color.red },
   or: { flexDirection: 'row', alignItems: 'center', gap: space.md },

@@ -355,18 +355,18 @@ function JoinForm({ email, accountId }: { email: string; accountId: string }) {
       <Panel title="Join your company">
         <View style={{ gap: space.lg }}>
           <Txt v="body" c={color.inkSoft}>
-            A supervisor gives you the join code. A company and its code are set up in the MineMuster office dashboard.
+            A supervisor gives you the company code. A company and its code are set up in the MineMuster office dashboard.
           </Txt>
           {elsewhere ? (
             <Notice
               tone="info"
               title="A request is waiting for a supervisor"
-              body={`You asked to join a company on ${fmtDate(elsewhere.at)}. Type its join code again and tap Join company to see where it stands.`}
+              body={`You asked to join a company on ${fmtDate(elsewhere.at)}. Type its company code again and tap Join company to see where it stands.`}
             />
           ) : null}
           <Field
             testID="server-code"
-            label="Join code"
+            label="Company code"
             hint="8 letters and numbers. Your supervisor has it."
             value={code}
             onChangeText={(text) => {
@@ -515,10 +515,10 @@ function Connected({ email }: { email: string }) {
       </Panel>
 
       {supervisor && joinCode ? (
-        <Panel title="Join code">
+        <Panel title="Company code">
           <View style={{ gap: space.sm }} testID="server-join-code">
             <Txt v="body" style={styles.code} selectable>{spacedJoinCode(joinCode)}</Txt>
-            <Txt v="small" c={color.silica}>Give this to your crew. They join {linked.name} with it and their name as it is on the roster.</Txt>
+            <Txt v="small" c={color.silica}>{`Give this to your crew. They sign in to ${linked.name} with it, their name as it is on the roster, and a passcode of their own.`}</Txt>
           </View>
         </Panel>
       ) : null}

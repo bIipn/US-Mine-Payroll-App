@@ -6,7 +6,7 @@ export type RootStackParamList = {
   Auth: undefined;
   /**
    * Signing in to the company: its code, then a name and a passcode, or an email and a password. The
-   * first screen of a build that names a server, and only in one.
+   * first screen of a build that connects to a company server (CAN_CONNECT), and only of one.
    */
   CompanySignIn: undefined;
   /** The tabs. Pass `screen` to land on one of them. */

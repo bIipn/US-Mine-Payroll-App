@@ -44,6 +44,18 @@ export function keepsTime(company: Company): boolean {
   return company.timeClock !== false;
 }
 
+/**
+ * What the sign-in screens say the app is for, under the logo: the time clock and pay only for a
+ * company that keeps time. `company` is null until the phone knows the company, and until then nothing
+ * is said of time or pay.
+ */
+export function signInWords(company: Company | null): { tagline: string; line: string } {
+  const at = company?.place ? ` at ${company.place}` : '';
+  return company && keepsTime(company)
+    ? { tagline: 'Clock in. Check your machine. Get paid right.', line: `Time, checklists and maintenance requests for the crew${at}.` }
+    : { tagline: 'Check your machine. Report what needs fixing.', line: `Equipment checklists, pre shift exams and maintenance requests for the crew${at}.` };
+}
+
 export const STATES: Record<string, string> = {
   AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado',
   CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia',

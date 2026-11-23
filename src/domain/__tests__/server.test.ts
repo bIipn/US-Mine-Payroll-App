@@ -88,7 +88,9 @@ describe('what was typed', () => {
   });
 
   it('says what is wrong with a code before it is sent', () => {
-    expect(checkJoinCode('')).toMatch(/Enter the join code/);
+    expect(checkJoinCode('')).toMatch(/Enter the company code/);
+    // It is the company code wherever a person reads it: never a "join code".
+    for (const typed of ['', 'ABC2345', 'ABCD2O45']) expect(checkJoinCode(typed)).toMatch(/company code/);
     expect(checkJoinCode('ABC2345')).toMatch(/8 letters and numbers/);
     expect(checkJoinCode('ABCD23456')).toMatch(/8 letters and numbers/);
     expect(checkJoinCode('ABCD#345')).toMatch(/8 letters and numbers/);
@@ -135,7 +137,7 @@ describe('what join_company answered', () => {
 
   it('says in plain words what each status means and what to do', () => {
     const say = (answer: JoinAnswer) => joinWords({ companyName: 'Test Pit A', ...answer });
-    expect(say({ status: 'no_company' })).toMatchObject({ title: 'No company has that join code', tone: 'warn' });
+    expect(say({ status: 'no_company' })).toMatchObject({ title: 'No company has that code', tone: 'warn' });
     expect(say({ status: 'no_company' }).body).toMatch(/Check the code with your supervisor/);
     expect(say({ status: 'already_member' })).toMatchObject({ title: 'You are on Test Pit A’s roster', tone: 'ok' });
     expect(say({ status: 'joined' })).toMatchObject({ title: 'You have joined Test Pit A', tone: 'ok' });

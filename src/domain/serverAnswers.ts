@@ -55,21 +55,24 @@ export function checkPassword(password: string, newAccount: boolean): string | n
   return null;
 }
 
-/** A join code the way the server reads it: capitals, with the spaces and dashes taken out. */
+/**
+ * A company code (the server's join code) the way the server reads it: capitals, with the spaces and
+ * dashes taken out. A person reads it as the company code wherever the app shows it.
+ */
 export function normalJoinCode(code: string): string {
   return code.normalize('NFKC').replace(/[\s\-‐-―−]/g, '').toUpperCase();
 }
 
-/** What is wrong with a typed join code, before it is sent. A code is 8 letters and numbers, with no O, 0, I or 1. */
+/** What is wrong with a typed company code, before it is sent. A code is 8 letters and numbers, with no O, 0, I or 1. */
 export function checkJoinCode(code: string): string | null {
   const typed = normalJoinCode(code);
-  if (!typed) return 'Enter the join code your supervisor gave you.';
-  if (!/^[A-Z0-9]{8}$/.test(typed)) return 'A join code is 8 letters and numbers, like ABCD 2345. Check it with your supervisor.';
-  if (/[01IO]/.test(typed)) return 'A join code has no O, 0, I or 1. Check it with your supervisor.';
+  if (!typed) return 'Enter the company code your supervisor gave you.';
+  if (!/^[A-Z0-9]{8}$/.test(typed)) return 'A company code is 8 letters and numbers, like ABCD 2345. Check it with your supervisor.';
+  if (/[01IO]/.test(typed)) return 'A company code has no O, 0, I or 1. Check it with your supervisor.';
   return null;
 }
 
-/** A join code the way it is easiest to read out: two groups of four, like ABCD 2345. */
+/** A company code the way it is easiest to read out: two groups of four, like ABCD 2345. */
 export function spacedJoinCode(code: string): string {
   const typed = normalJoinCode(code);
   return typed.length === 8 ? `${typed.slice(0, 4)} ${typed.slice(4)}` : typed;
@@ -135,7 +138,7 @@ export function joinWords(answer: JoinAnswer): { title: string; body: string; to
   const company = answer.companyName || 'the company';
   switch (answer.status) {
     case 'no_company':
-      return { title: 'No company has that join code', body: 'Check the code with your supervisor and type it again.', tone: 'warn' };
+      return { title: 'No company has that code', body: 'Check the code with your supervisor and type it again.', tone: 'warn' };
     case 'already_member':
       return { title: `You are on ${company}’s roster`, body: 'This phone now sends its records there.', tone: 'ok' };
     case 'joined':
@@ -637,7 +640,7 @@ export function crewWords(answer: CrewAnswer, now: number): { title: string; bod
     case 'use_email':
       return { title: 'This name signs in with email', body: 'Tap Supervisor? Sign in with email.', tone: 'info' };
     case 'no_account':
-      return { title: 'No sign-in for that name yet', body: 'Check the spelling, or create your sign-in first.', tone: 'warn' };
+      return { title: 'No sign-in for that name yet', body: 'Check the spelling, or tap Sign up to make your sign-in.', tone: 'warn' };
     case 'ambiguous':
       return { title: 'More than one person fits that name', body: 'Type your name the way it is on the roster.', tone: 'warn' };
     case 'expired':

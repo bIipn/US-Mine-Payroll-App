@@ -1,4 +1,4 @@
-import { checkCompany, companyOrDefault, keepsTime, normalMineId, parseCompany, SAMPLE_COMPANY, stateName, STATES, type Company } from '../company';
+import { checkCompany, companyOrDefault, keepsTime, normalMineId, parseCompany, SAMPLE_COMPANY, signInWords, stateName, STATES, type Company } from '../company';
 
 describe('the company a build names', () => {
   const setting = JSON.stringify({
@@ -70,6 +70,28 @@ describe('the company a build names', () => {
     expect(parseCompany('{"name":"A","state":"ZZ"}').error).toMatch(/state/);
     expect(parseCompany('{"name":"A","state":"CA","logo":"http://example.com/a.png"}').error).toMatch(/logo/);
     expect(parseCompany('{"name":"A","state":"CA","pay":{"frequency":"weekly"}}').error).toMatch(/pay/i);
+  });
+});
+
+describe('what the sign-in screens say the app is for', () => {
+  const company: Company = { name: 'Test Pit A', state: 'NV', pay: null };
+  const timeOrPay = /clock|paid|\bpay\b|\btime\b|hours/i;
+
+  it('says nothing of time or pay before the phone knows the company', () => {
+    const words = signInWords(null);
+    expect(`${words.tagline} ${words.line}`).not.toMatch(timeOrPay);
+    expect(words).toEqual({ tagline: 'Check your machine. Report what needs fixing.', line: 'Equipment checklists, pre shift exams and maintenance requests for the crew.' });
+  });
+
+  it('keeps the words it always had for a company that keeps time', () => {
+    expect(signInWords(company)).toEqual({ tagline: 'Clock in. Check your machine. Get paid right.', line: 'Time, checklists and maintenance requests for the crew.' });
+    expect(signInWords({ ...company, place: 'Test Flats' }).line).toBe('Time, checklists and maintenance requests for the crew at Test Flats.');
+  });
+
+  it('says nothing of time or pay for a company that uses the safety forms alone', () => {
+    const words = signInWords({ ...company, timeClock: false, place: 'Test Flats' });
+    expect(`${words.tagline} ${words.line}`).not.toMatch(timeOrPay);
+    expect(words.line).toBe('Equipment checklists, pre shift exams and maintenance requests for the crew at Test Flats.');
   });
 });
 

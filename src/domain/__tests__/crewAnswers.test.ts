@@ -122,6 +122,12 @@ describe('crewWords', () => {
     expect(w.body).toMatch(/supervisor/);
   });
 
+  it('points no_account to the Sign up button', () => {
+    const w = crewWords({ kind: 'no_account' }, NOW);
+    expect(w.body).toContain('tap Sign up');
+    expect(w.body).not.toMatch(/create/i);
+  });
+
   it('points use_email to Supervisor? Sign in with email', () => {
     expect(crewWords({ kind: 'use_email' }, NOW).body).toContain('Supervisor? Sign in with email');
   });

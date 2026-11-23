@@ -137,8 +137,8 @@ export function RootNavigator() {
           DeleteAccount, so nobody is left on a screen of a view they are no longer in. */}
       {view === 'out' ? (
         <Stack.Group navigationKey="out">
-          {/* A build that names a server signs in to the company, which opens the person's own account by
-              itself; any other build signs in with an account kept on the phone, as it always has. */}
+          {/* A build that connects to a company server signs in to the company, which opens the person's own
+              account by itself; any other build signs in with an account kept on the phone, as it always has. */}
           {CAN_CONNECT && CompanySignInScreen ? (
             <Stack.Screen name="CompanySignIn" component={CompanySignInScreen} />
           ) : (

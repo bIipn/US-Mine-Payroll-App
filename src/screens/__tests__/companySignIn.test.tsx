@@ -74,7 +74,7 @@ jest.mock('../../services/connection', () => {
       signOut: fn(),
     },
     useServerAccount,
-    checkAccount: () => undefined,
+    checkAccount: jest.fn(),
     disconnect: jest.fn(),
   };
 });
@@ -104,10 +104,12 @@ const { RootNavigator } = require('../../navigation/RootNavigator') as typeof im
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const { revOf } = require('../../domain/sync') as typeof import('../../domain/sync');
 const { fmtTime } = require('../../util/format') as typeof import('../../util/format');
+const { useSyncStatus } = require('../../services/sync') as typeof import('../../services/sync');
 const connection = require('../../services/connection') as {
   server: Record<string, jest.Mock>;
   useServerAccount: typeof import('../../services/connection').useServerAccount;
   disconnect: jest.Mock;
+  checkAccount: jest.Mock;
 };
 const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Promise<void> }).act;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -140,6 +142,8 @@ let root: Root | null = null;
 beforeEach(() => {
   for (const call of Object.values(server)) call.mockReset();
   connection.disconnect.mockReset();
+  connection.checkAccount.mockReset();
+  useSyncStatus.setState({ online: true, trouble: null });
   // A code is looked up as it is typed: Test Pit A's is ABCD 2345, and no company has any other.
   server.crewAuth.mockImplementation(async (action: string, body: { code: string }) =>
     action === 'lookup' ? (body.code === 'ABCD2345' ? { kind: 'company', name: PIT_A.name, state: 'NV' } : { kind: 'no_company' }) : { kind: 'server', message: 'not stubbed' },
@@ -201,17 +205,25 @@ async function type(id: string, text: string) {
   await act(async () => (input(id).props.onChangeText as (t: string) => void)(text));
   await settle();
 }
-/** What a tap on a view does: the onPress of the nearest component around it that has one. */
-function pressOf(n: Node): () => void {
+/**
+ * What a tap on a view does: the onPress of the nearest component around it that has one, and whether
+ * that component is turned off now, as a Button is while it is disabled or busy.
+ */
+function pressable(n: Node): { onPress: () => void; off: boolean } {
   let fiber = n.unstable_fiber as Fiber;
   while (fiber && typeof fiber.memoizedProps?.onPress !== 'function') fiber = fiber.return;
   if (!fiber) throw new Error('Nothing to press here.');
-  return fiber.memoizedProps!.onPress as () => void;
+  const props = fiber.memoizedProps!;
+  const state = props.accessibilityState as { disabled?: boolean } | undefined;
+  return { onPress: props.onPress as () => void, off: props.disabled === true || state?.disabled === true };
 }
+/** A tap, as a finger makes it: on a button that is turned off it does nothing, and the test is told. */
 async function press(id: string) {
   const found = byId(id)[0];
   if (!found) throw new Error(`No ${id} here.`);
-  await act(async () => pressOf(found)());
+  const target = pressable(found);
+  if (target.off) throw new Error(`${id} cannot be pressed now.`);
+  await act(async () => target.onPress());
   await settle();
 }
 /** The calls of one crew-auth action, by their bodies. */
@@ -223,6 +235,16 @@ async function atPitA(mode: 'sign_up' | 'sign_in') {
   if (mode === 'sign_in') await press('crew-mode-sign_in');
   await type('crew-first', 'Sam');
   await type('crew-last', 'Ortiz');
+}
+
+/** Sam signed in to Test Pit A with a passcode: the phone connected, and getting the company's records. */
+async function signedInToPitA() {
+  await atPitA('sign_in');
+  await type('crew-passcode', '582039');
+  server.crewAuth.mockResolvedValueOnce(signedIn());
+  server.myCompanies.mockResolvedValueOnce({ ok: true, companies: [PIT_A] });
+  await press('crew-submit');
+  expect(useStore.getState().connectedCompany).toMatchObject({ id: PIT_A.id, userId: SAM.id });
 }
 
 let seq = 0;
@@ -270,10 +292,11 @@ describe('the company code', () => {
     expect(shown()).not.toContain('Test Pit A');
     expect(byId('crew-first')).toHaveLength(0);
 
-    // A code that cannot be anyone's is not sent at all, and says why.
+    // A code that cannot be anyone's is not sent at all, and says why, in the box's own word for it.
     await type('crew-code', 'ABCD2O45');
     expect(sent('lookup')).toHaveLength(2);
-    expect(shown()).toContain('no O, 0, I or 1');
+    expect(shown()).toContain('A company code has no O, 0, I or 1.');
+    expect(shown()).not.toMatch(/join code/i);
   });
 });
 
@@ -327,6 +350,31 @@ describe('signing up and signing in with a passcode', () => {
     await press('crew-submit');
     expect(shown()).toContain('This sign-in is locked');
     expect(server.startCrewSession).not.toHaveBeenCalled();
+  });
+
+  it('a name with no sign-in yet is pointed to Sign up', async () => {
+    await freshPhone();
+    await atPitA('sign_in');
+    await type('crew-passcode', '582039');
+    server.crewAuth.mockResolvedValueOnce({ kind: 'no_account' });
+    await press('crew-submit');
+    expect(shown()).toContain('No sign-in for that name yet');
+    expect(shown()).toContain('Check the spelling, or tap Sign up to make your sign-in.');
+  });
+
+  it('a sign-in on its way cannot be sent again', async () => {
+    await freshPhone();
+    await atPitA('sign_in');
+    await type('crew-passcode', '582039');
+    let answer: (said: CrewAnswer) => void = () => undefined;
+    server.crewAuth.mockImplementationOnce(() => new Promise<CrewAnswer>((resolve) => (answer = resolve)));
+    await press('crew-submit');
+    // The button is busy until the answer comes: a second tap does nothing.
+    await expect(press('crew-submit')).rejects.toThrow('crew-submit cannot be pressed now.');
+    expect(sent('sign_in')).toHaveLength(1);
+    await act(async () => answer({ kind: 'wrong', triesLeft: 4 }));
+    await settle();
+    expect(shown()).toContain('4 tries left');
   });
 
   it('a lost sign-up answer turns into a sign-in', async () => {
@@ -519,6 +567,19 @@ describe('Supervisor? Sign in with email', () => {
   });
 });
 
+describe('an email account with no company', () => {
+  it('can delete its sign-in from the phone', async () => {
+    const ref = await freshPhone();
+    await press('crew-use-email');
+    await type('server-email', 'avery@example.test');
+    await type('server-password', 'haulroad88');
+    await press('server-submit');
+    expect(byId('company-no-company')).not.toHaveLength(0);
+    await press('company-delete-sign-in');
+    expect(ref.getCurrentRoute()).toMatchObject({ name: 'DeleteAccount', params: { signInOnly: true } });
+  });
+});
+
 describe('after signing in', () => {
   it('a company with the time clock off lands on the checklists after sign-in', async () => {
     const ref = await freshPhone();
@@ -540,6 +601,162 @@ describe('after signing in', () => {
     // Sam's own account opened by itself: no second account, no password, and the first tab is the checklists.
     expect(useStore.getState().accounts).toEqual([expect.objectContaining({ employeeId: 'emp-sam', email: '', provider: 'company' })]);
     expect(ref.getCurrentRoute()?.name).toBe('Equipment');
+  });
+});
+
+describe('signing out of this phone', () => {
+  it('cannot connect the phone again while the server sign-out is under way', async () => {
+    await freshPhone();
+    await signedInToPitA();
+    // The company is dropped at once, but the server's sign-out takes a moment: meanwhile the account is
+    // still signed in, and the company it is on could be found again.
+    let signedOut: () => void = () => undefined;
+    connection.disconnect.mockImplementation(async () => {
+      useStore.getState().disconnectCompany();
+      await new Promise<void>((resolve) => (signedOut = resolve));
+      useServerAccount.setState({ account: null });
+    });
+    server.myCompanies.mockResolvedValue({ ok: true, companies: [PIT_A] });
+    const looked = server.myCompanies.mock.calls.length;
+    await press('company-sign-out');
+    expect(shown()).toContain('Signing out of this phone');
+    expect(byId('company-finding')).toHaveLength(0);
+    expect(server.myCompanies).toHaveBeenCalledTimes(looked);
+    expect(useStore.getState().connectedCompany).toBeNull();
+
+    await act(async () => signedOut());
+    await settle();
+    expect(useStore.getState().connectedCompany).toBeNull();
+    expect(server.myCompanies).toHaveBeenCalledTimes(looked);
+    expect(byId('crew-code')).not.toHaveLength(0);
+  });
+});
+
+describe('while the account opens', () => {
+  it('says when MineMuster has stopped for the company, and when there is no signal', async () => {
+    await freshPhone();
+    await signedInToPitA();
+    expect(byId('company-opening')).not.toHaveLength(0);
+    await act(async () => useSyncStatus.setState({ online: false }));
+    expect(shown()).toContain('No signal');
+    expect(shown()).toContain('Your account opens by itself once this phone has signal and has got Test Pit A’s roster.');
+    await act(async () => useSyncStatus.setState({ online: true, trouble: 'closed' }));
+    expect(shown()).toContain('MineMuster has stopped for Test Pit A');
+    expect(shown()).toContain('A supervisor can start it again on the dashboard’s Billing page.');
+    expect(byId('company-sign-out')).not.toHaveLength(0);
+  });
+
+  it('checks another sign-in against the company’s roster before anything opens', async () => {
+    await freshPhone();
+    // Joined with Lee's sign-in, which went; Sam signs in on this phone.
+    await act(async () => {
+      expect(useStore.getState().connectCompany(PIT_A, { id: 'u-lee', email: 'lee@example.test' })).toEqual({ ok: true });
+      useServerAccount.setState({ known: true, account: SAM, checking: true });
+    });
+    expect(shown()).toContain('Checking your sign-in with Test Pit A');
+    await act(async () => useServerAccount.setState({ checking: false, unchecked: true }));
+    expect(shown()).toContain('Could not check your sign-in with Test Pit A');
+    await press('company-try-again');
+    expect(connection.checkAccount).toHaveBeenCalledTimes(1);
+    await act(async () => useServerAccount.setState({ unchecked: false, notOnLinked: true }));
+    expect(shown()).toContain('This sign-in is not on Test Pit A’s roster');
+    expect(byId('company-sign-out')).not.toHaveLength(0);
+  });
+
+  it('says why the account could not be opened once the company’s records are in', async () => {
+    await freshPhone();
+    await signedInToPitA();
+    // Sam's sign-in, but the roster this phone got has nobody of that name.
+    await round({ firstName: 'Sam', lastName: 'Ortiz' }, [row('employee', 'emp-lee', { id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true })]);
+    expect(useStore.getState().session).toBeNull();
+    expect(shown()).toContain('Your account could not be opened');
+    expect(shown()).toContain('Sam Ortiz is not on the company’s roster on this phone. See your supervisor.');
+    expect(byId('company-check-again')).not.toHaveLength(0);
+  });
+});
+
+describe('a phone set up for another company', () => {
+  it('asks before it sends there', async () => {
+    await freshPhone();
+    await act(async () => {
+      useStore.setState((s) => ({ settings: { ...s.settings, company: { name: 'Test Pit B', state: 'NV', pay: null } } }));
+    });
+    await atPitA('sign_in');
+    await type('crew-passcode', '582039');
+    server.crewAuth.mockResolvedValueOnce(signedIn());
+    server.myCompanies.mockResolvedValue({ ok: true, companies: [PIT_A] });
+    await press('crew-submit');
+    expect(useStore.getState().connectedCompany).toBeNull();
+    expect(shown()).toContain('Send to Test Pit A?');
+    expect(shown()).toContain('This phone is set up for Test Pit B.');
+
+    await press('server-other-company-no');
+    expect(shown()).not.toContain('Send to Test Pit A?');
+    expect(useStore.getState().connectedCompany).toBeNull();
+    // The company stays there to choose.
+    await press('server-company-c-test-a');
+    await press('server-other-company-yes');
+    expect(useStore.getState().connectedCompany).toMatchObject({ id: PIT_A.id, userId: SAM.id });
+  });
+});
+
+describe('with no signal', () => {
+  it('keeps what it found while signal is gone, and looks again once it is back', async () => {
+    await freshPhone();
+    // With no signal the company server cannot be asked.
+    server.myCompanies.mockImplementation(async () =>
+      useSyncStatus.getState().online ? { ok: true, companies: [] } : { ok: false, error: 'The company server could not be reached. Check your signal and try again.' },
+    );
+    await atPitA('sign_in');
+    await type('crew-passcode', '582039');
+    server.crewAuth.mockResolvedValueOnce(signedIn());
+    await press('crew-submit');
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+    expect(server.myCompanies).toHaveBeenCalledTimes(1);
+
+    await act(async () => useSyncStatus.setState({ online: false }));
+    await settle();
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+    expect(shown()).not.toContain('Could not find your company');
+    expect(server.myCompanies).toHaveBeenCalledTimes(1);
+
+    await act(async () => useSyncStatus.setState({ online: true }));
+    await settle();
+    expect(server.myCompanies).toHaveBeenCalledTimes(2);
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+  });
+});
+
+describe('the top of the sign-in screens', () => {
+  const companyIs = (company: { name: string; state: string; pay: null; timeClock?: false }) =>
+    act(async () => {
+      useStore.setState((s) => ({ settings: { ...s.settings, company } }));
+    });
+
+  it('says nothing of time or pay until the phone knows the company, then follows its time clock', async () => {
+    await freshPhone();
+    expect(shown()).toContain('Check your machine. Report what needs fixing.');
+    expect(shown()).not.toMatch(/Clock in|Get paid/);
+    // A phone that has the company's settings, as after signing out of it: one that uses the safety forms alone.
+    await companyIs({ name: 'Test Pit A', state: 'NV', pay: null, timeClock: false });
+    expect(shown()).toContain('Check your machine. Report what needs fixing.');
+    expect(shown()).not.toMatch(/Clock in|Get paid/);
+    // One that keeps time.
+    await companyIs({ name: 'Test Pit A', state: 'NV', pay: null });
+    expect(shown()).toContain('Clock in. Check your machine. Get paid right.');
+  });
+
+  it('the sign-in kept on the phone keeps its words wherever the time clock is on', async () => {
+    const { AuthScreen } = jest.requireActual('../auth/AuthScreen') as typeof import('../auth/AuthScreen');
+    useStore.getState().resetDemo();
+    root = createRoot();
+    const r = root;
+    await act(async () => r.render(React.createElement(AuthScreen)));
+    expect(shown()).toContain('Clock in. Check your machine. Get paid right.');
+    expect(shown()).toContain('Time, checklists and maintenance requests for the crew.');
+    await companyIs({ name: 'Test Pit A', state: 'NV', pay: null, timeClock: false });
+    expect(shown()).toContain('Check your machine. Report what needs fixing.');
+    expect(shown()).not.toMatch(/Clock in|Get paid/);
   });
 });
 

@@ -13,8 +13,9 @@ import { color, space, TAP } from '../../theme/theme';
 /**
  * What the company sign-in screen and Company account share, so neither keeps a copy: the line the
  * phone shows while it waits on the company's server, signing in with an email and a password, and
- * connecting the phone to one of the account's companies. Only in a build that names a server: both
- * screens that import this load behind the same folded condition as the server code (connection.ts).
+ * connecting the phone to one of the account's companies. Only in a build that names a server and is
+ * not a preview: both screens that import this load behind the same folded condition as the server
+ * code (connection.ts), and they show only in a build that connects (CAN_CONNECT).
  */
 
 /** A spinner, and what the phone is waiting for. */
@@ -162,7 +163,7 @@ export function useConnectCompany(account: { id: string; email: string }) {
   const ask = (
     <Sheet testID="server-other-company" visible={sure != null} onClose={() => setSure(null)} title={sure ? `Send to ${sure.name}?` : undefined}>
       <Txt v="body" c={color.inkSoft}>
-        This phone is set up for {held}. Its roster, area sheets and company settings go to {sure?.name} as well as everything people sign on it.
+        {`This phone is set up for ${held}. Its roster, area sheets and company settings go to ${sure?.name ?? ''} as well as everything people sign on it.`}
       </Txt>
       <Button testID="server-other-company-yes" label={`Send to ${sure?.name ?? ''}`} onPress={() => sure && connect(sure, true)} />
       <Button testID="server-other-company-no" label="Cancel" kind="outline" onPress={() => setSure(null)} />
