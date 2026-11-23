@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { CloudUpload, Eye, EyeOff, OctagonAlert, RotateCcw, TriangleAlert, UserX } from '../../components/icons';
+import { CloudUpload, Eye, EyeOff, LogIn, OctagonAlert, RotateCcw, TriangleAlert, UserX } from '../../components/icons';
+import { PASSCODE_BOX } from '../../components/passcodeBox';
 import { Button, Field, IconButton, Notice, Page, Panel, Sheet, Txt } from '../../components/ui';
 import { ACCOUNT_PAGE, DELETED_TOAST, deletionPlan, LOCAL_CONFIRM, PASSCODE_LABEL, SECRET_HINT, whoseSignIn, type Blocker, type DeletionCheckCompany } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
@@ -109,8 +110,11 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
   const asksSecret = plan.needsPassword || plan.needsPasscode;
   const store = useStore.getState();
 
-  /** The phone's part, once the server's is done or there is none. */
-  const finishHere = () => {
+  /**
+   * The phone's part, once the server's is done or there is none. `deleted` when the server deleted the
+   * company sign-in, or had already: only then, or with an account deleted here, is the person told so.
+   */
+  const finishHere = (deleted: boolean) => {
     if (appAccount) {
       const done = store.deleteMyAccount({ clearPhone: plan.clearsPhone });
       if (!done.ok) {
@@ -130,6 +134,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
       return;
     }
     navigation.goBack();
+    if (!deleted) return;
     haptic.success();
     store.showToast(DELETED_TOAST);
   };
@@ -161,7 +166,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
           return;
         }
       }
-      finishHere();
+      finishHere(plan.serverToo);
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -174,7 +179,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     setBusy(true);
     try {
       await forgetDeletedSignIn();
-      finishHere();
+      finishHere(true);
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -201,6 +206,10 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     if (blocker.action === 'reset') return <Button testID="delete-back" label="Back to More" kind="outline" size="md" onPress={() => navigation.goBack()} style={styles.noticeButton} />;
     if (blocker.action === 'retry') {
       return <Button testID="delete-check-retry" label="Try again" icon={RotateCcw} kind="outline" size="md" onPress={() => setTries((n) => n + 1)} style={styles.noticeButton} />;
+    }
+    // A company sign-in alone, signed out: it is deleted from the company sign-in screen it was opened from, once signed in to again.
+    if (blocker.action === 'sign_in') {
+      return <Button testID="delete-sign-in" label="Sign in again" icon={LogIn} kind="outline" size="md" onPress={() => navigation.goBack()} style={styles.noticeButton} />;
     }
     return null;
   };
@@ -292,7 +301,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
               />
             ) : null}
             {plan.needsPasscode ? (
-              // The number pad, hidden as it is typed, and nothing a keyboard or password manager fills in.
+              // As crew sign-in's passcode boxes are: the number pad, hidden, filled in by nothing, a passcode's length.
               <Field
                 testID="delete-passcode"
                 label={PASSCODE_LABEL}
@@ -301,10 +310,7 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
                   setPasscode(text);
                   setProblem(null);
                 }}
-                keyboardType="number-pad"
-                secureTextEntry
-                autoComplete="off"
-                autoCorrect={false}
+                {...PASSCODE_BOX}
                 hint={SECRET_HINT}
                 onSubmitEditing={() => void deleteIt()}
               />

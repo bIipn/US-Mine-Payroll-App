@@ -140,6 +140,8 @@ const waitingCounts = (): Pick<SyncStatus, 'waiting' | 'stuck'> => {
 export const notTakenChanges = (): Change[] => sortedNow().notTaken;
 /** What waits that the server will not take as it is: stuck at the version it turned down. */
 export const stuckChanges = (): Change[] => waitingNow().filter((c) => stuck.get(c.key) === c.rev);
+/** Everything a round would send now: what signing out of the phone waits for. */
+export const waitingChanges = (): Change[] => waitingNow();
 const notTakenNow = (): number => notTakenChanges().length;
 
 /** How long a round reads the company's records before it lets the next round carry on. */

@@ -14,6 +14,7 @@ import { checkAccount, server, signOutOfPhone, useServerAccount, type AccountSta
 import { syncNow, useSyncStatus } from '../../services/sync';
 import { useStore } from '../../store/useStore';
 import { color, space, TAP } from '../../theme/theme';
+import { CheckedOutUnits } from '../equipment/CheckedOutUnits';
 import { SignOutHeldUp, type HeldUp } from '../more/SignOutOfPhone';
 import { CrewSignIn, keepCrewSession, passcodesHere, type CrewTyped, type SignedIn } from './CrewSignIn';
 import { CompanyChoice, EmailSignIn, useConnectCompany, Waiting } from './ServerSignIn';
@@ -167,6 +168,7 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, leave }: 
   leave: Leave;
 }) {
   const asked = useStore((s) => (s.joinAsked?.accountId === account.id ? s.joinAsked : null));
+  const session = useStore((s) => s.session);
   const connector = useConnectCompany({ id: account.id, email: account.email });
   const [found, setFound] = useState<Found>({ kind: 'finding' });
   const [busy, setBusy] = useState(true);
@@ -267,7 +269,7 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, leave }: 
             <Button testID="company-delete-sign-in" label="Delete this sign-in" icon={UserX} kind="outline" onPress={onDeleteSignIn} />
           </View>
         ) : (
-          <OffRoster company={companyName} onDelete={onDeleteAccount} />
+          <OffRoster company={companyName} onDelete={onDeleteAccount} whose={session?.employeeId ?? null} />
         );
       break;
   }
@@ -289,8 +291,12 @@ function FindCompany({ account, hint, onDeleteAccount, onDeleteSignIn, leave }: 
 function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerAccount; linked: ConnectedCompany; onDeleteAccount: () => void; leave: Leave }) {
   const receiving = useStore((s) => (s.receiving?.company === linked.id ? s.receiving : null));
   const employees = useStore((s) => s.employees);
+  const session = useStore((s) => s.session);
   const sync = useSyncStatus();
   const { notOnLinked, checking, unchecked } = useServerAccount();
+  // Whose units the off-the-roster card lists: the account open here, or else the person the sign-in is for.
+  const own = signInPerson(employees, receiving);
+  const whose = session?.employeeId ?? (own.ok ? own.person.id : null);
   let body: React.ReactNode;
   if (linked.userId !== account.id) {
     // Another account than the one that connected: checked against the company's roster first (watchConnection).
@@ -310,7 +316,7 @@ function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerA
       <Waiting text={`Checking your sign-in with ${linked.name}…`} />
     );
   } else if (receiving?.role === 'none') {
-    body = <OffRoster company={linked.name} onDelete={onDeleteAccount} />;
+    body = <OffRoster company={linked.name} onDelete={onDeleteAccount} whose={whose} />;
   } else if (sync.trouble === 'closed') {
     body = <Notice tone="bo" title={`MineMuster has stopped for ${linked.name}`} body="A supervisor can start it again on the dashboard’s Billing page." />;
   } else if (receiving?.caughtUpAt != null && receiving.role != null) {
@@ -319,7 +325,7 @@ function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerA
     body = own.ok ? (
       <Waiting text="Opening your account…" />
     ) : person.ok && !person.person.active ? (
-      <OffRoster company={linked.name} onDelete={onDeleteAccount} />
+      <OffRoster company={linked.name} onDelete={onDeleteAccount} whose={whose} />
     ) : (
       <View style={styles.gap}>
         <Notice tone="bo" title="Your account could not be opened" body={own.error} />
@@ -339,8 +345,12 @@ function Opening({ account, linked, onDeleteAccount, leave }: { account: ServerA
   );
 }
 
-/** A sign-in whose roster row was taken off: it still works, only to delete the account. */
-function OffRoster({ company, onDelete }: { company: string | null; onDelete: () => void }) {
+/**
+ * A sign-in whose roster row was taken off: it still works, only to delete the account. A unit the person
+ * (`whose`) still has checked out is checked back in from here, off the clock (End use): this screen is all
+ * they are shown, and signing out of the phone waits for it.
+ */
+function OffRoster({ company, onDelete, whose }: { company: string | null; onDelete: () => void; whose: string | null }) {
   return (
     <View testID="company-off-roster" style={styles.gap}>
       <Notice
@@ -349,6 +359,7 @@ function OffRoster({ company, onDelete }: { company: string | null; onDelete: ()
         title={`You are no longer on ${company ? `${company}’s` : 'your company’s'} roster`}
         body={`Your sign-in still works, but only to delete your account. Your records stay with ${company ?? 'the company'}. If this is a mistake, see your supervisor.`}
       />
+      {whose ? <CheckedOutUnits employeeId={whose} /> : null}
       <Button testID="company-delete-account" label="Delete my account" icon={UserX} kind="outline" onPress={onDelete} />
     </View>
   );
@@ -359,8 +370,8 @@ type Leave = { held: HeldUp | null; onDelete: () => void; onPress: () => void };
 
 /**
  * Sign out of this phone, on every card after a sign-in: the screen does it (signOutOfPhone), and says
- * here what holds it up, if anything does. From here, a record waiting is sent and an account deleted;
- * nothing else on that list can be put right from this screen.
+ * here what holds it up, if anything does. From here, a record waiting is sent, an account deleted, and a
+ * unit checked back in on the card above.
  */
 function SignOutOfPhone({ held, onDelete, onPress }: Leave) {
   return (

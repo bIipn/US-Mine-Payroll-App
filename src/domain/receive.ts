@@ -559,7 +559,11 @@ const fullName = (people: readonly Employee[], id: string | undefined) => {
  */
 export function notTakenWords(
   change: { kind: string; id: string },
-  reason: HeldReason,
+  /**
+   * Why the company did not take it: the server's reason, or `off_roster` for a sign-in the company took off
+   * its roster, from which it takes nothing.
+   */
+  reason: HeldReason | 'off_roster',
   data: {
     employees: readonly Employee[];
     equipment: readonly Equipment[];
@@ -609,12 +613,14 @@ export function notTakenWords(
       what = 'A turned-down punch';
   }
   const why =
-    reason === 'supervisor_only'
-      ? 'Only a supervisor’s company sign-in can send this. A supervisor enters it on the office dashboard.'
-      : reason === 'not_yours'
-        ? 'Another person’s record: the company keeps theirs.'
-        : reason === 'signed'
-          ? 'Already signed: a signed record is not changed.'
-          : 'The company’s server would not take it as it is. Tell the office.';
+    reason === 'off_roster'
+      ? 'The company’s server takes nothing from a sign-in off its roster.'
+      : reason === 'supervisor_only'
+        ? 'Only a supervisor’s company sign-in can send this. A supervisor enters it on the office dashboard.'
+        : reason === 'not_yours'
+          ? 'Another person’s record: the company keeps theirs.'
+          : reason === 'signed'
+            ? 'Already signed: a signed record is not changed.'
+            : 'The company’s server would not take it as it is. Tell the office.';
   return { what, why };
 }

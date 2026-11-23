@@ -577,5 +577,7 @@ describe('notTakenWords', () => {
     expect(notTakenWords(change('shift:sh1'), 'not_yours', data).why).toBe('Another person’s record: the company keeps theirs.');
     expect(notTakenWords(change('shift:sh1'), 'signed', data).why).toBe('Already signed: a signed record is not changed.');
     expect(notTakenWords(change('equipment:eq_t14'), 'malformed', data).why).toBe('The company’s server would not take it as it is. Tell the office.');
+    // From a sign-in the company took off its roster, nothing reaches it.
+    expect(notTakenWords(change('shift:sh1'), 'off_roster', data).why).toBe('The company’s server takes nothing from a sign-in off its roster.');
   });
 });

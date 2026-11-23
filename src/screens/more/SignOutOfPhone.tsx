@@ -3,16 +3,18 @@ import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { CloudUpload, LogOut, OctagonAlert, RotateCcw, TriangleAlert } from '../../components/icons';
-import { Button, Divider, Notice, Panel, Row, Sheet, Txt } from '../../components/ui';
+import { Button, Divider, Notice, Panel, Sheet, Txt } from '../../components/ui';
 import { signOutWarnings, signOutWords, type Blocker } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
-import { notTakenWords } from '../../domain/receive';
+import type { HeldReason } from '../../domain/receive';
+import type { Change } from '../../domain/sync';
 import { signOutOfPhone, type PhoneSignOut } from '../../services/connection';
 import { haptic } from '../../services/haptics';
-import { notTakenChanges, stuckChanges, syncNow, useSyncStatus } from '../../services/sync';
+import { notTakenChanges, stuckChanges, syncNow, useSyncStatus, waitingChanges } from '../../services/sync';
 import { staleShiftOf, useStore } from '../../store/useStore';
 import { color, space, TAP } from '../../theme/theme';
 import { fmtDate } from '../../util/format';
+import { NotTakenRow } from './NotTakenRow';
 
 /**
  * Signing out of this phone, asked first (More's Sign out, and Company account's), and what holds it up
@@ -39,7 +41,8 @@ const BUTTON: Partial<Record<Action, string>> = {
 /**
  * What holds signing out of this phone up: each blocker with its button, where this screen can do what it
  * says, and under what the company turned down, every one of those records. The list on More leaves out the
- * ones the person marked Done, which still hold signing out up, so every one is named here.
+ * ones the person marked Done, which still hold signing out up, so every one is named here. From a sign-in
+ * off the company's roster nothing reaches the company, so under that every record it counts is named.
  */
 export function SignOutHeldUp({ held, actions }: { held: HeldUp; actions: BlockerActions }) {
   const sync = useSyncStatus();
@@ -65,7 +68,7 @@ export function SignOutHeldUp({ held, actions }: { held: HeldUp; actions: Blocke
                   />
                 ) : null}
               </Notice>
-              {blocker.kind === 'not_taken' ? <TurnedDown /> : null}
+              {blocker.kind === 'not_taken' || blocker.kind === 'not_member' ? <TurnedDown offRoster={blocker.kind === 'not_member'} /> : null}
             </View>
           );
         })
@@ -79,28 +82,29 @@ export function SignOutHeldUp({ held, actions }: { held: HeldUp; actions: Blocke
   );
 }
 
-/** Every record the company turned down that holds signing out up, with why: Done on More or not. */
-function TurnedDown() {
-  const data = useStore((s) => s);
-  void useSyncStatus((s) => s.notTaken + s.stuck);
-  const held = data.receiving?.held ?? {};
-  const records = [
-    ...notTakenChanges().map((change) => ({ change, reason: held[change.key]?.reason ?? ('supervisor_only' as const) })),
-    // What the server will not take as it is: the words for a record it could not take as it was.
-    ...stuckChanges().map((change) => ({ change, reason: 'malformed' as const })),
+/**
+ * Every record the company turned down that holds signing out up, with why: Done on More or not. From a
+ * sign-in off its roster (`offRoster`), also every record waiting, none of which can reach it. Read as the
+ * list above it is drawn, which follows the round.
+ */
+function TurnedDown({ offRoster }: { offRoster: boolean }) {
+  const held = useStore((s) => s.receiving?.held);
+  const records: { change: Change; reason: HeldReason | 'off_roster' }[] = [
+    ...notTakenChanges().map((change) => ({ change, reason: held?.[change.key]?.reason ?? ('supervisor_only' as const) })),
+    ...(offRoster
+      ? waitingChanges().map((change) => ({ change, reason: 'off_roster' as const }))
+      : // What the server will not take as it is: the words for a record it could not take as it was.
+        stuckChanges().map((change) => ({ change, reason: 'malformed' as const }))),
   ];
   if (!records.length) return null;
   return (
     <Panel flush style={styles.records}>
-      {records.map(({ change, reason }, i) => {
-        const { what, why } = notTakenWords(change, reason, data);
-        return (
-          <View key={change.key}>
-            {i > 0 ? <Divider inset={space.lg} /> : null}
-            <Row testID={`sign-out-record-${change.key}`} title={what} sub={why} subLines={4} />
-          </View>
-        );
-      })}
+      {records.map(({ change, reason }, i) => (
+        <View key={change.key}>
+          {i > 0 ? <Divider inset={space.lg} /> : null}
+          <NotTakenRow testID={`sign-out-record-${change.key}`} change={change} reason={reason} />
+        </View>
+      ))}
     </Panel>
   );
 }
@@ -139,15 +143,24 @@ export function SignOutSheet({ visible, onClose, from }: SignOutSheetProps) {
   const signOut = async () => {
     if (busy) return;
     setBusy(true);
-    const done = await signOutOfPhone();
-    if (!live.current) return;
-    setBusy(false);
-    if (done.ok) {
-      onClose();
-      return;
+    try {
+      const done = await signOutOfPhone();
+      if (!live.current) return;
+      if (done.ok) {
+        onClose();
+        return;
+      }
+      haptic.error();
+      setHeld(done);
+    } catch {
+      // Failed outright: nothing was signed out, and it can be tried again.
+      if (!live.current) return;
+      haptic.error();
+      setHeld({ ok: false, reason: 'refused', error: words.failed, blockers: [], warnings: [] });
+    } finally {
+      // Never left loading, whatever became of it.
+      if (live.current) setBusy(false);
     }
-    haptic.error();
-    setHeld(done);
   };
 
   /** Off to where the thing that holds it up is dealt with: the sheet closes first. */

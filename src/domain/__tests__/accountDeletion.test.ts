@@ -294,7 +294,7 @@ describe('what stops it, and what to look at first', () => {
     const plan = deletionPlan(input({ openUnit: 'L-12', staleShift: shiftAt(Date.UTC(2026, 10, 17, 14)) }));
     expect(plan.blockers).toEqual([]);
     expect(plan.warnings).toEqual([
-      'You still have L-12 checked out. End use on the Checklists screen so the next operator can take it.',
+      'You still have L-12 checked out. Check it back in with End use so the next operator can take it.',
       'Your shift of 2026-11-17 has no clock-out. It counts no hours until a supervisor sets its end.',
     ]);
   });
@@ -309,6 +309,24 @@ describe('what stops it, and what to look at first', () => {
 });
 
 describe('a company sign-in with no account on the phone', () => {
+  it('is not offered once the sign-in is signed out on the phone, which says to sign in to it again', () => {
+    // Signed out while the screen is open (a passcode reset on another phone, say): there is nothing here to delete.
+    const signedOut = {
+      kind: 'signed_out',
+      title: 'Your company sign-in is signed out on this phone',
+      body: 'Sign in to it again to delete it. Nothing has been deleted.',
+      action: 'sign_in',
+    };
+    // Someone taken off the roster, on a phone joined to the company, and an email sign-in on no company's roster.
+    for (const over of [{ linked: PIT, standing: { role: 'none' as const, name: { firstName: 'Riley J', lastName: 'Quinn' } } }, { linked: null }]) {
+      const plan = deletionPlan(input({ me: null, account: null, hasRate: false, serverAccount: null, check: [], ...over }));
+      expect(plan.blockers).toEqual([signedOut]);
+      expect([plan.serverToo, plan.needsPassword, plan.needsPasscode, plan.deletes]).toEqual([false, false, false, []]);
+    }
+    // Signed in, it is deleted as before.
+    expect(kinds(deletionPlan(input({ me: null, account: null, hasRate: false, serverAccount: { id: 'u-pat', email: 'pat@example.com' }, check: [] })))).toEqual([]);
+  });
+
   it('is deleted from the server alone', () => {
     const plan = deletionPlan(input({ me: null, account: null, hasRate: false, serverAccount: { id: 'u-pat', email: 'pat@example.com' }, check: [] }));
     expect(plan.title).toBe('Delete this company sign-in');
@@ -503,7 +521,7 @@ describe('signing out of a phone', () => {
   it('waits for the shift and any unit, which only this phone can close', () => {
     expect(signOutBlockers(out({ openShift: shiftAt(NOW - 3 * 3_600_000), openUnit: 'L-12' })).blockers).toEqual([
       { kind: 'on_clock', title: 'Clock out first', body: 'You are on the clock. Clock out, then sign out.', action: 'clock' },
-      { kind: 'unit_out', title: 'End use first', body: 'You still have L-12 checked out. End use on the Checklists screen, then sign out.', action: 'checklists' },
+      { kind: 'unit_out', title: 'End use first', body: 'You still have L-12 checked out. Check it back in with End use, then sign out.', action: 'checklists' },
     ]);
   });
 
@@ -690,6 +708,7 @@ describe('the question before signing out of a phone', () => {
       keep: 'Stay signed in',
       held: 'Not signed out yet',
       heldBody: 'Nothing has been taken off this phone.',
+      failed: 'Something went wrong while signing out. Try again.',
     });
     // No rate, or a company that keeps no time: no rate named.
     expect(signOutWords({ company: 'Test Pit A', connected: true, keepsTime: false, hasRate: true }).body).toBe(

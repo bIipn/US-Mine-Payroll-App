@@ -18,7 +18,6 @@ const mockScreen = (name: string) => {
 jest.mock('../auth/AuthScreen', () => ({ AuthScreen: mockScreen('Auth') }));
 jest.mock('../clock/ClockScreen', () => ({ ClockScreen: mockScreen('Clock') }));
 jest.mock('../equipment/ChecklistCardScreen', () => ({ ChecklistCardScreen: mockScreen('ChecklistCard') }));
-jest.mock('../equipment/EndUseScreen', () => ({ EndUseScreen: mockScreen('EndUse') }));
 jest.mock('../equipment/EquipmentScreen', () => ({ EquipmentScreen: mockScreen('Equipment') }));
 jest.mock('../equipment/InspectionDetailScreen', () => ({ InspectionDetailScreen: mockScreen('InspectionDetail') }));
 jest.mock('../equipment/InspectionResultScreen', () => ({ InspectionResultScreen: mockScreen('InspectionResult') }));
@@ -109,17 +108,21 @@ const { RootNavigator } = require('../../navigation/RootNavigator') as typeof im
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const { changesToSend, revOf } = require('../../domain/sync') as typeof import('../../domain/sync');
 const { SAMPLE_CREW_IDS } = require('../../store/seed') as typeof import('../../store/seed');
-const { useSyncStatus } = require('../../services/sync') as typeof import('../../services/sync');
+const syncModule = require('../../services/sync') as typeof import('../../services/sync');
+const { useSyncStatus } = syncModule;
 const connection = require('../../services/connection') as typeof import('../../services/connection');
 const server = require('../../services/server') as Record<string, jest.Mock> & { mockTell: (account: unknown) => void };
 const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Promise<void> }).act;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const PIT_A = { id: 'c-test-a', name: 'Test Pit A' };
-/** Blake's passcode sign-in as the phone has it: a passcode account's hidden address never reaches the app. */
+/**
+ * Blake's passcode sign-in as the phone has it: Supabase Auth keeps a hidden address for it, which the app
+ * is never handed (accountOf in server.ts; server.test.ts and connection.test.ts hold that).
+ */
 const BLAKE = { id: 'u-blake', email: '', kind: 'passcode' as const };
-/** The hidden address Supabase Auth keeps for Blake's sign-in. A phone joined on an earlier build kept it. */
-const HIDDEN = 'crew-7c1d2e3f@crew.example.test';
+/** Lee's passcode sign-in: not the one the phone was joined with. */
+const LEE = { id: 'u-lee', email: '', kind: 'passcode' as const };
 const AVERY = { id: 'u-avery', email: 'avery@example.test', kind: 'email' as const };
 const T99: Equipment = { id: 'eq-t99', unit: 'T-99', category: 'haul_truck', make: 'Made-up', model: 'HX 40', status: 'ready', meter: 100, meterUnit: 'hrs' };
 
@@ -144,6 +147,8 @@ beforeEach(() => {
   server.deletionCheck.mockResolvedValue({ ok: true, companies: [{ id: PIT_A.id, name: PIT_A.name, role: 'employee', lastSupervisor: false, successors: [], canClose: false, closeFrom: null, running: null }] });
   server.mockTell(null);
   useSyncStatus.setState({ online: true, trouble: null, sending: false });
+  // A toast is the screen's, not the phone's: it does not carry from one test to the next.
+  useStore.setState({ toast: null });
 });
 afterEach(async () => {
   const r = root;
@@ -190,22 +195,23 @@ async function press(id: string) {
 }
 
 /**
- * A phone joined to Test Pit A with this sign-in, after a round read the company's records: the sign-in's
- * own person's account is open, unless the company found no roster row for the sign-in. `held` is the
- * address an earlier build kept with the company the phone sends to. Then the app, as it starts.
+ * A phone joined to Test Pit A with this sign-in, as the company sign-in screen joins it, after a round
+ * read the company's records: the sign-in's own person's account is open, unless the company found no
+ * roster row for the sign-in. With `sent`, the company has every record the phone holds. Then the app, as
+ * it starts.
  */
 async function joinedPhone({
   signIn = BLAKE as typeof BLAKE | typeof AVERY,
   name = { firstName: 'Blake', lastName: 'Rook' },
   role = 'employee' as 'employee' | 'supervisor' | 'none',
-  held = '',
   signedIn = true,
+  sent = false,
   records = (_me: string) => ({}) as Partial<{ shifts: Shift[]; opLogs: OperatingLog[] }>,
 } = {}): Promise<Ref> {
   const g = useStore.getState;
   g().resetDemo();
   g().ensureSeeded();
-  expect(g().connectCompany({ ...PIT_A, role: role === 'none' ? 'employee' : role }, { id: signIn.id, email: held || signIn.email })).toEqual({ ok: true });
+  expect(g().connectCompany({ ...PIT_A, role: role === 'none' ? 'employee' : role }, { id: signIn.id, email: signIn.email })).toEqual({ ok: true });
   g().ensureReceiving();
   const ctx = () => ({ company: PIT_A.id, account: signIn.id, epoch: g().receiving!.epoch });
   g().applyStanding(ctx(), { role: role === 'none' ? 'employee' : role, name });
@@ -215,6 +221,7 @@ async function joinedPhone({
   if (role === 'none') g().applyStanding(ctx(), null);
   const me = g().session?.employeeId ?? 'emp-blake';
   useStore.setState(records(me));
+  if (sent) g().markSynced(waiting().map(({ key, rev }) => ({ key, rev })), PIT_A.id);
   server.mockTell(signedIn ? signIn : null);
   const ref = nav.createNavigationContainerRef<ReactNavigation.RootParamList>();
   root = createRoot();
@@ -234,11 +241,13 @@ const go = async (ref: Ref, name: 'CompanyAccount' | 'DeleteAccount' | 'Main', p
   await settle();
 };
 /** Records on the phone a round would send now. */
-const waiting = () => {
+function waiting() {
   const s = useStore.getState();
   const r = s.receiving!;
   return changesToSend(s, s.synced, SAMPLE_CREW_IDS, { connected: true, role: r.role, caughtUp: r.caughtUpAt != null, unreadable: r.unreadable, held: r.held });
-};
+}
+/** Blake's use of T-99 from an hour ago, still checked out. */
+const t99InUse = (me: string): OperatingLog => ({ id: 'op-t99', equipmentId: T99.id, employeeId: me, inspectionId: 'insp-t99', startAt: Date.now() - 3_600_000, startMeter: 100 });
 const doneShift = (id: string, employeeId: string): Shift => ({ id, employeeId, clockIn: { at: Date.now() - 9 * 3_600_000 }, clockOut: { at: Date.now() - 8 * 3_600_000 }, lunches: [], breaks: [] });
 
 describe('Company account', () => {
@@ -314,12 +323,11 @@ describe('Company account', () => {
 
 describe('a crew member’s hidden address', () => {
   it('is shown nowhere: Company account, More and Delete my account show the person’s name', async () => {
-    // Joined on an earlier build, which kept the hidden address with the company the phone sends to.
-    const ref = await joinedPhone({ held: HIDDEN });
+    // Joined as the company sign-in screen joins it: with the sign-in the app was handed, which has no address.
+    const ref = await joinedPhone();
     expect(useStore.getState().connectedCompany?.email).toBe('');
     const nowhere = () => {
-      expect(shown()).not.toContain(HIDDEN);
-      expect(shown()).not.toContain('@');
+      expect(shown()).not.toMatch(/crew-|@/);
     };
     await go(ref, 'Main', { screen: 'More' });
     expect(byId('more-screen')).not.toHaveLength(0);
@@ -357,16 +365,63 @@ describe('signing out of this phone', () => {
     expect(shown()).toContain('Not signed out yet');
     expect(shown()).toContain('Nothing has been taken off this phone.');
     for (const kind of ['on_clock', 'unit_out', 'waiting']) expect({ kind, here: byId(`sign-out-blocker-${kind}`).length > 0 }).toEqual({ kind, here: true });
-    expect(byId('sign-out-clock')).not.toHaveLength(0);
-    expect(byId('sign-out-send')).not.toHaveLength(0);
     // Nothing was signed out or taken off the phone.
     expect(useStore.getState()).toMatchObject({ session: { employeeId: 'emp-blake' }, connectedCompany: { id: PIT_A.id } });
     expect(useStore.getState().shifts).toHaveLength(2);
     expect(server.signOut).not.toHaveBeenCalled();
+    // Send now asks for a round there and then, and the sheet stays.
+    const sending = jest.spyOn(syncModule, 'syncNow');
+    await press('sign-out-send');
+    expect(sending).toHaveBeenCalledTimes(1);
+    sending.mockRestore();
+    expect(byId('sign-out-blocker-waiting')).not.toHaveLength(0);
 
     // End use is on the Checklists screen's equipment list.
     await press('sign-out-checklists');
     expect(ref.getCurrentRoute()).toMatchObject({ name: 'Equipment', params: { tab: 'equipment' } });
+    // Clocking out is on the Clock.
+    await go(ref, 'Main', { screen: 'More' });
+    await press('sign-out');
+    await press('sign-out-confirm');
+    await press('sign-out-clock');
+    expect(ref.getCurrentRoute()?.name).toBe('Clock');
+  });
+
+  it('is never left loading: a sign-out that fails outright says so, and can be tried again', async () => {
+    const ref = await joinedPhone();
+    await go(ref, 'Main', { screen: 'More' });
+    await press('sign-out');
+    const failing = jest.spyOn(connection, 'signOutOfPhone').mockRejectedValueOnce(new Error('broken'));
+    await press('sign-out-confirm');
+    failing.mockRestore();
+    expect(shown()).toContain('Something went wrong while signing out. Try again.');
+    expect(useStore.getState().session?.employeeId).toBe('emp-blake');
+    // Tried again, it signs out: the button is not left loading.
+    await press('sign-out-confirm');
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+  });
+
+  it('sends a signed-out sign-in to Company account to sign in again, and a sign-in off the roster to Delete my account', async () => {
+    // Signed out of the company server, with a record waiting: nothing can go until it signs in again.
+    const ref = await joinedPhone({ signedIn: false, records: (me) => ({ shifts: [doneShift('sh-done', me)] }) });
+    await go(ref, 'Main', { screen: 'More' });
+    await press('sign-out');
+    await press('sign-out-confirm');
+    expect(byId('sign-out-blocker-signed_out')).not.toHaveLength(0);
+    await press('sign-out-sign_in');
+    expect(ref.getCurrentRoute()?.name).toBe('CompanyAccount');
+    expect(byId('company-sign-in-again')).not.toHaveLength(0);
+
+    // Another sign-in, not on the company's roster: nothing more reaches the company from this phone.
+    server.myCompanies.mockResolvedValue({ ok: true, companies: [] });
+    await act(async () => server.mockTell(LEE));
+    await settle();
+    await go(ref, 'Main', { screen: 'More' });
+    await press('sign-out');
+    await press('sign-out-confirm');
+    expect(byId('sign-out-blocker-not_member')).not.toHaveLength(0);
+    await press('sign-out-delete');
+    expect(ref.getCurrentRoute()?.name).toBe('DeleteAccount');
   });
 
   it('says first what holds nothing up: an old shift never clocked out, which only a supervisor can end now', async () => {
@@ -430,8 +485,8 @@ describe('Delete my account', () => {
     expect(shown()).toContain('What stays with Test Pit A');
     expect(shown()).toContain('Your name on Test Pit A’s roster. A supervisor takes it off when you leave.');
     expect(shown()).toContain('Your company sign-in and its passcode, on MineMuster’s server. It stops working on every phone.');
-    // The number pad, hidden as it is typed; and no password box.
-    expect(input('delete-passcode').props).toMatchObject({ keyboardType: 'number-pad', secureTextEntry: true });
+    // The number pad, hidden as it is typed, no longer than a passcode, as crew sign-in's are; and no password box.
+    expect(input('delete-passcode').props).toMatchObject({ keyboardType: 'number-pad', secureTextEntry: true, autoComplete: 'off', maxLength: 12 });
     expect(byId('delete-password')).toHaveLength(0);
 
     server.deleteAccountWithPasscode.mockResolvedValue({ ok: true, closed: [] });
@@ -514,5 +569,117 @@ describe('Delete my account', () => {
     await press('delete-confirm');
     expect(server.deleteAccount).toHaveBeenCalledWith('avery@example.test', 'haulroad88');
     expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+  });
+});
+
+describe('More’s row for deleting the account', () => {
+  it('names only the secret of a sign-in the deletion deletes', async () => {
+    // Lee is signed in on Blake's phone: deleting Blake's account deletes no company sign-in, and Lee's is not Blake's.
+    server.myCompanies.mockResolvedValue({ ok: true, companies: [] });
+    const ref = await joinedPhone();
+    await act(async () => server.mockTell(LEE));
+    await settle();
+    await go(ref, 'Main', { screen: 'More' });
+    expect(shown()).toContain('Your sign-in and hourly rate. Your work records stay with Test Pit A.');
+    // Blake's own passcode sign-in, signed in again: it goes with the account.
+    await act(async () => server.mockTell(BLAKE));
+    await settle();
+    expect(shown()).toContain('Your sign-in, passcode and hourly rate. Your work records stay with Test Pit A.');
+  });
+});
+
+describe('ending use from the sign-in screen', () => {
+  it('lets someone off the roster, off the clock, end use of their unit from the card; signing out then waits only for what cannot reach the company', async () => {
+    // Blake's use of T-99 reached the company before it took his sign-in off its roster.
+    const ref = await joinedPhone({ role: 'none', sent: true, records: (me) => ({ opLogs: [t99InUse(me)] }) });
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    expect(byId('company-off-roster')).not.toHaveLength(0);
+    expect(byId('in-use-T-99')).not.toHaveLength(0);
+    // Signing out waits for the unit, and names no screen this one cannot reach.
+    await press('company-sign-out');
+    expect(byId('sign-out-blocker-unit_out')).not.toHaveLength(0);
+    expect(shown()).toContain('You still have T-99 checked out. Check it back in with End use, then sign out.');
+    expect(shownOn('company-sign-in')).not.toMatch(/Checklists|Company account/);
+
+    // End use, from the card.
+    await press('in-use-T-99');
+    expect(ref.getCurrentRoute()?.name).toBe('EndUse');
+    await type('end-meter', '104');
+    await press('parked-safe');
+    await press('end-use-submit');
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    expect(useStore.getState().opLogs[0]).toMatchObject({ endMeter: 104, parkedSafely: true });
+    expect(byId('in-use-T-99')).toHaveLength(0);
+
+    // The unit no longer holds signing out up. Its use, just ended, cannot reach the company from a sign-in
+    // off its roster, and signing out would lose it: it is listed, with Delete my account, which keeps it.
+    await press('company-sign-out');
+    expect(byId('sign-out-blocker-unit_out')).toHaveLength(0);
+    expect(byId('sign-out-blocker-not_member')).not.toHaveLength(0);
+    expect(byId('sign-out-record-opLog:op-t99')).not.toHaveLength(0);
+    expect(shown()).toContain('The company’s server takes nothing from a sign-in off its roster.');
+    await press('sign-out-delete');
+    expect(ref.getCurrentRoute()?.name).toBe('DeleteAccount');
+  });
+
+  it('lists the records the company turned down when the sign-in is off its roster', async () => {
+    const ref = await joinedPhone({ role: 'none', records: (me) => ({ shifts: [doneShift('sh-done', me)] }) });
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    const change = waiting()[0];
+    await act(async () => useStore.getState().holdRefused([{ key: change.key, rev: change.rev, reason: 'signed' }], PIT_A.id));
+    await press('company-sign-out');
+    expect(byId('sign-out-blocker-not_member')).not.toHaveLength(0);
+    expect(byId(`sign-out-record-${change.key}`)).not.toHaveLength(0);
+    expect(shown()).toContain('Already signed: a signed record is not changed.');
+  });
+});
+
+describe('Delete my account, signed out on the phone', () => {
+  it('deletes nothing once the company sign-in is signed out, and goes back to sign in to it again', async () => {
+    // Taken off the roster, with no account open here: Delete my account, from the sign-in screen.
+    const g = useStore.getState;
+    const ref = await joinedPhone({ role: 'none' });
+    await act(async () => g().signOut());
+    await settle();
+    await press('company-delete-account');
+    await settle();
+    expect(byId('delete-passcode')).not.toHaveLength(0);
+    // The sign-in is signed out meanwhile (a new passcode set on another phone, say).
+    await act(async () => server.mockTell(null));
+    await settle();
+    expect(byId('delete-blocker-signed_out')).not.toHaveLength(0);
+    expect(shown()).toContain('Sign in to it again to delete it. Nothing has been deleted.');
+    expect(byId('delete-confirm')).toHaveLength(0);
+    await press('delete-sign-in');
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    expect(byId('crew-code')).not.toHaveLength(0);
+    expect(g().toast).toBeNull();
+    expect(server.deleteAccountWithPasscode).not.toHaveBeenCalled();
+  });
+
+  it('does the same for an email sign-in on no company’s roster', async () => {
+    const g = useStore.getState;
+    g().resetDemo();
+    g().ensureSeeded();
+    server.myCompanies.mockResolvedValue({ ok: true, companies: [] });
+    server.deletionCheck.mockResolvedValue({ ok: true, companies: [] });
+    server.mockTell(AVERY);
+    const ref = nav.createNavigationContainerRef<ReactNavigation.RootParamList>();
+    root = createRoot();
+    const r = root;
+    await act(async () => {
+      stopLink = connection.watchConnection();
+      r.render(React.createElement(nav.NavigationContainer, { ref } as never, React.createElement(RootNavigator)));
+    });
+    await settle();
+    await press('company-delete-sign-in');
+    await settle();
+    await act(async () => server.mockTell(null));
+    await settle();
+    expect(byId('delete-blocker-signed_out')).not.toHaveLength(0);
+    expect(byId('delete-confirm')).toHaveLength(0);
+    await press('delete-sign-in');
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    expect(g().toast).toBeNull();
   });
 });

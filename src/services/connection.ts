@@ -109,11 +109,6 @@ export function watchConnection(): () => void {
       else if (ready) setSyncTransport(link.companyTransport(linked.id));
       else setSyncTransport(null, why);
     }
-    // A phone joined on an earlier build kept a passcode sign-in's hidden address: it is left behind here
-    // too, once the sign-in is signed in, so nothing on the phone can show it.
-    if (ready && account!.kind === 'passcode' && linked!.email) {
-      useStore.getState().confirmConnection({ userId: account!.id, email: '', role: linked!.role, name: linked!.name });
-    }
     if (linked && account && !sameAccount(linked, account)) verify(linked, account, false);
   };
 
@@ -245,7 +240,10 @@ async function signOutNow(): Promise<PhoneSignOut> {
     await disconnect();
     return { ok: true };
   }
+  // A round already under way answers syncNow, and sends nothing made since it started: the round queued
+  // after it does, and is waited for too.
   await syncNow();
+  await syncSettled();
   const round = useSyncStatus.getState();
   return signingOutWhile(async (): Promise<PhoneSignOut> => {
     const done = useStore.getState().forgetPhone(round);
@@ -288,7 +286,9 @@ export async function deleteMyServerAccount(secret: { password: string } | { pas
   }
   const linked = useStore.getState().connectedCompany;
   if (linked && linked.userId === account.id) {
+    // As for signing out: the round queued after one already under way is waited for too.
     await syncNow();
+    await syncSettled();
     // Only what a round could still send holds it up: what the server will not take, or cannot be sent
     // from a sign-in off the roster or for a company MineMuster has stopped for, stays on the phone.
     const status = useSyncStatus.getState();

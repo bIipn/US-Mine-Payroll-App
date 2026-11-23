@@ -144,8 +144,10 @@ export function RootNavigator() {
           ) : (
             <Stack.Screen name="Auth" component={AuthScreen} />
           )}
-          {/* A company sign-in with no account on this phone is deleted from there too: someone off the roster. */}
+          {/* A company sign-in with no account on this phone is deleted from there too: someone off the roster,
+              who also checks a unit they still have back in from there (End use), off the clock. */}
           {CAN_CONNECT && CompanySignInScreen ? <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} /> : null}
+          {CAN_CONNECT && CompanySignInScreen ? <Stack.Screen name="EndUse" component={EndUseScreen} /> : null}
         </Stack.Group>
       ) : view === 'clock_only' ? (
         <Stack.Group navigationKey="clock_only">

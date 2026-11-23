@@ -2,9 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 
 import { CircleCheck, LogIn, RotateCcw, UserPlus } from '../../components/icons';
+import { PASSCODE_BOX } from '../../components/passcodeBox';
 import { Button, Field, Notice, Segmented, Txt } from '../../components/ui';
 import { stateName } from '../../domain/company';
-import { PASSCODE_MAX, passcodeProblem } from '../../domain/passcode';
+import { passcodeProblem } from '../../domain/passcode';
 import { cleanText } from '../../domain/roster';
 import { checkJoinCode, checkJoinName, crewWords, normalJoinCode, spacedJoinCode, type CrewAnswer, type CrewFields } from '../../domain/serverAnswers';
 import { server } from '../../services/connection';
@@ -27,8 +28,6 @@ type Sent = 'sign_up' | 'sign_in' | 'reset';
 /** A supervisor's reset code: 6 digits. */
 const RESET_CODE = /^[0-9]{6}$/;
 const NOT_THE_SAME: Words = { title: 'The two passcodes are not the same', body: 'Type the same passcode in both boxes.', tone: 'warn' };
-/** A passcode box: the number pad, hidden as it is typed, and nothing a keyboard or password manager fills in. */
-const PASSCODE_BOX = { keyboardType: 'number-pad', secureTextEntry: true, autoComplete: 'off', autoCorrect: false, maxLength: PASSCODE_MAX } as const;
 /** Answers to ask again after, as they come from the network or the server rather than from what was typed. */
 const ASK_AGAIN: readonly CrewAnswer['kind'][] = ['busy', 'unreachable', 'server'];
 

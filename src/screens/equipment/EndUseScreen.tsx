@@ -18,6 +18,8 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   // A unit the company took out of the fleet while it was checked out here is kept until its use is ended.
   const unit = useStore((s) => s.equipment.find((e) => e.id === log?.equipmentId) ?? (log ? s.receiving?.gone[log.equipmentId] : undefined));
   const { endUse, showToast } = useStore.getState();
+  // A maintenance request is made in the app's full view: from the Clock alone, or the sign-in screen, there is none to open.
+  const canReport = navigation.getState?.()?.routeNames?.includes('MrfForm') ?? true;
 
   const [meter, setMeter] = useState('');
   const [fuel, setFuel] = useState('');
@@ -100,13 +102,15 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
         <StandardRefs cfr="56.14207" />
       </Panel>
 
-      <Button
-        testID="end-report"
-        label="Something is wrong with this unit"
-        icon={Wrench}
-        kind="quiet"
-        onPress={() => navigation.navigate('MrfForm', { equipmentId: unit.id })}
-      />
+      {canReport ? (
+        <Button
+          testID="end-report"
+          label="Something is wrong with this unit"
+          icon={Wrench}
+          kind="quiet"
+          onPress={() => navigation.navigate('MrfForm', { equipmentId: unit.id })}
+        />
+      ) : null}
     </Page>
   );
 }

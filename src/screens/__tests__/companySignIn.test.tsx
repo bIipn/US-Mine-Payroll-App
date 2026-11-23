@@ -115,7 +115,8 @@ const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Prom
 
 const { server, useServerAccount } = connection;
 const PIT_A: ServerCompany = { id: 'c-test-a', name: 'Test Pit A', role: 'employee', state: 'NV' };
-const SAM: ServerAccount = { id: 'u-sam', email: 'crew-0001@crew.example.test', kind: 'passcode' };
+/** Sam's passcode sign-in, as server.ts hands it over: a passcode account's hidden address never reaches the app. */
+const SAM: ServerAccount = { id: 'u-sam', email: '', kind: 'passcode' };
 const AVERY: ServerAccount = { id: 'u-avery', email: 'avery@example.test', kind: 'email' };
 const SESSION = { accessToken: 'a-1', refreshToken: 'r-1', expiresAt: 1_900_000_000, userId: SAM.id };
 const signedIn = (more: Partial<Extract<CrewAnswer, { kind: 'signed_in' }>> = {}): CrewAnswer => ({

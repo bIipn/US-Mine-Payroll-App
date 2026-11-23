@@ -199,8 +199,12 @@ export interface DeletionPlan {
   finishOnDashboard: boolean;
 }
 
-/** A unit still checked out, and where to check it back in: the start of what deleting or signing out says of it. */
-const checkedOutWords = (unit: string) => `You still have ${unit} checked out. End use on the Checklists screen`;
+/**
+ * A unit still checked out, and how to check it back in: the start of what deleting or signing out says of
+ * it. It names no screen: the app's full view has End use on the Clock and Checklists screens, and the
+ * company sign-in screen has it on its card, for someone taken off the roster.
+ */
+const checkedOutWords = (unit: string) => `You still have ${unit} checked out. Check it back in with End use`;
 
 /** The phone's company sign-in, signed out of MineMuster's server here, and where to sign in to it again. */
 const signedOutWords = (email: string | null) => `Your company sign-in${email ? `, ${email},` : ''} is signed out on this phone`;
@@ -441,6 +445,11 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
       blockers.push(CHECK_FAILED_BLOCKER);
     }
   }
+  // A company sign-in alone that is signed out here (a new passcode set on another phone, say): nothing on
+  // this phone can be deleted, and it is signed in to again first. Never "Your account is deleted" for it.
+  if (input.canConnect && !appAccount && signIn.kind === 'none') {
+    blockers.push({ kind: 'signed_out', title: signedOutWords(null), body: 'Sign in to it again to delete it. Nothing has been deleted.', action: 'sign_in' });
+  }
   const lastIn = serverToo ? companies.filter((c) => c.lastSupervisor) : [];
   if (lastIn.length) {
     // A company only people who left lately stop being closed: from when it may be.
@@ -599,7 +608,8 @@ export function signOutWarnings(input: Pick<SignOutInput, 'staleShift' | 'fmtDay
  * The question before signing out of a phone (Sign out, on More and on Company account): what happens to
  * the phone, and that signing back in needs signal. `connected` when the phone is joined to its company,
  * which empties it once everything has reached the company; a phone joined to none keeps what it holds.
- * `held` is the title over what holds it up, when it is refused.
+ * `held` is the title over what holds it up, when it is refused, and `failed` what is said when signing
+ * out failed outright.
  */
 export function signOutWords({ company, connected, keepsTime, hasRate }: { company: string; connected: boolean; keepsTime: boolean; hasRate: boolean }) {
   const theirs = company || 'your company';
@@ -613,6 +623,7 @@ export function signOutWords({ company, connected, keepsTime, hasRate }: { compa
     keep: 'Stay signed in',
     held: 'Not signed out yet',
     heldBody: 'Nothing has been taken off this phone.',
+    failed: 'Something went wrong while signing out. Try again.',
   };
 }
 

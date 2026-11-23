@@ -8,9 +8,8 @@ import { RateSheet } from '../../components/PayEstimate';
 import { Avatar, Button, Divider, Panel, Row, Sheet, Tag, Toggle, TopBar, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { APP_NAME, DEMO_MODE, SAMPLE_CREW } from '../../config';
-import { moreRowWords } from '../../domain/accountDeletion';
+import { moreRowWords, whoseSignIn } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
-import { notTakenWords } from '../../domain/receive';
 import { receiveWords, syncWords } from '../../domain/sync';
 import { deadlineWords } from '../../domain/time';
 import { CAN_CONNECT, disconnect, useServerAccount } from '../../services/connection';
@@ -21,6 +20,7 @@ import { SAMPLE_CREW_IDS } from '../../store/seed';
 import { openShiftOf, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
+import { NotTakenRow } from './NotTakenRow';
 import type { SignOutSheetProps } from './SignOutOfPhone';
 
 /**
@@ -106,9 +106,17 @@ export function MoreScreen() {
   // Clearing a device that keeps real records is a supervisor's to do: what has not reached the server is lost.
   const canClear = DEMO_MODE || (CAN_CONNECT && supervisor);
   // Every account can be deleted from here, but a made-up sample person's, which is reset instead. What goes
-  // with it is the sign-in's own secret: a crew member's passcode, or a password; none named for a company
-  // sign-in signed out here, which is not deleted from this phone.
-  const secret = !CAN_CONNECT || account?.passwordHash ? 'password' : server.account ? (server.account.kind === 'passcode' ? 'passcode' : 'password') : null;
+  // with it: the company sign-in's own secret when the deletion deletes that sign-in (a crew member's
+  // passcode, or a password), else the password of the account on this phone, if it has one.
+  const signIn = whoseSignIn({
+    canConnect: CAN_CONNECT,
+    linked,
+    standing: receiving ? { role: receiving.role, name: receiving.name } : null,
+    serverAccount: CAN_CONNECT ? (server.known ? server.account : undefined) : null,
+    me,
+    account: account ?? null,
+  });
+  const secret = signIn.kind === 'theirs' ? (signIn.passcode ? 'passcode' : 'password') : account?.passwordHash ? 'password' : null;
   const deleteRow = moreRowWords({ keepsTime: time, sample: SAMPLE_CREW_IDS.has(me.id), company: settings.company.name || linked?.name || '', secret });
   // A build that connects signs out of the phone, which waits until everything on it has reached the company.
   const connects = CAN_CONNECT && SignOutSheet != null;
@@ -314,26 +322,28 @@ const styles = StyleSheet.create({
   profile: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
 });
 
-/** What the company did not take from this phone's sign-in, each with why and what to do. */
+/**
+ * What the company did not take from this phone's sign-in, each with why and what to do, but the ones marked
+ * Done. Read as More is drawn, which follows the round.
+ */
 function NotTaken() {
-  const sync = useSyncStatus();
-  const receiving = useStore((s) => s.receiving);
-  const data = useStore((s) => s);
+  const held = useStore((s) => s.receiving?.held);
   const dismissHeld = useStore((s) => s.dismissHeld);
-  void sync.notTaken;
-  const items = notTakenChanges().filter((c) => !receiving?.held[c.key]?.seen);
+  const items = notTakenChanges().filter((c) => !held?.[c.key]?.seen);
   if (!items.length) return null;
   return (
     <Panel title="Not taken by the company" flush>
-      {items.map((c, i) => {
-        const { what, why } = notTakenWords(c, receiving?.held[c.key]?.reason ?? 'supervisor_only', data);
-        return (
-          <View key={c.key}>
-            {i > 0 ? <Divider inset={space.lg} /> : null}
-            <Row testID={`not-taken-${c.key}`} title={what} sub={why} subLines={4} right={<Button label="Done" kind="quiet" size="md" onPress={() => dismissHeld([c])} />} />
-          </View>
-        );
-      })}
+      {items.map((c, i) => (
+        <View key={c.key}>
+          {i > 0 ? <Divider inset={space.lg} /> : null}
+          <NotTakenRow
+            testID={`not-taken-${c.key}`}
+            change={c}
+            reason={held?.[c.key]?.reason ?? 'supervisor_only'}
+            right={<Button label="Done" kind="quiet" size="md" onPress={() => dismissHeld([c])} />}
+          />
+        </View>
+      ))}
     </Panel>
   );
 }

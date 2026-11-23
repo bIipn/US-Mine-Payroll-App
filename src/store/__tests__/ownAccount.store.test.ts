@@ -434,7 +434,7 @@ describe('forgetting the phone', () => {
 
     it('is refused while the person has a unit checked out', () => {
       const { g, round } = phoneWith({ opLogs: [leesUse()] });
-      const words = refused('End use first', 'You still have T-99 checked out. End use on the Checklists screen, then sign out.');
+      const words = refused('End use first', 'You still have T-99 checked out. Check it back in with End use, then sign out.');
       expect(g().forgetPhone()).toEqual(words);
       // The company takes T-99 out of the fleet meanwhile: the phone keeps it until its use is ended, and still waits.
       round(LEE, [removed('equipment', T99.id)]);

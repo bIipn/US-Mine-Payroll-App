@@ -627,6 +627,32 @@ describe('deleting the company sign-in from the phone', () => {
     stop();
   });
 
+  it('waits for a round under way, and the one after it, before it deletes', async () => {
+    const app = build(CONNECTS);
+    const pushes = fakeServer({ hold: true });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    useStore.getState().connectCompany(PIT_A, AVERY);
+    const stopSync = app.sync.startSync();
+    const stopLink = app.connection.watchConnection();
+    running = () => (stopLink(), stopSync());
+    await settle();
+    useStore.setState({ shifts: shiftsOf(1) });
+    void app.sync.syncNow();
+    await settle();
+    expect(pushes).toHaveLength(1);
+    // Made while that round was sending: the round after it sends it.
+    useStore.setState({ shifts: shiftsOf(2) });
+    deletedOk();
+    const going = app.connection.deleteMyServerAccount({ password: 'haulroad88' });
+    pushes[0].answer();
+    await settle();
+    expect(pushes).toHaveLength(2);
+    pushes[1].answer();
+    expect(await going).toEqual({ ok: true });
+    expect(mockInvoke).toHaveBeenCalledWith('delete-account', expect.objectContaining({ body: {} }));
+  });
+
   it('lets go of a sign-in the server deleted already, without asking it anything', async () => {
     const { app, useStore, stop } = await joinedPhone();
     await app.connection.forgetDeletedSignIn(AVERY.id);
@@ -733,6 +759,60 @@ describe('signing out of this phone', () => {
     expect(useStore.getState().shifts).toHaveLength(2);
   });
 
+  it('waits for a round under way, and the one after it, before it decides', async () => {
+    const app = build(CONNECTS);
+    const pushes = fakeServer({ hold: true });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    useStore.getState().connectCompany(PIT_A, AVERY);
+    const stopSync = app.sync.startSync();
+    const stopLink = app.connection.watchConnection();
+    running = () => (stopLink(), stopSync());
+    await settle();
+    expect(signedInName(useStore)).toBe('Avery Quill');
+    // A round is sending a record; another is made meanwhile, which the round after it sends.
+    useStore.setState({ shifts: shiftsOf(1) });
+    void app.sync.syncNow();
+    await settle();
+    expect(pushes).toHaveLength(1);
+    useStore.setState({ shifts: shiftsOf(2) });
+    const going = app.connection.signOutOfPhone();
+    pushes[0].answer();
+    await settle();
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1].keys).toEqual(['shift:sh-1']);
+    pushes[1].answer();
+    expect(await going).toEqual({ ok: true });
+    expect(useStore.getState()).toMatchObject({ session: null, shifts: [], connectedCompany: null });
+  });
+
+  it('on a phone joined to no company, closes the account open here and signs out of the server, and keeps what the phone holds', async () => {
+    const app = build(CONNECTS);
+    fakeServer({ companies: [] });
+    const { useStore } = app.store;
+    useStore.getState().ensureSeeded();
+    // An account made on this phone before it was ever joined, and two records made with it.
+    expect(useStore.getState().signUp({ firstName: 'Blake', lastName: 'Rook', email: 'blake@example.com', password: 'haulroad88' })).toEqual({ ok: true });
+    useStore.setState({ shifts: shiftsOf(2) });
+    const stopLink = app.connection.watchConnection();
+    running = stopLink;
+    await settle();
+    expect(app.connection.useServerAccount.getState().account).toEqual({ ...AVERY, kind: 'email' });
+    let signingOutThen: boolean | null = null;
+    mockSignOut.mockImplementationOnce(async () => {
+      signingOutThen = app.connection.useServerAccount.getState().signingOut;
+      return { error: null };
+    });
+
+    expect(await app.connection.signOutOfPhone()).toEqual({ ok: true });
+    expect(signingOutThen).toBe(true);
+    expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(useStore.getState().session).toBeNull();
+    expect(useStore.getState().accounts.map((a) => a.email)).toEqual(['blake@example.com']);
+    expect(useStore.getState().shifts).toHaveLength(2);
+    expect(app.connection.useServerAccount.getState()).toMatchObject({ account: null, signingOut: false });
+  });
+
   it('runs once for two taps', async () => {
     const { app } = await averysPhone();
     const [first, second] = [app.connection.signOutOfPhone(), app.connection.signOutOfPhone()];
@@ -781,21 +861,6 @@ describe('a crew member’s passcode sign-in', () => {
     const kept = useStore.persist.getOptions().partialize!(useStore.getState());
     expect(JSON.stringify(kept)).not.toContain(HIDDEN);
     expect(JSON.stringify(app.connection.useServerAccount.getState())).not.toContain(HIDDEN);
-  });
-
-  it('is forgotten by a phone joined before the app left it behind, once the sign-in is signed in here', async () => {
-    // Joined on an earlier build, which kept the hidden address with the company the phone sends to.
-    signedInAs(blakeUser);
-    const app = build(CONNECTS);
-    fakeServer({ companies: [{ ...PIT_A, role: 'employee' }] });
-    const { useStore } = app.store;
-    useStore.getState().ensureSeeded();
-    useStore.setState({ connectedCompany: { ...PIT_A, role: 'employee', userId: BLAKE.id, email: HIDDEN } });
-    const stopLink = app.connection.watchConnection();
-    running = stopLink;
-    await settle();
-    expect(useStore.getState().connectedCompany).toEqual({ ...PIT_A, role: 'employee', userId: BLAKE.id, email: '' });
-    expect(app.sync.useSyncStatus.getState()).toMatchObject({ server: true, trouble: null });
   });
 
   it('is deleted with its passcode only, and an email sign-in with its password only, saying so in plain words', async () => {
