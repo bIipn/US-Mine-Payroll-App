@@ -612,8 +612,8 @@ export const useStore = create<Store>()(
           if (!match.ok) return match;
           const { employee } = match;
           // On a connected phone, whose account it may hold goes by its company sign-in (accountHere).
-          const { connectedCompany, receiving, employees } = get();
-          const here = connectedCompany ? accountHere(employee, employees, receiving ?? { role: null, name: null }) : ({ ok: true } as const);
+          const { connectedCompany, employees } = get();
+          const here = connectedCompany ? accountHere(employee, employees, receivingHere() ?? { role: null, name: null, caughtUpAt: null }) : ({ ok: true } as const);
           if (!here.ok) return { ok: false, error: here.error };
           const { accounts } = get();
           if (accounts.some((a) => a.email === address)) {

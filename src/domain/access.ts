@@ -75,22 +75,24 @@ export function signInPerson(employees: readonly Employee[], standing: SignInSta
  * Whether this person may make their account on this phone, and anything to
  * tell them about it. `receiving` is null on a phone never connected, where
  * anyone on the roster may. On a phone joined to its company, only the person
- * its company sign-in is for (signInPerson), whatever the sign-in's role: one
- * person per phone. Signing in to the company was the proof, so a supervisor's
- * own account there needs no second password.
+ * its company sign-in is for, the one its account opens for (ownPersonHere),
+ * whatever the sign-in's role: one person per phone. Until the phone has read
+ * the company's records to the end its roster can be part of the company's,
+ * and a looser fit could stand in for that person, so no account is made yet,
+ * as before the company has said who the sign-in is. Signing in to the company
+ * was the proof, so a supervisor's own account there needs no second password.
  */
 export function accountHere(
   person: Employee,
   employees: readonly Employee[],
-  receiving: SignInStanding | null,
+  receiving: (SignInStanding & { caughtUpAt: number | null }) | null,
 ): { ok: true; note?: string } | { ok: false; error: string } {
   if (!receiving) return { ok: true };
-  if (receiving.role === null || !receiving.name) return { ok: false, error: NOT_HEARD };
-  if (receiving.role === 'none') return { ok: false, error: SIGN_IN_OFF_ROSTER };
-  const own = signInPerson(employees, receiving);
+  if (receiving.role !== 'none' && receiving.caughtUpAt == null) return { ok: false, error: NOT_HEARD };
+  const own = ownPersonHere(employees, receiving);
   if (!own.ok) return own;
   if (own.person.id !== person.id) {
-    return { ok: false, error: `This phone is joined with ${full(receiving.name)}’s company sign-in, so the account made here is theirs. Make yours on your own phone.` };
+    return { ok: false, error: `This phone is joined with ${full(own.person)}’s company sign-in, so the account made here is theirs. Make yours on your own phone.` };
   }
   const asCrew = (appRole: string, signInRole: string) =>
     `${full(person)} is ${appRole} in the app but ${signInRole} on the company’s sign-in roster, so this account works as crew here. Ask the office to set the role on the dashboard’s Roster page.`;

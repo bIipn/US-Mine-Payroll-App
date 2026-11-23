@@ -566,6 +566,22 @@ describe('signing out of a phone', () => {
     expect(signOutBlockers(out({ sync: { ...quiet, trouble: 'not_member' } })).blockers).toEqual([]);
   });
 
+  it('asks for the company sign-in again first when it is signed out on the phone, so what waits can go', () => {
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 2, trouble: 'signed_out' } })).blockers).toEqual([
+      {
+        kind: 'signed_out',
+        title: 'Your company sign-in is signed out on this phone',
+        body: 'Sign in to it on Company account first to send the 2 records waiting here, then sign out.',
+        action: 'sign_in',
+      },
+    ]);
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 1, trouble: 'signed_out' } })).blockers[0].body).toBe(
+      'Sign in to it on Company account first to send the record waiting here, then sign out.',
+    );
+    // With nothing waiting, being signed out holds nothing up.
+    expect(signOutBlockers(out({ sync: { ...quiet, trouble: 'signed_out' } })).blockers).toEqual([]);
+  });
+
   it('warns of an old shift with no clock-out, which only a supervisor can end now, as the deletion plan does', () => {
     const stale = shiftAt(Date.UTC(2026, 10, 17, 14));
     const words = 'Your shift of 2026-11-17 has no clock-out. It counts no hours until a supervisor sets its end.';

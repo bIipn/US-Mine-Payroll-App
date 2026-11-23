@@ -148,14 +148,15 @@ export type BlockerKind =
   | 'other_accounts'
   | 'not_read'
   | 'not_taken'
-  | 'not_member';
+  | 'not_member'
+  | 'signed_out';
 
 /** What stops the deletion for now, and the one thing to do about it. */
 export interface Blocker {
   kind: BlockerKind;
   title: string;
   body: string;
-  action?: 'clock' | 'send' | 'dashboard' | 'reset' | 'retry' | 'checklists' | 'delete';
+  action?: 'clock' | 'send' | 'dashboard' | 'reset' | 'retry' | 'checklists' | 'delete' | 'sign_in';
 }
 
 export interface DeletionPlan {
@@ -184,6 +185,10 @@ export interface DeletionPlan {
 
 /** A unit still checked out, and where to check it back in: the start of what deleting or signing out says of it. */
 const checkedOutWords = (unit: string) => `You still have ${unit} checked out. End use on the Checklists screen`;
+
+/** The phone's company sign-in, signed out of MineMuster's server here, and where to sign in to it again. */
+const signedOutWords = (email: string | null) => `Your company sign-in${email ? `, ${email},` : ''} is signed out on this phone`;
+const SIGN_IN_AGAIN = 'Sign in to it on Company account first';
 
 /** An old shift never clocked out: only a supervisor can set its end now. */
 const staleShiftWords = (stale: Shift, fmtDay: (ms: number) => string) =>
@@ -431,7 +436,7 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
   }
   if (signIn.kind === 'theirs_signed_out' && appAccount) {
     warnings.push(
-      `Your company sign-in${signIn.email ? `, ${signIn.email},` : ''} is signed out on this phone, so it is not deleted here. Sign in to it on Company account first to delete it too, or delete it at ${ACCOUNT_PAGE_WORDS}.`,
+      `${signedOutWords(signIn.email)}, so it is not deleted here. ${SIGN_IN_AGAIN} to delete it too, or delete it at ${ACCOUNT_PAGE_WORDS}.`,
     );
   }
   if (signIn.kind === 'other_email' && appAccount) {
@@ -464,7 +469,8 @@ export type SignOutInput = Pick<DeletionInput, 'now' | 'company' | 'openShift' |
  * this phone can close; nobody else's account on it; the company's records read to the end; nothing
  * waiting; and nothing the company turned down (`notTaken`, and what the server will not take as it is,
  * `stuck`). From a sign-in off the company's roster nothing waiting can go, so the person deletes their
- * account instead. An old shift never clocked out, which only a supervisor can end now, is a warning.
+ * account instead; with the sign-in signed out on the phone nothing goes until they sign in to it again.
+ * An old shift never clocked out, which only a supervisor can end now, is a warning.
  */
 export function signOutBlockers(input: SignOutInput): { blockers: Blocker[]; warnings: string[] } {
   const { company, sync } = input;
@@ -503,7 +509,15 @@ export function signOutBlockers(input: SignOutInput): { blockers: Blocker[]; war
       });
     }
   } else {
-    if (toSend > 0) {
+    if (toSend > 0 && sync.trouble === 'signed_out') {
+      // Nothing goes until the company sign-in is signed in again.
+      blockers.push({
+        kind: 'signed_out',
+        title: signedOutWords(null),
+        body: `${SIGN_IN_AGAIN} to send ${toSend === 1 ? 'the record' : `the ${toSend} records`} waiting here, then sign out.`,
+        action: 'sign_in',
+      });
+    } else if (toSend > 0) {
       const waiting = waitingBlocker(toSend, company, sync.online, 'this phone is signed out');
       blockers.push(
         sync.trouble === 'closed'

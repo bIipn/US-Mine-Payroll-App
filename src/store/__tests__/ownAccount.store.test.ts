@@ -348,11 +348,18 @@ describe('forgetting the phone', () => {
 
   it('is one person’s: on a phone joined with Sam Ortiz’s sign-in, Sam Ortiz Jr neither makes an account nor signs it out', () => {
     const sams = joinedPhone({ id: 'u-sam', email: 'sam@example.test' });
-    sams.round({ role: 'employee', name: { firstName: 'Sam', lastName: 'Ortiz' } }, [settings(), person('emp-sam', 'Sam', 'Ortiz'), person('emp-sam-jr', 'Sam', 'Ortiz Jr')]);
-    // The phone opened Sam's own account, never the looser fit's.
+    const jrSignsUp = () => sams.g().signUp({ firstName: 'Sam', lastName: 'Ortiz Jr', email: 'samjr@example.test', password: 'haulroad88' });
+    // During the first read only Sam Ortiz Jr's row has come: no account is made on that looser fit.
+    sams.g().applyStanding(sams.ctx(), { role: 'employee', name: { firstName: 'Sam', lastName: 'Ortiz' } });
+    sams.g().applyReceived(sams.ctx(), [settings(), person('emp-sam-jr', 'Sam', 'Ortiz Jr')]);
+    expect(jrSignsUp()).toEqual({ ok: false, error: 'This phone has not heard from the company yet. Try again once it has had signal.' });
+    expect(sams.g().session).toBeNull();
+    // The read goes on to its end, with Sam Ortiz's row: the phone opens Sam's own account, never the looser fit's.
+    sams.g().applyReceived(sams.ctx(), [person('emp-sam', 'Sam', 'Ortiz')]);
+    sams.g().applyReceived(sams.ctx(), []);
     expect(sams.g().session?.employeeId).toBe('emp-sam');
     sams.g().signOut();
-    expect(sams.g().signUp({ firstName: 'Sam', lastName: 'Ortiz Jr', email: 'samjr@example.test', password: 'haulroad88' })).toEqual({
+    expect(jrSignsUp()).toEqual({
       ok: false,
       error: 'This phone is joined with Sam Ortiz’s company sign-in, so the account made here is theirs. Make yours on your own phone.',
     });
@@ -361,6 +368,15 @@ describe('forgetting the phone', () => {
     sams.useStore.setState({ accounts: [...sams.g().accounts, jrs], session: { accountId: jrs.id, employeeId: 'emp-sam-jr' } });
     expect(sams.g().forgetPhone()).toEqual({ ok: false, error: 'This phone is joined with Sam Ortiz’s company sign-in. Only they can sign this phone out.' });
     expect(sams.g().accounts).toContainEqual(jrs);
+  });
+
+  it('asks for the company sign-in again first when it is signed out, so what waits can reach the company', () => {
+    const { useStore, g } = leesPhone();
+    useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10))] });
+    expect(g().forgetPhone({ online: true, stuck: 0, trouble: 'signed_out' })).toEqual(
+      refused('Your company sign-in is signed out on this phone', 'Sign in to it on Company account first to send the record waiting here, then sign out.'),
+    );
+    expect(g().shifts).toHaveLength(1);
   });
 
   // Phones do not receive time records: a shift or a use left open here would stay open on the company's
