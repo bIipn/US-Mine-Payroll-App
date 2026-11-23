@@ -67,19 +67,21 @@ export function AccountView({ email, check, typed, password, busy, problem, onRe
   const plan = companies ? accountPlan(email, companies) : null;
   const ready = canSubmit(check, email, typed, password);
 
+  // Every button that names a company may wrap (btn-wrap), as the invitations page's do: a name of 24 characters
+  // already took the close button past a phone's width.
   const action = (step: CompanyStep) => {
     const { id, name } = step.company;
     switch (step.kind) {
       case 'hand_over':
       case 'wait':
-        return <Button small onClick={() => onOpen(id, '/roster')}>Open {name}’s Roster page</Button>;
+        return <Button small className="btn-wrap" onClick={() => onOpen(id, '/roster')}>Open {name}’s Roster page</Button>;
       case 'cancel_first':
-        return <Button small onClick={() => onOpen(id, '/billing')}>Open {name}’s Billing</Button>;
+        return <Button small className="btn-wrap" onClick={() => onOpen(id, '/billing')}>Open {name}’s Billing</Button>;
       case 'close':
         return (
           <div className="stack" style={{ gap: '0.5rem' }}>
             <div>
-              <Button small kind="quiet" style={{ paddingInline: 0 }} onClick={() => onOpen(id, '/exports')}>Open {name}’s Exports</Button>
+              <Button small kind="quiet" className="btn-wrap" style={{ paddingInline: 0 }} onClick={() => onOpen(id, '/exports')}>Open {name}’s Exports</Button>
             </div>
             <TextField label={`Type ${name} to close it`} value={typed[id] ?? ''} onChange={(v) => onType(id, v)} autoComplete="off" hint="Capitals and spacing do not matter." />
           </div>
@@ -163,7 +165,7 @@ export function AccountView({ email, check, typed, password, busy, problem, onRe
                 />
                 {problem ? <p className="field-error" role="alert">{problem}</p> : null}
                 <div className="row">
-                  <Button type="submit" kind="danger" busy={busy} disabled={!ready || busy}>
+                  <Button type="submit" kind="danger" className="btn-wrap" busy={busy} disabled={!ready || busy}>
                     {plan.closes.length ? `Close ${plan.closes.map((c) => c.name).join(' and ')} and delete my account` : 'Delete my account'}
                   </Button>
                 </div>

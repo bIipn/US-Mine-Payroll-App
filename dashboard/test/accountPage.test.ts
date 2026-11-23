@@ -145,6 +145,18 @@ describe('the page once the server has answered', () => {
     expect(running.html).not.toMatch(/type="password"/);
   });
 
+  it('lets every button that names a company wrap, so a long name fits a phone (btn-wrap, as on the invitations page)', () => {
+    const name = 'Test Pit A Crushed Stone';
+    const named = (over: Record<string, unknown>) => view([company({ name, lastSupervisor: true, ...over })]).html;
+    const wraps = (html: string, label: string) => new RegExp(`<button[^>]*class="[^"]*\\bbtn-wrap\\b[^"]*"[^>]*>${label}</button>`).test(html);
+    expect(wraps(named({ successors: [{ rosterId: 'r-lee', firstName: 'Lee', lastName: 'Park' }] }), `Open ${name}’s Roster page`)).toBe(true);
+    expect(wraps(named({ closeFrom: '2026-12-20T18:00:00Z' }), `Open ${name}’s Roster page`)).toBe(true);
+    expect(wraps(named({ canClose: true, running: 1 }), `Open ${name}’s Billing`)).toBe(true);
+    const closing = named({ canClose: true });
+    expect(wraps(closing, `Open ${name}’s Exports`)).toBe(true);
+    expect(wraps(closing, `Close ${name} and delete my account`)).toBe(true);
+  });
+
   it('closes a company nobody else can take over only with its name typed and the password', () => {
     const closing = [company({ lastSupervisor: true, canClose: true })];
     const { html, text } = view(closing);
