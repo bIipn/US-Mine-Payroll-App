@@ -109,14 +109,11 @@ const PIT_B = { id: 'c-b', name: 'Test Pit B', role: 'supervisor' as const };
 const sessionOf = (user: { id: string; email: string }) => ({ access_token: 'a', refresh_token: 'r', user });
 const signedInAs = (user: { id: string; email: string } | null) =>
   mockGetSession.mockResolvedValue({ data: { session: user ? sessionOf(user) : null }, error: null });
-/**
- * The company has answered who this phone's company sign-in is: Avery, a supervisor. Accounts on a
- * connected phone, and a supervisor's powers there, go by that answer.
- */
-function answered(useStore: Loaded['store']['useStore']) {
-  const state = useStore.getState();
-  const receiving = state.ensureReceiving()!;
-  state.applyStanding({ company: PIT_A.id, account: AVERY.id, epoch: receiving.epoch }, { role: 'supervisor', name: { firstName: 'Avery', lastName: 'Quill' } });
+/** Who is signed in to the app on this phone: on a phone joined to its company, the person its sign-in is for, opened by a round. */
+function signedInName(useStore: Loaded['store']['useStore']) {
+  const { employees, session } = useStore.getState();
+  const me = employees.find((e) => e.id === session?.employeeId);
+  return me ? `${me.firstName} ${me.lastName}` : null;
 }
 /** A boundary on the made-up pit, so its crew can clock in: with none set, nobody can. */
 function setSite(useStore: Loaded['store']['useStore']) {
@@ -289,15 +286,16 @@ describe('a build that connects', () => {
     expect(mockSignOut).toHaveBeenCalledWith({ scope: 'local' });
 
     // Connected again, then the device is cleared by a supervisor: it forgets the company and stops sending.
+    // With nobody signed in to the app nobody may clear it. The round opens the account of the person the
+    // phone's sign-in is for by itself: Avery's own, a supervisor's.
+    useStore.getState().signOut();
     signedInAs(AVERY);
     mockAuthEvent('SIGNED_IN', sessionOf(AVERY));
     useStore.getState().connectCompany(PIT_A, AVERY);
+    expect(useStore.getState().clearDevice()).toMatchObject({ ok: false });
     await settle();
     expect(status().server).toBe(true);
-    expect(useStore.getState().clearDevice()).toMatchObject({ ok: false });
-    answered(useStore);
-    // Avery's own account on the phone joined with Avery's sign-in, its password checked by the server.
-    useStore.getState().signUp({ firstName: 'Avery', lastName: 'Quill', email: 'avery@example.com', password: 'haulroad88', companyPasswordChecked: true });
+    expect(signedInName(useStore)).toBe('Avery Quill');
     expect(useStore.getState().clearDevice()).toEqual({ ok: true });
     expect(useStore.getState().connectedCompany).toBeNull();
     expect(status().server).toBe(false);
@@ -322,8 +320,8 @@ describe('a build that connects', () => {
     const stop = app.connection.watchConnection();
     await settle();
     expect(app.sync.useSyncStatus.getState().waiting).toBe(0);
-    answered(useStore);
-    useStore.getState().signUp({ firstName: 'Blake', lastName: 'Rook', email: 'blake@example.com', password: 'haulroad88' });
+    // The round opened the account of the person the phone's sign-in is for: Avery's own.
+    expect(signedInName(useStore)).toBe('Avery Quill');
     useStore.getState().clockIn({ lat: 1, lng: 1, accuracyM: 6, distanceM: 10, inside: true, source: 'gps' });
     // Straight away, not after the few seconds the send waits for.
     expect(app.sync.useSyncStatus.getState().waiting).toBe(1);
@@ -348,8 +346,8 @@ describe('a build that connects', () => {
     mockAuthEvent('SIGNED_OUT', null);
     await settle();
     expect(app.connection.useServerAccount.getState().account).toBeNull();
-    answered(useStore);
-    useStore.getState().signUp({ firstName: 'Blake', lastName: 'Rook', email: 'blake@example.com', password: 'haulroad88' });
+    // Signed out of the server is not signed out of the app: the account the round opened, Avery's own, stays open.
+    expect(signedInName(useStore)).toBe('Avery Quill');
     useStore.getState().clockIn({ lat: 1, lng: 1, accuracyM: 6, distanceM: 10, inside: true, source: 'gps' });
     await new Promise((r) => setTimeout(r, 3_200));
     const status = app.sync.useSyncStatus.getState();

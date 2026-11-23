@@ -3,14 +3,15 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { accountHere, offTheRosterHere, supervisorHere } from '../domain/access';
+import { accountHere, offTheRosterHere, ownPersonHere, signInIsTheirs, supervisorHere } from '../domain/access';
+import { sendable } from '../domain/accountDeletion';
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, withoutUnit, type UnitInput } from '../domain/fleet';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
-import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced } from '../domain/sync';
+import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced, type SyncStatus } from '../domain/sync';
 import { addedPerson, cleanText, findOnRoster, parsePersonName, payrollIdProblem, sameName, withBuildRoster, type PersonName, type RosterEntry } from '../domain/roster';
 import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from '../domain/site';
 import { checklistFor, findItem, inspectionResult, isHazard, signedAnswers } from '../domain/templates';
@@ -122,8 +123,9 @@ export interface SignUpInput {
   email: string;
   password: string;
   /**
-   * On a phone joined with a supervisor's company sign-in: the server has just
-   * confirmed that sign-in's password, which a supervisor's own account needs.
+   * No longer read. On a phone joined to its company only the person its sign-in is for has an account,
+   * and signing in to the company was the proof, so a supervisor's own needs no second password
+   * (accountHere). The sign-in screen stops sending it when its connecting branch goes.
    */
   companyPasswordChecked?: boolean;
 }
@@ -228,7 +230,25 @@ interface Actions {
   signInDemo: (role: Role) => Result;
   /** Preview only: open the app as the person the build is made for, with no account to set up first. */
   openAsOwner: (owner?: PersonName | null) => Result;
+  /**
+   * One person per phone. On a phone joined to its company with nobody signed in, open the account of
+   * the person its company sign-in is for (ownPersonHere), made here if they have none: no email and no
+   * password, since signing in to the company was the proof. A round runs it after each of its reads
+   * (applyStanding, applyReceived), so the account opens by itself once the company's settings and
+   * roster are in. Asked again for the person already signed in, it changes nothing.
+   */
+  openOwnAccount: () => Result;
   signOut: () => void;
+  /**
+   * One person per phone: the person whose own company sign-in this phone has signs it out, and it is
+   * emptied the way clearDevice empties it, to start as the build does. Only on a phone joined to its
+   * company, and only once nothing on it would be lost: the phone has read the company's records to the
+   * end, and a round could send nothing more of what waits on it (`sendable`). `round` is what only the
+   * round knows (useSyncStatus): what the server will not take as it is, and why nothing can go now.
+   * Left out, everything waiting holds it up. What the company turned down (receiving.held) never does.
+   * Signing out of the company's server is connection.ts's.
+   */
+  forgetPhone: (round?: Pick<SyncStatus, 'stuck' | 'trouble'>) => Result;
 
   /**
    * Where the phone was, or why it gave no location. With no boundary set it is
@@ -495,6 +515,20 @@ export const useStore = create<Store>()(
         if (lunch && now < lunchEndAt(lunch)) return { ok: false, error: `You are at lunch until ${fmtTime(lunchEndAt(lunch))}. Clock out after that, then delete your account.` };
         return { ok: false, error: 'You are on the clock. Clock out, then delete your account.' };
       };
+      /** What this phone holds that its company does not, sorted as a round sorts it on a phone joined to a company (sortedChanges). */
+      const sortedHere = (r: Receiving) => {
+        const state = get();
+        return sortedChanges(state, state.synced, SAMPLE_CREW_IDS, { connected: true, role: r.role, caughtUp: r.caughtUpAt != null, unreadable: r.unreadable, held: r.held });
+      };
+      /** What the phone knows of receiving from the company it is connected to: none while it is not, or while what it keeps is another company's. */
+      const receivingHere = () => {
+        const { connectedCompany, receiving } = get();
+        return connectedCompany && receiving?.company === connectedCompany.id ? receiving : null;
+      };
+      /** After each read of a round: a phone joined to its company with nobody signed in opens its own person's account, once it can. */
+      const openWhenReady = () => {
+        if (!get().session) get().openOwnAccount();
+      };
       /**
        * Whether everything this phone holds has reached the company it was joined to, by the sort the
        * round sends by (sortedChanges): nothing waiting, and nothing the company would not take from its
@@ -505,7 +539,7 @@ export const useStore = create<Store>()(
         const r = state.receiving;
         // Until the phone has read the company's records to the end, a round leaves its new units, sheets and settings out of what it would send.
         if (!state.syncedWith || !r || r.company !== state.syncedWith || r.caughtUpAt == null) return false;
-        const sorted = sortedChanges(state, state.synced, SAMPLE_CREW_IDS, { connected: true, role: r.role, caughtUp: r.caughtUpAt != null, unreadable: r.unreadable, held: r.held });
+        const sorted = sortedHere(r);
         return sorted.now.length === 0 && sorted.afterReceive.length === 0 && sorted.notTaken.length === 0;
       };
       /** A request is worked by a supervisor or by the person it is assigned to. */
@@ -568,7 +602,7 @@ export const useStore = create<Store>()(
         },
 
         // ---- Accounts ----------------------------------------------------------------
-        signUp: ({ firstName, lastName, email, password, companyPasswordChecked }) => {
+        signUp: ({ firstName, lastName, email, password }) => {
           if (!clean(firstName) || !clean(lastName)) return { ok: false, error: 'Enter your first and last name.' };
           const address = email.trim().toLowerCase();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) return { ok: false, error: 'Enter a valid email address.' };
@@ -578,9 +612,7 @@ export const useStore = create<Store>()(
           const { employee } = match;
           // On a connected phone, whose account it may hold goes by its company sign-in (accountHere).
           const { connectedCompany, receiving } = get();
-          const here = connectedCompany
-            ? accountHere(employee, receiving ?? { role: null, name: null }, !!companyPasswordChecked, connectedCompany.email ?? null)
-            : ({ ok: true } as const);
+          const here = connectedCompany ? accountHere(employee, receiving ?? { role: null, name: null }) : ({ ok: true } as const);
           if (!here.ok) return { ok: false, error: here.error };
           const { accounts } = get();
           if (accounts.some((a) => a.email === address)) {
@@ -699,7 +731,56 @@ export const useStore = create<Store>()(
           return { ok: true };
         },
 
+        openOwnAccount: () => {
+          const { connectedCompany, session, employees, accounts } = get();
+          if (!connectedCompany) return { ok: false, error: 'This phone is not joined to a company.' };
+          const own = ownPersonHere(employees, receivingHere());
+          if (!own.ok) return own;
+          const { person } = own;
+          // Open already: for its own person nothing changes, and nobody's account is opened over someone else's.
+          if (session) return session.employeeId === person.id ? { ok: true } : { ok: false, error: 'Someone else is signed in on this phone.' };
+          const account: Account = accounts.find((a) => a.employeeId === person.id) ?? {
+            id: uid('acct_'),
+            employeeId: person.id,
+            email: '',
+            provider: 'company',
+            createdAt: Date.now(),
+          };
+          set({ ...(accounts.includes(account) ? null : { accounts: [...accounts, account] }), session: { accountId: account.id, employeeId: account.employeeId } });
+          return { ok: true };
+        },
+
         signOut: () => set({ session: null }),
+
+        forgetPhone: (round = { stuck: 0, trouble: null }) => {
+          const { connectedCompany, session, employees } = get();
+          if (!connectedCompany) return { ok: false, error: 'This phone is not joined to a company.' };
+          if (!session) return signedOut;
+          const r = receivingHere();
+          if (!r?.name) return { ok: false, error: 'This phone has not heard from the company yet. Try again once it has had signal.' };
+          const me = employees.find((e) => e.id === session.employeeId);
+          if (!me || !signInIsTheirs(me, r)) {
+            return { ok: false, error: `This phone is joined with ${r.name.firstName} ${r.name.lastName}’s company sign-in. Only they can sign this phone out.` };
+          }
+          // Until the phone has read the company's records to the end, a round leaves its new units, sheets and settings out of what it would send.
+          if (r.caughtUpAt == null) {
+            return {
+              ok: false,
+              error: 'This phone has not got the company’s records yet, so it cannot tell that everything on it has reached the company. Try again once it has had signal.',
+            };
+          }
+          // What waits is the phone's own count, made now; only what the server will not take as it is, and why
+          // nothing can go, are the round's. The company's turn-downs are not waiting (sortedChanges' notTaken).
+          const sorted = sortedHere(r);
+          const left = sendable({ waiting: sorted.now.length + sorted.afterReceive.length, stuck: round.stuck, trouble: round.trouble });
+          if (left > 0) {
+            const records = left === 1 ? '1 record has' : `${left} records have`;
+            return { ok: false, error: `${records} not reached ${connectedCompany.name} yet, so this phone stays signed in. Try again once ${left === 1 ? 'it has' : 'they have'} gone.` };
+          }
+          // The clearDevice path, open to the person here because nothing on the phone is lost.
+          get().resetDemo();
+          return { ok: true };
+        },
 
         // ---- Time clock ----------------------------------------------------------------
         clockIn: (where) => {
@@ -1352,6 +1433,7 @@ export const useStore = create<Store>()(
           if (!r) return false;
           const merged = mergeRows({ ...get(), receiving: r }, rows, Date.now());
           set(merged);
+          openWhenReady();
           return true;
         },
 
@@ -1360,6 +1442,7 @@ export const useStore = create<Store>()(
           if (!r) return false;
           const next = standingChange({ employees: get().employees, receiving: r }, standing);
           set({ employees: next.employees as Employee[], receiving: next.receiving });
+          openWhenReady();
           return true;
         },
 

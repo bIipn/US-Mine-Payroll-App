@@ -15,7 +15,12 @@ export interface Employee {
   payrollId?: string;
 }
 
-export type AuthProvider = 'password' | 'apple' | 'google' | 'microsoft';
+/**
+ * How an account on this phone is opened: with an email and a password made on it ('password'), a
+ * name typed for Apple, Google or Microsoft (previews only), or, on a phone joined to its company, by
+ * the phone's own company sign-in ('company'): one person per phone, with no email and no password.
+ */
+export type AuthProvider = 'password' | 'apple' | 'google' | 'microsoft' | 'company';
 
 export interface Account {
   id: string;

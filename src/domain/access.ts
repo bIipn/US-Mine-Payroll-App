@@ -3,14 +3,16 @@ import type { Employee, Role } from './types';
 
 /**
  * Who has a supervisor's powers on a phone, who may make an account on it,
- * and who sees what of its company account. Pure, for the store, the screens
- * and their tests.
+ * whose account a phone joined to its company opens, and who sees what of its
+ * company account. Pure, for the store, the screens and their tests.
  *
  * On a phone never connected to a company, the person's record decides, as it
  * always has. On a phone connected to one, the server goes by the phone's
  * company sign-in, so the phone does too: a person has a supervisor's powers
  * there only when their record says supervisor, the sign-in is a
- * supervisor's, and the sign-in is theirs.
+ * supervisor's, and the sign-in is theirs. One person per phone: a phone joined
+ * to its company is for the person whose sign-in it has, and holds nobody
+ * else's account.
  */
 
 /** Who the phone's company sign-in is to the company, as the round's standing read last found. */
@@ -25,6 +27,8 @@ const fits = (person: PersonName, name: PersonName | null): boolean => {
   return !!hit && 'person' in hit;
 };
 const full = (p: PersonName) => `${p.firstName} ${p.lastName}`;
+const NOT_HEARD = 'This phone has not heard from the company yet. Try again once it has had signal.';
+const SIGN_IN_OFF_ROSTER = 'This phone’s company sign-in is not on the company’s roster any more. See your supervisor.';
 
 /** Whether the phone's company sign-in is this person's own, by the name the company has for it. */
 export function signInIsTheirs(person: PersonName, standing: SignInStanding | null): boolean {
@@ -49,43 +53,54 @@ export function supervisorHere(state: {
 /**
  * Whether this person may make their account on this phone, and anything to
  * tell them about it. `receiving` is null on a phone never connected, where
- * anyone on the roster may. On a phone joined with a crew sign-in, only that
- * sign-in's person. On one joined with a supervisor's sign-in (a shared phone)
- * any crew member, and a supervisor only as the sign-in's own person, with its
- * password checked by the server (`passwordChecked`).
+ * anyone on the roster may. On a phone joined to its company, only the person
+ * its company sign-in is for, whatever the sign-in's role: one person per
+ * phone. Signing in to the company was the proof, so a supervisor's own
+ * account there needs no second password.
  */
-export function accountHere(
-  person: Employee,
-  receiving: SignInStanding | null,
-  passwordChecked: boolean,
-  email: string | null,
-): { ok: true; note?: string } | { ok: false; error: string; needsPassword?: true } {
+export function accountHere(person: Employee, receiving: SignInStanding | null): { ok: true; note?: string } | { ok: false; error: string } {
   if (!receiving) return { ok: true };
-  if (receiving.role === null || !receiving.name) return { ok: false, error: 'This phone has not heard from the company yet. Try again once it has had signal.' };
-  if (receiving.role === 'none') return { ok: false, error: 'This phone’s company sign-in is not on the company’s roster any more. See your supervisor.' };
-  const theirs = fits(person, receiving.name);
+  if (receiving.role === null || !receiving.name) return { ok: false, error: NOT_HEARD };
+  if (receiving.role === 'none') return { ok: false, error: SIGN_IN_OFF_ROSTER };
+  if (!fits(person, receiving.name)) {
+    return { ok: false, error: `This phone is joined with ${full(receiving.name)}’s company sign-in, so the account made here is theirs. Make yours on your own phone.` };
+  }
   const asCrew = (appRole: string, signInRole: string) =>
     `${full(person)} is ${appRole} in the app but ${signInRole} on the company’s sign-in roster, so this account works as crew here. Ask the office to set the role on the dashboard’s Roster page.`;
-  if (receiving.role === 'employee') {
-    if (!theirs) {
-      return {
-        ok: false,
-        error: `This phone is joined with ${full(receiving.name)}’s company sign-in, so the account made here is theirs. Make yours on your own phone, or on a phone joined with a supervisor’s sign-in.`,
-      };
-    }
-    return person.role === 'supervisor' ? { ok: true, note: asCrew('a supervisor', 'crew') } : { ok: true };
-  }
-  // A phone joined with a supervisor's sign-in.
-  if (person.role !== 'supervisor') return theirs ? { ok: true, note: asCrew('crew', 'a supervisor') } : { ok: true };
-  if (!theirs) return { ok: false, error: `${full(person)} makes their account on a phone joined with their own company sign-in.` };
-  if (!passwordChecked) {
-    return {
-      ok: false,
-      needsPassword: true,
-      error: `Enter the password of this phone’s company sign-in${email ? `, ${email}` : ''}. It is checked once with the company’s server to show this is you, and not kept on this phone.`,
-    };
-  }
+  if (receiving.role === 'employee' && person.role === 'supervisor') return { ok: true, note: asCrew('a supervisor', 'crew') };
+  if (receiving.role === 'supervisor' && person.role !== 'supervisor') return { ok: true, note: asCrew('crew', 'a supervisor') };
   return { ok: true };
+}
+
+/**
+ * The person a phone joined to its company is for, whose account it opens by
+ * itself (openOwnAccount in the store): the one person on the roster its
+ * company sign-in's name is, matched as every typed name is (findOnRoster, so
+ * the person signInIsTheirs holds it to be), and on the active roster. The
+ * name is matched against everyone, active or not, so a sign-in whose own
+ * person is off the roster never opens someone else its name only loosely
+ * fits. Only once the phone has read the company's records to the end: they
+ * come in the order the company wrote them, not the settings first, so only
+ * then is the company's time clock setting in with the roster, and a company
+ * with the clock off opens on the checklists. Nobody before the company has
+ * said who the sign-in is, once it is off the company's roster, or when the
+ * name is nobody here or more than one person.
+ */
+export function ownPersonHere(
+  employees: readonly Employee[],
+  receiving: (SignInStanding & { caughtUpAt: number | null }) | null,
+): { ok: true; person: Employee } | { ok: false; error: string } {
+  if (!receiving || receiving.role === null || !receiving.name) return { ok: false, error: NOT_HEARD };
+  if (receiving.role === 'none') return { ok: false, error: SIGN_IN_OFF_ROSTER };
+  if (receiving.caughtUpAt == null) return { ok: false, error: 'This phone has not got the company’s roster yet. Your account opens by itself once it has.' };
+  const { name } = receiving;
+  const hit = findOnRoster([...employees], name.firstName, name.lastName);
+  if (!hit) return { ok: false, error: `${full(name)} is not on the company’s roster on this phone. See your supervisor.` };
+  if ('several' in hit) {
+    return { ok: false, error: `More than one person on the company’s roster goes by ${full(name)}. Ask the office to tell them apart on the dashboard’s Roster page.` };
+  }
+  if (!hit.person.active) return { ok: false, error: `${full(name)} is no longer on the company’s active roster. See your supervisor.` };
+  return { ok: true, person: hit.person };
 }
 
 /**

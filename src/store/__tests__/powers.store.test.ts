@@ -2,8 +2,8 @@
 // only; the fleet, the sheets and the settings only from a supervisor's company sign-in once the
 // company's records have come; a supervisor's powers need the record, a supervisor's sign-in and
 // the sign-in to be theirs; a clock-in is refused to someone off the roster or on a phone whose
-// sign-in is no longer on it; and an account is made only for the person a crew sign-in is for.
-// A phone never connected keeps every rule it had. The sample crew is made up.
+// sign-in is no longer on it; and an account is made only for the person the phone's sign-in is for,
+// crew or supervisor. A phone never connected keeps every rule it had. The sample crew is made up.
 import { toGeoStamp } from '../../domain/geofence';
 import { SAMPLE_SITE } from '../../domain/site';
 import type { Role } from '../../domain/types';
@@ -143,15 +143,18 @@ describe('making an account on a connected phone', () => {
     joined('employee', jordan);
     expect(s().signUp(input(casey, 'casey@example.test'))).toEqual({
       ok: false,
-      error: 'This phone is joined with Jordan Rivera’s company sign-in, so the account made here is theirs. Make yours on your own phone, or on a phone joined with a supervisor’s sign-in.',
+      error: 'This phone is joined with Jordan Rivera’s company sign-in, so the account made here is theirs. Make yours on your own phone.',
     });
     expect(s().signUp(input(jordan, 'jordan@example.test'))).toEqual({ ok: true });
   });
 
-  it('for a supervisor, needs the phone’s own supervisor sign-in and its password checked', () => {
+  it('on a phone joined with a supervisor’s sign-in, is only for that sign-in’s person, with no second password', () => {
     joined('supervisor', casey);
-    expect(s().signUp(input(casey, 'casey@example.test'))).toMatchObject({ ok: false, error: expect.stringMatching(/^Enter the password of this phone’s company sign-in, sign-in@example.test\./) });
-    expect(s().signUp({ ...input(casey, 'casey@example.test'), companyPasswordChecked: true })).toEqual({ ok: true });
+    expect(s().signUp(input(jordan, 'jordan@example.test'))).toEqual({
+      ok: false,
+      error: 'This phone is joined with Casey Morgan’s company sign-in, so the account made here is theirs. Make yours on your own phone.',
+    });
+    expect(s().signUp(input(casey, 'casey@example.test'))).toEqual({ ok: true });
   });
 
   it('makes the account of a supervisor whose sign-in is crew, and says it works as crew', () => {
