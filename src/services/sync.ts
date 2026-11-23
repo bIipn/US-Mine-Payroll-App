@@ -102,7 +102,7 @@ export function setSyncTransport(next: SyncTransport | null, why: SendTrouble | 
     problem: null,
     failed: false,
     sending: false,
-    waiting: connected ? waitingNow().length : 0,
+    ...(connected ? waitingCounts() : { waiting: 0, stuck: 0 }),
   });
   if (transport) void syncNow();
 }
@@ -127,6 +127,14 @@ const sortedNow = (): SortedChanges => {
 const waitingNow = (): Change[] => {
   const sorted = sortedNow();
   return [...sorted.now, ...sorted.afterReceive];
+};
+/**
+ * What waits, and how much of it the server will not take as it is: only changes stuck at their present
+ * version, never one changed since the server turned it down, which a round sends again.
+ */
+const waitingCounts = (): Pick<SyncStatus, 'waiting' | 'stuck'> => {
+  const waiting = waitingNow();
+  return { waiting: waiting.length, stuck: waiting.filter((c) => stuck.get(c.key) === c.rev).length };
 };
 /** What the company would not take from this sign-in: held at the version refused, or passed over for its role. */
 export const notTakenChanges = (): Change[] => sortedNow().notTaken;
@@ -180,7 +188,7 @@ async function round(): Promise<void> {
   const account = store().connectedCompany?.userId ?? null;
   const receives = !!(target.pull && target.standing && store().connectedCompany);
   if (receives) store().ensureReceiving();
-  useSyncStatus.setState({ waiting: waitingNow().length, notTaken: notTakenNow() });
+  useSyncStatus.setState({ ...waitingCounts(), notTaken: notTakenNow() });
   if (!useSyncStatus.getState().online) return;
   const first = sortedNow().now.filter((c) => stuck.get(c.key) !== c.rev);
   if (!receives && !first.length) return;
@@ -303,8 +311,7 @@ async function round(): Promise<void> {
         failed,
         trouble: failed ? trouble : null,
         problem: failed ? problem : null,
-        stuck: stuck.size,
-        waiting: waitingNow().length,
+        ...waitingCounts(),
         notTaken: notTakenNow(),
         ...(sent ? { lastSentAt: Date.now() } : null),
       });
@@ -386,7 +393,7 @@ export function startSync(): () => void {
     // The count is right the moment something is signed, so the phone never says everything is
     // sent while a new punch waits. The send itself waits a few seconds, for anything signed with it.
     const status = useSyncStatus.getState();
-    if (!status.sending) useSyncStatus.setState({ waiting: waitingNow().length });
+    if (!status.sending) useSyncStatus.setState(waitingCounts());
     if (!transport || now.synced !== before.synced) return;
     if (soon) clearTimeout(soon);
     soon = setTimeout(() => void syncNow(), 3_000);

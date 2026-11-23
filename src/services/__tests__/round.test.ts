@@ -233,3 +233,34 @@ describe('the company’s records, a page at a time', () => {
     expect(server.calls.filter((c) => c === 'standing').length).toBe(before + 1);
   });
 });
+
+describe('what the server will not take as it is', () => {
+  /** The server turns the shift down for what is in it, at any version, and takes everything else. */
+  const refusing = (app: Loaded) => (changes: readonly { key: string; kind: string; rev: string }[]) => {
+    if (changes.some((c) => c.key === 'shift:sh-1')) throw app.domain.sendError('refused', 'The record is not one the server can take.');
+    return took(changes);
+  };
+
+  it('counts only what waits at the version the server turned down, and nothing once the link changes', async () => {
+    const { app, useStore, stop } = phone();
+    const status = () => app.sync.useSyncStatus.getState();
+    const server = company(app);
+    server.answerWith(refusing(app));
+    server.connect();
+    await settle();
+    expect(status()).toMatchObject({ waiting: 1, stuck: 1 });
+
+    // A new link asks the server again: nothing is stuck until it turns the record down again.
+    app.sync.setSyncTransport(null);
+    expect(status()).toMatchObject({ server: false, waiting: 0, stuck: 0 });
+    server.connect();
+    await settle();
+    expect(status()).toMatchObject({ waiting: 1, stuck: 1 });
+
+    // Changed on the phone, it is a version the server has not turned down: it waits to go, and is not stuck.
+    server.answerWith(took);
+    useStore.setState({ shifts: [{ ...shift, clockOut: { at: shift.clockOut.at + 60_000 } }] });
+    expect(status()).toMatchObject({ waiting: 1, stuck: 0 });
+    stop();
+  });
+});

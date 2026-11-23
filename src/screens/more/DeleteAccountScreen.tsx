@@ -5,7 +5,7 @@ import { CloudUpload, Eye, EyeOff, OctagonAlert, RotateCcw, TriangleAlert, UserX
 import { Button, Field, IconButton, Notice, Page, Panel, Sheet, Txt } from '../../components/ui';
 import { ACCOUNT_PAGE, DELETED_TOAST, deletionPlan, LOCAL_CONFIRM, PASSWORD_HINT, whoseSignIn, type Blocker, type DeletionCheckCompany } from '../../domain/accountDeletion';
 import { keepsTime } from '../../domain/company';
-import { unitCheckedOut } from '../../domain/fleet';
+import { unitsCheckedOut } from '../../domain/fleet';
 import type { ScreenProps } from '../../navigation/types';
 import { CAN_CONNECT, deleteMyServerAccount, forgetDeletedSignIn, server, useServerAccount, type ServerDeletion } from '../../services/connection';
 import { haptic } from '../../services/haptics';
@@ -71,8 +71,8 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
     };
   }, [askFor, tries]);
 
-  // The unit they have checked out, as signing out of the phone finds it (unitCheckedOut): one they can still end use of.
-  const myUnit = me ? unitCheckedOut(me.id, opLogs, equipment, receiving?.gone) : null;
+  // The unit they have checked out, as signing out of the phone finds it (unitsCheckedOut): one they can still end use of.
+  const myUnit = me ? unitsCheckedOut(me.id, opLogs, equipment, receiving?.gone)[0]?.unit : undefined;
   // Everyone else with a shift open on this phone.
   const othersOnClock = me
     ? [...new Set(shifts.filter((s) => !s.clockOut && s.employeeId !== me.id).map((s) => s.employeeId))].filter((id) => openShiftOf(shifts, id, now)).length

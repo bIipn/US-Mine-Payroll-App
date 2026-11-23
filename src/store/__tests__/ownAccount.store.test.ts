@@ -245,18 +245,18 @@ describe('forgetting the phone', () => {
     expect(phone.g().session?.employeeId).toBe('emp-lee');
     return phone;
   }
+  /** What forgetPhone refuses with: the first thing that holds signing out up, and what to do (signOutBlockers). */
+  const refused = (title: string, body: string) => ({ ok: false, error: `${title}. ${body}` });
+  const NOT_SENT = (n: number) =>
+    refused(`${n === 1 ? '1 record has' : `${n} records have`} not reached Test Pit A yet`, 'They are sent before this phone is signed out, so the company has them.');
 
   it('forgetting the phone waits until everything has reached the company, then empties it', () => {
     const { useStore, g } = leesPhone();
     expect(g().setMyRate(2650)).toEqual({ ok: true });
     useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10)), shiftOf('sh-b', at(11), at(14))] });
-    // The company turned one down (it was signed on another phone first): it never reaches the company, and does not hold this up.
-    const refused = waiting(useStore).find((c) => c.key === 'shift:sh-b')!;
-    g().holdRefused([{ key: refused.key, rev: refused.rev, reason: 'signed' }], PIT.id);
-    expect(waiting(useStore).map((c) => c.key)).toEqual(['shift:sh-a']);
 
     const before = kept(useStore);
-    expect(g().forgetPhone()).toEqual({ ok: false, error: '1 record has not reached Test Pit A yet, so this phone stays signed in. Try again once it has gone.' });
+    expect(g().forgetPhone()).toEqual(NOT_SENT(2));
     expect(kept(useStore)).toEqual(before);
 
     allSent(useStore);
@@ -268,33 +268,42 @@ describe('forgetting the phone', () => {
     expect(g()).toMatchObject({ session: null, accounts: [], shifts: [], payRates: {}, connectedCompany: null, syncedWith: null, synced: {}, receiving: null });
   });
 
-  it('waits only for what a round could still send', () => {
-    // A record the server will not take as it is (the round found it stuck) can never reach the company, so it
-    // does not hold it up; every other record waiting does.
+  it('waits for what the company turned down, and for what can never reach it from a sign-in off its roster', () => {
+    // Turned down (it was signed on another phone first): it never reaches the company, so signing out waits.
+    const held = leesPhone();
+    held.useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10))] });
+    const change = waiting(held.useStore)[0];
+    held.g().holdRefused([{ key: change.key, rev: change.rev, reason: 'signed' }], PIT.id);
+    expect(waiting(held.useStore)).toEqual([]);
+    expect(held.g().forgetPhone()).toEqual(refused('Test Pit A turned down 1 record', 'Signing out would take it off this phone. A supervisor can look at it with you.'));
+    expect(held.g().shifts).toHaveLength(1);
+
+    // What the server will not take as it is, as the round found it (stuck).
     const stuck = leesPhone();
     stuck.useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10)), shiftOf('sh-b', at(11), at(14))] });
-    expect(stuck.g().forgetPhone({ stuck: 1, trouble: null })).toEqual({
-      ok: false,
-      error: '1 record has not reached Test Pit A yet, so this phone stays signed in. Try again once it has gone.',
-    });
-    expect(stuck.g().forgetPhone({ stuck: 2, trouble: null })).toEqual({ ok: true });
-    expect(stuck.g().shifts).toEqual([]);
+    expect(stuck.g().forgetPhone({ online: true, stuck: 1, trouble: null })).toEqual(NOT_SENT(1));
+    expect(stuck.g().forgetPhone({ online: true, stuck: 2, trouble: null })).toEqual(
+      refused('Test Pit A turned down 2 records', 'Signing out would take them off this phone. A supervisor can look at them with you.'),
+    );
+    expect(stuck.g().shifts).toHaveLength(2);
 
-    // Nothing can go once the sign-in is off the company's roster.
+    // The company took the sign-in off its roster: the round says so, and so does the sign-in's own row.
     const off = leesPhone();
     off.useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10))] });
     off.round(null);
-    expect(off.g().forgetPhone({ stuck: 0, trouble: 'not_member' })).toEqual({ ok: true });
-    expect(off.g().shifts).toEqual([]);
+    const offRoster = refused(
+      'This phone’s company sign-in is off Test Pit A’s roster',
+      '1 record on this phone cannot reach the company now, and signing out would lose it. Delete your account instead: it stays on this phone.',
+    );
+    expect(off.g().forgetPhone({ online: true, stuck: 0, trouble: 'not_member' })).toEqual(offRoster);
+    expect(off.g().forgetPhone()).toEqual(offRoster);
+    expect(off.g().shifts).toHaveLength(1);
 
     // What waits is counted from the phone's own records, never from the round's last count: two made since it.
     const late = leesPhone();
     const lastRound: SyncStatus = { online: true, server: true, waiting: 0, sending: false, lastSentAt: at(14), failed: false, trouble: null, problem: null, stuck: 0, notTaken: 0 };
     late.useStore.setState({ shifts: [shiftOf('sh-a', at(6), at(10)), shiftOf('sh-b', at(11), at(14))] });
-    expect(late.g().forgetPhone(lastRound)).toEqual({
-      ok: false,
-      error: '2 records have not reached Test Pit A yet, so this phone stays signed in. Try again once they have gone.',
-    });
+    expect(late.g().forgetPhone(lastRound)).toEqual(NOT_SENT(2));
     expect(late.g().shifts).toHaveLength(2);
   });
 
@@ -312,22 +321,46 @@ describe('forgetting the phone', () => {
     expect(other.g().forgetPhone()).toEqual({ ok: false, error: 'This phone is joined with Lee Park’s company sign-in. Only they can sign this phone out.' });
     expect(other.g().accounts).toEqual([sams]);
 
+    // Lee signed in, with someone else's account on the phone from before: signing out would take it too.
+    const shared = leesPhone();
+    shared.useStore.setState({ accounts: [...shared.g().accounts, sams] });
+    expect(shared.g().forgetPhone()).toEqual(
+      refused('Someone else has an account on this phone', 'Signing out empties the phone, and their account would go with it. A supervisor clears the phone once they are done with it.'),
+    );
+    expect(shared.g().accounts).toContainEqual(sams);
+
     // Before the phone has read the company's records to the end, what it would send is not all counted.
     const lees: Account = { id: 'acct-lee', employeeId: 'emp-lee', email: 'lee@example.test', provider: 'password', createdAt: at(6) };
     const early = joinedPhone();
     early.useStore.setState({ accounts: [lees], session: { accountId: lees.id, employeeId: 'emp-lee' } });
     early.g().applyStanding(early.ctx(), LEE);
     early.g().applyReceived(early.ctx(), [person('emp-lee', 'Lee', 'Park')]);
-    expect(early.g().forgetPhone()).toEqual({
-      ok: false,
-      error: 'This phone has not got the company’s records yet, so it cannot tell that everything on it has reached the company. Try again once it has had signal.',
-    });
+    expect(early.g().forgetPhone()).toEqual(
+      refused('This phone has not read Test Pit A’s records yet', 'Until it has, it cannot tell that everything on it has reached the company. Try again once it has had signal.'),
+    );
 
     // A phone not joined to a company: nothing to sign out of here, and nothing is emptied.
     const left = leesPhone();
     left.g().disconnectCompany();
     expect(left.g().forgetPhone()).toEqual({ ok: false, error: 'This phone is not joined to a company.' });
     expect(left.g().session?.employeeId).toBe('emp-lee');
+  });
+
+  it('is one person’s: on a phone joined with Sam Ortiz’s sign-in, Sam Ortiz Jr neither makes an account nor signs it out', () => {
+    const sams = joinedPhone({ id: 'u-sam', email: 'sam@example.test' });
+    sams.round({ role: 'employee', name: { firstName: 'Sam', lastName: 'Ortiz' } }, [settings(), person('emp-sam', 'Sam', 'Ortiz'), person('emp-sam-jr', 'Sam', 'Ortiz Jr')]);
+    // The phone opened Sam's own account, never the looser fit's.
+    expect(sams.g().session?.employeeId).toBe('emp-sam');
+    sams.g().signOut();
+    expect(sams.g().signUp({ firstName: 'Sam', lastName: 'Ortiz Jr', email: 'samjr@example.test', password: 'haulroad88' })).toEqual({
+      ok: false,
+      error: 'This phone is joined with Sam Ortiz’s company sign-in, so the account made here is theirs. Make yours on your own phone.',
+    });
+    // Signed in with an account made here before, Sam Ortiz Jr does not sign the phone out either.
+    const jrs: Account = { id: 'acct-sam-jr', employeeId: 'emp-sam-jr', email: 'samjr@example.test', provider: 'password', createdAt: at(6) };
+    sams.useStore.setState({ accounts: [...sams.g().accounts, jrs], session: { accountId: jrs.id, employeeId: 'emp-sam-jr' } });
+    expect(sams.g().forgetPhone()).toEqual({ ok: false, error: 'This phone is joined with Sam Ortiz’s company sign-in. Only they can sign this phone out.' });
+    expect(sams.g().accounts).toContainEqual(jrs);
   });
 
   // Phones do not receive time records: a shift or a use left open here would stay open on the company's
@@ -358,24 +391,24 @@ describe('forgetting the phone', () => {
 
     it('is refused while the person is on the clock', () => {
       const { g } = phoneWith({ shifts: [leesShift()] });
-      expect(g().forgetPhone()).toEqual({ ok: false, error: 'You are on the clock. Clock out, then sign out.' });
+      expect(g().forgetPhone()).toEqual(refused('Clock out first', 'You are on the clock. Clock out, then sign out.'));
       expect(g().session?.employeeId).toBe('emp-lee');
       expect(g().shifts).toHaveLength(1);
       // The office turned the time clock off meanwhile: someone on the clock keeps the Clock to clock out on.
       const clockOff = phoneWith({ shifts: [leesShift()] }, { timeClock: false });
       expect(keepsTime(clockOff.g().settings.company)).toBe(false);
-      expect(clockOff.g().forgetPhone()).toEqual({ ok: false, error: 'You are on the clock. Clock out, then sign out.' });
+      expect(clockOff.g().forgetPhone()).toEqual(refused('Clock out first', 'You are on the clock. Clock out, then sign out.'));
     });
 
     it('is refused while the person is at lunch', () => {
       const { g } = phoneWith({ shifts: [leesShift({ lunches: [startedLunch({ at: at(14, 45) })] })] });
-      expect(g().forgetPhone()).toEqual({ ok: false, error: `You are at lunch until ${fmtTime(at(15, 15))}. Clock out after that, then sign out.` });
+      expect(g().forgetPhone()).toEqual(refused('Clock out first', `You are at lunch until ${fmtTime(at(15, 15))}. Clock out after that, then sign out.`));
       expect(g().shifts).toHaveLength(1);
     });
 
     it('is refused while the person has a unit checked out', () => {
       const { g, round } = phoneWith({ opLogs: [leesUse()] });
-      const words = { ok: false, error: 'You still have T-99 checked out. End use on the Checklists screen, then sign out.' };
+      const words = refused('End use first', 'You still have T-99 checked out. End use on the Checklists screen, then sign out.');
       expect(g().forgetPhone()).toEqual(words);
       // The company takes T-99 out of the fleet meanwhile: the phone keeps it until its use is ended, and still waits.
       round(LEE, [removed('equipment', T99.id)]);
@@ -391,6 +424,9 @@ describe('forgetting the phone', () => {
       });
       expect(g().forgetPhone()).toEqual({ ok: true });
       expect(g()).toMatchObject({ session: null, accounts: [], shifts: [], opLogs: [], connectedCompany: null });
+      // An old shift never clocked out no longer holds it up: only a supervisor can set its end now (a warning).
+      const old = phoneWith({ shifts: [leesShift({ clockIn: { at: at(15) - 20 * 3_600_000 } })] });
+      expect(old.g().forgetPhone()).toEqual({ ok: true });
     });
   });
 });

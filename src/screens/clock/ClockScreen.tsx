@@ -8,8 +8,9 @@ import { StatusBar } from 'expo-status-bar';
 import { CompanyLogoPlate } from '../../components/Brand';
 import { SiteMap } from '../../components/SiteMap';
 import { TimeCard } from '../../components/TimeCard';
-import { Button, Divider, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
+import { Button, Divider, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
 import { APP_NAME, DEMO_MODE } from '../../config';
+import { unitsCheckedOut } from '../../domain/fleet';
 import { clockInVerdict, toGeoStamp, type Reading, type TurnDown } from '../../domain/geofence';
 import { monthOf, nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
@@ -19,7 +20,7 @@ import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
 import { requestNotificationPermission, scheduleLocal } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
-import { openLogs, openShiftOf, staleShiftOf, useMe, useRules, useStore, type ToastTone } from '../../store/useStore';
+import { openShiftOf, staleShiftOf, useMe, useRules, useStore, type ToastTone } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
 import {
   addDays,
@@ -38,6 +39,7 @@ import {
   startOfWeek,
 } from '../../util/format';
 import { useNow } from '../../util/hooks';
+import { CheckedOutUnits } from '../equipment/CheckedOutUnits';
 
 type Status = 'off' | 'on' | 'lunch' | 'overdue';
 /**
@@ -104,7 +106,7 @@ export function ClockScreen() {
   const status: Status = !shift ? 'off' : meal?.state === 'at_lunch' ? 'lunch' : meal?.state === 'overdue' ? 'overdue' : 'on';
   const field = FIELD[status];
   const clock = clockParts(now);
-  const myUnits = [...openLogs(opLogs).values()].filter((log) => log.employeeId === me.id);
+  const myUnits = unitsCheckedOut(me.id, opLogs, equipment, gone);
   // A clock-out with no lunch asks why only where the state owes a meal on a shift that long.
   const owed = rules.meal;
   // Measured in whole minutes, the way the shift's flags are, so the sheet and the saved shift agree.
@@ -319,26 +321,7 @@ export function ClockScreen() {
 
           <AssignedToMe employeeId={me.id} />
 
-          {myUnits.length > 0 ? (
-            <Panel title="You have checked out" flush>
-              {myUnits.map((log) => {
-                const unit = equipment.find((e) => e.id === log.equipmentId) ?? gone?.[log.equipmentId];
-                if (!unit) return null;
-                const takenOut = !equipment.some((e) => e.id === log.equipmentId);
-                return (
-                  <Row
-                    key={log.id}
-                    testID={`in-use-${unit.unit}`}
-                    left={<UnitPlate unit={unit.unit} />}
-                    title={`${unit.make} ${unit.model}`}
-                    sub={`Since ${fmtTime(log.startAt)}.${takenOut ? ' Taken out of the fleet.' : ''} Tap to end use.`}
-                    chevron
-                    onPress={() => navigation.navigate('EndUse', { logId: log.id })}
-                  />
-                );
-              })}
-            </Panel>
-          ) : null}
+          <CheckedOutUnits employeeId={me.id} />
 
           <PayPeriodLine employeeId={me.id} now={now} />
 

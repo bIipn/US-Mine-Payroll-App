@@ -3,12 +3,12 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER, STARTING_COMPANY, STARTING_SITE } from '../config';
 import { buildExam, changedSheet, examFindings, newSheet, SAMPLE_AREA_SHEETS, sheetInUse, withFix, withMrf, withSheets, type ExamDraft } from '../domain/areaExam';
-import { accountHere, offTheRosterHere, ownPersonHere, signInIsTheirs, supervisorHere } from '../domain/access';
-import { clockBlocker, sendable } from '../domain/accountDeletion';
+import { accountHere, offTheRosterHere, ownPersonHere, signInPerson, supervisorHere } from '../domain/access';
+import { clockBlocker, signOutBlockers } from '../domain/accountDeletion';
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
-import { newUnit, unitCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
+import { newUnit, unitsCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced, type SyncStatus } from '../domain/sync';
@@ -47,7 +47,7 @@ import type {
   SiteConfig,
 } from '../domain/types';
 import { safeStorage } from '../services/storage';
-import { fmtTime, MIN, startOfDay } from '../util/format';
+import { fmtDate, fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
 import {
@@ -226,7 +226,7 @@ interface Actions {
   deleteMyAccount: (options: { clearPhone: boolean }) => Result<{ cleared: boolean }>;
   /** The sign-in screen: a person taken off the roster deletes their account from this phone with its password. */
   deleteAccountWithPassword: (email: string, password: string) => Result;
-  signInWithProvider: (provider: AuthProvider, firstName: string, lastName: string) => Result;
+  signInWithProvider: (provider: Exclude<AuthProvider, 'password' | 'company'>, firstName: string, lastName: string) => Result;
   signInDemo: (role: Role) => Result;
   /** Preview only: open the app as the person the build is made for, with no account to set up first. */
   openAsOwner: (owner?: PersonName | null) => Result;
@@ -240,16 +240,16 @@ interface Actions {
   openOwnAccount: () => Result;
   signOut: () => void;
   /**
-   * One person per phone: the person whose own company sign-in this phone has signs it out, and it is
-   * emptied the way clearDevice empties it, to start as the build does. Only on a phone joined to its
-   * company, and only once nothing on it would be lost: the person has clocked out and checked their
-   * units back in (only this phone can, as for deleting the account), the phone has read the company's
-   * records to the end, and a round could send nothing more of what waits on it (`sendable`). `round` is
-   * what only the round knows (useSyncStatus): what the server will not take as it is, and why nothing
-   * can go now. Left out, everything waiting holds it up. What the company turned down (receiving.held)
-   * never does. Signing out of the company's server is connection.ts's.
+   * One person per phone: the person whose own company sign-in this phone has (signInPerson) signs it out,
+   * and it is emptied the way clearDevice empties it, to start as the build does. Only on a phone joined
+   * to its company, and only once nothing on it would be lost, on the deletion plan's own terms for
+   * clearing a phone (signOutBlockers): no shift open and no unit checked out, nobody else's account here,
+   * the company's records read to the end, nothing waiting and nothing the company turned down. It refuses
+   * with the first thing that holds it up and what to do. `round` is what only the round knows
+   * (useSyncStatus): whether there is signal, what the server will not take as it is, and why nothing can
+   * go now. Signing out of the company's server is connection.ts's.
    */
-  forgetPhone: (round?: Pick<SyncStatus, 'stuck' | 'trouble'>) => Result;
+  forgetPhone: (round?: Pick<SyncStatus, 'online' | 'stuck' | 'trouble'>) => Result;
 
   /**
    * Where the phone was, or why it gave no location. With no boundary set it is
@@ -612,8 +612,8 @@ export const useStore = create<Store>()(
           if (!match.ok) return match;
           const { employee } = match;
           // On a connected phone, whose account it may hold goes by its company sign-in (accountHere).
-          const { connectedCompany, receiving } = get();
-          const here = connectedCompany ? accountHere(employee, receiving ?? { role: null, name: null }) : ({ ok: true } as const);
+          const { connectedCompany, receiving, employees } = get();
+          const here = connectedCompany ? accountHere(employee, employees, receiving ?? { role: null, name: null }) : ({ ok: true } as const);
           if (!here.ok) return { ok: false, error: here.error };
           const { accounts } = get();
           if (accounts.some((a) => a.email === address)) {
@@ -753,39 +753,43 @@ export const useStore = create<Store>()(
 
         signOut: () => set({ session: null }),
 
-        forgetPhone: (round = { stuck: 0, trouble: null }) => {
-          const { connectedCompany, session, employees, shifts, opLogs, equipment } = get();
+        forgetPhone: (round = { online: true, stuck: 0, trouble: null }) => {
+          const { connectedCompany, session, employees, accounts, shifts, opLogs, equipment } = get();
           if (!connectedCompany) return { ok: false, error: 'This phone is not joined to a company.' };
           if (!session) return signedOut;
           const r = receivingHere();
           if (!r?.name) return { ok: false, error: 'This phone has not heard from the company yet. Try again once it has had signal.' };
-          const me = employees.find((e) => e.id === session.employeeId);
-          if (!me || !signInIsTheirs(me, r)) {
+          // The sign-in's own person, exactly: never someone its name only loosely fits.
+          const own = signInPerson(employees, r);
+          if (!own.ok) return own;
+          if (own.person.id !== session.employeeId) {
             return { ok: false, error: `This phone is joined with ${r.name.firstName} ${r.name.lastName}’s company sign-in. Only they can sign this phone out.` };
           }
-          // Only this phone can clock its shift out and check its units back in: phones do not receive time
-          // records, so one left open here would stay open on the company's server with nothing to close it.
-          // The deletion plan's checks (clockBlocker, unitCheckedOut), in the words for signing out.
-          const now = Date.now();
-          const clock = clockBlocker(openShiftOf(shifts, me.id, now), now, 'sign out', fmtTime);
-          if (clock) return { ok: false, error: clock.body };
-          const unit = unitCheckedOut(me.id, opLogs, equipment, r.gone);
-          if (unit) return { ok: false, error: `You still have ${unit.unit} checked out. End use on the Checklists screen, then sign out.` };
-          // Until the phone has read the company's records to the end, a round leaves its new units, sheets and settings out of what it would send.
-          if (r.caughtUpAt == null) {
-            return {
-              ok: false,
-              error: 'This phone has not got the company’s records yet, so it cannot tell that everything on it has reached the company. Try again once it has had signal.',
-            };
-          }
-          // What waits is the phone's own count, made now; only what the server will not take as it is, and why
-          // nothing can go, are the round's. The company's turn-downs are not waiting (sortedChanges' notTaken).
+          // Signing out empties the phone, so it waits until nothing on it would be lost. What waits, and what the
+          // company turned down, are counted now from the phone's own records; only what the server will not take
+          // as it is, and why nothing can go, are the round's. A sign-in off the roster, as its own row says, sends nothing.
           const sorted = sortedHere(r);
-          const left = sendable({ waiting: sorted.now.length + sorted.afterReceive.length, stuck: round.stuck, trouble: round.trouble });
-          if (left > 0) {
-            const records = left === 1 ? '1 record has' : `${left} records have`;
-            return { ok: false, error: `${records} not reached ${connectedCompany.name} yet, so this phone stays signed in. Try again once ${left === 1 ? 'it has' : 'they have'} gone.` };
-          }
+          const now = Date.now();
+          const { blockers } = signOutBlockers({
+            now,
+            company: connectedCompany.name,
+            openShift: openShiftOf(shifts, session.employeeId, now),
+            staleShift: staleShiftOf(shifts, session.employeeId, now),
+            openUnit: unitsCheckedOut(session.employeeId, opLogs, equipment, r.gone)[0]?.unit.unit ?? null,
+            otherAccounts: accounts.filter((a) => a.id !== session.accountId).length,
+            caughtUp: r.caughtUpAt != null,
+            sync: {
+              online: round.online,
+              waiting: sorted.now.length + sorted.afterReceive.length,
+              notTaken: sorted.notTaken.length,
+              stuck: round.stuck,
+              trouble: r.role === 'none' ? 'not_member' : round.trouble,
+            },
+            fmtTime,
+            fmtDay: fmtDate,
+          });
+          const first = blockers[0];
+          if (first) return { ok: false, error: `${first.title}. ${first.body}` };
           // The clearDevice path, open to the person here because nothing on the phone is lost.
           get().resetDemo();
           return { ok: true };

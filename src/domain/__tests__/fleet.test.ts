@@ -1,4 +1,4 @@
-import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitCheckedOut, unitNumber, withoutUnit } from '../fleet';
+import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitNumber, unitsCheckedOut, withoutUnit } from '../fleet';
 import type { Equipment, OperatingLog } from '../types';
 
 const loader: Equipment = { id: 'eq_a', unit: 'L-2', category: 'loader', make: 'Test', model: 'One', status: 'ready', meter: 4250.5, meterUnit: 'hrs' };
@@ -109,7 +109,7 @@ describe('the fleet as it is listed', () => {
   });
 });
 
-describe('a unit someone has checked out', () => {
+describe('the units someone has checked out', () => {
   const use = (id: string, equipmentId: string, employeeId: string, endAt?: number): OperatingLog => ({
     id,
     equipmentId,
@@ -120,17 +120,23 @@ describe('a unit someone has checked out', () => {
     ...(endAt ? { endAt } : null),
   });
 
-  it('is a unit whose use of theirs has not ended, in the fleet or kept until the use ends', () => {
-    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_a', 'emp_lee')], fleet, null)).toEqual(loader);
+  it('are the units of their uses that have not ended, in the fleet or kept until the use ends', () => {
+    const mine = use('op1', 'eq_a', 'emp_lee');
+    expect(unitsCheckedOut('emp_lee', [mine], fleet, null)).toEqual([{ log: mine, unit: loader, takenOut: false }]);
     // Ended, or someone else's: not theirs to check back in.
-    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_a', 'emp_lee', 2_000), use('op2', 'eq_b', 'emp_sam')], fleet, null)).toBeNull();
-    // The company took it out of the fleet while it was checked out here: the phone keeps it until its use is ended.
+    expect(unitsCheckedOut('emp_lee', [use('op1', 'eq_a', 'emp_lee', 2_000), use('op2', 'eq_b', 'emp_sam')], fleet, null)).toEqual([]);
+    // The company took one out of the fleet while it was checked out here: the phone keeps it until its use is ended.
     const takenOut = { ...truck, id: 'eq_gone', unit: 'T-77' };
-    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_gone', 'emp_lee')], fleet, { eq_gone: takenOut })).toEqual(takenOut);
+    const gone = use('op2', 'eq_gone', 'emp_lee');
+    expect(unitsCheckedOut('emp_lee', [mine, gone], fleet, { eq_gone: takenOut })).toEqual([
+      { log: mine, unit: loader, takenOut: false },
+      { log: gone, unit: takenOut, takenOut: true },
+    ]);
   });
 
-  it('is never a use whose unit is nowhere on the phone, which nothing shows and nothing could end', () => {
-    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_nowhere', 'emp_lee')], fleet, {})).toBeNull();
-    expect(unitCheckedOut('emp_lee', [use('op1', 'eq_nowhere', 'emp_lee'), use('op2', 'eq_c', 'emp_lee')], fleet, {})).toEqual(pickup);
+  it('are never a use whose unit is nowhere on the phone, which nothing shows and nothing could end', () => {
+    expect(unitsCheckedOut('emp_lee', [use('op1', 'eq_nowhere', 'emp_lee')], fleet, {})).toEqual([]);
+    const later = use('op2', 'eq_c', 'emp_lee');
+    expect(unitsCheckedOut('emp_lee', [use('op1', 'eq_nowhere', 'emp_lee'), later], fleet, {})).toEqual([{ log: later, unit: pickup, takenOut: false }]);
   });
 });

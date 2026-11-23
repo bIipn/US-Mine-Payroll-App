@@ -40,8 +40,8 @@ describe('supervisorHere', () => {
 
 describe('accountHere', () => {
   it('takes anyone on a phone never connected', () => {
-    expect(accountHere(dana, null)).toEqual({ ok: true });
-    expect(accountHere(lee, null)).toEqual({ ok: true });
+    expect(accountHere(dana, employees, null)).toEqual({ ok: true });
+    expect(accountHere(lee, employees, null)).toEqual({ ok: true });
   });
 
   it('on a connected phone only the sign-in’s own person has an account', () => {
@@ -51,30 +51,41 @@ describe('accountHere', () => {
     });
     // Lee's phone, joined with Lee's crew sign-in.
     const crew = { role: 'employee' as const, name: leeName };
-    expect(accountHere(lee, crew)).toEqual({ ok: true });
-    expect(accountHere(ana, crew)).toEqual(theirs('Lee Park'));
+    expect(accountHere(lee, employees, crew)).toEqual({ ok: true });
+    expect(accountHere(ana, employees, crew)).toEqual(theirs('Lee Park'));
     // Dana's phone, joined with Dana's supervisor sign-in: it holds nobody else's account either, crew or
     // supervisor, and Dana's own needs no second password (the sign-in was the proof).
     const supervisor = { role: 'supervisor' as const, name: danaName };
-    expect(accountHere(dana, supervisor)).toEqual({ ok: true });
-    expect(accountHere(lee, supervisor)).toEqual(theirs('Dana Fry'));
-    expect(accountHere(ana, supervisor)).toEqual(theirs('Dana Fry'));
+    expect(accountHere(dana, employees, supervisor)).toEqual({ ok: true });
+    expect(accountHere(lee, employees, supervisor)).toEqual(theirs('Dana Fry'));
+    expect(accountHere(ana, employees, supervisor)).toEqual(theirs('Dana Fry'));
+  });
+
+  it('is one person’s: on a phone joined with Sam Ortiz’s sign-in, Sam Ortiz Jr has no account', () => {
+    const sam: Employee = { id: 'emp_sam', firstName: 'Sam', lastName: 'Ortiz', role: 'employee', active: true };
+    const samJr: Employee = { id: 'emp_sam_jr', firstName: 'Sam', lastName: 'Ortiz Jr', role: 'employee', active: true };
+    const samsPhone = { role: 'employee' as const, name: { firstName: 'Sam', lastName: 'Ortiz' } };
+    expect(accountHere(sam, [sam, samJr], samsPhone)).toEqual({ ok: true });
+    expect(accountHere(samJr, [sam, samJr], samsPhone)).toEqual({
+      ok: false,
+      error: 'This phone is joined with Sam Ortiz’s company sign-in, so the account made here is theirs. Make yours on your own phone.',
+    });
   });
 
   it('makes the account of a supervisor in the app whose sign-in is crew, and says it works as crew', () => {
-    expect(accountHere(dana, { role: 'employee', name: danaName })).toEqual({
+    expect(accountHere(dana, employees, { role: 'employee', name: danaName })).toEqual({
       ok: true,
       note: 'Dana Fry is a supervisor in the app but crew on the company’s sign-in roster, so this account works as crew here. Ask the office to set the role on the dashboard’s Roster page.',
     });
-    expect(accountHere(lee, { role: 'supervisor', name: leeName })).toEqual({
+    expect(accountHere(lee, employees, { role: 'supervisor', name: leeName })).toEqual({
       ok: true,
       note: 'Lee Park is crew in the app but a supervisor on the company’s sign-in roster, so this account works as crew here. Ask the office to set the role on the dashboard’s Roster page.',
     });
   });
 
   it('waits for the company before an account is made, and refuses one on a sign-in taken off the roster', () => {
-    expect(accountHere(lee, { role: null, name: null })).toEqual({ ok: false, error: 'This phone has not heard from the company yet. Try again once it has had signal.' });
-    expect(accountHere(lee, { role: 'none', name: leeName })).toEqual({
+    expect(accountHere(lee, employees, { role: null, name: null })).toEqual({ ok: false, error: 'This phone has not heard from the company yet. Try again once it has had signal.' });
+    expect(accountHere(lee, employees, { role: 'none', name: leeName })).toEqual({
       ok: false,
       error: 'This phone’s company sign-in is not on the company’s roster any more. See your supervisor.',
     });

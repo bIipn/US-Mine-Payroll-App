@@ -134,14 +134,28 @@ export interface DeletionInput {
   fmtDay: (ms: number) => string;
 }
 
-export type BlockerKind = 'sample' | 'on_clock' | 'at_lunch' | 'waiting' | 'no_signal' | 'last_supervisor' | 'checking' | 'check_failed';
+export type BlockerKind =
+  | 'sample'
+  | 'on_clock'
+  | 'at_lunch'
+  | 'waiting'
+  | 'no_signal'
+  | 'last_supervisor'
+  | 'checking'
+  | 'check_failed'
+  // Signing out of a phone only (signOutBlockers).
+  | 'unit_out'
+  | 'other_accounts'
+  | 'not_read'
+  | 'not_taken'
+  | 'not_member';
 
 /** What stops the deletion for now, and the one thing to do about it. */
 export interface Blocker {
   kind: BlockerKind;
   title: string;
   body: string;
-  action?: 'clock' | 'send' | 'dashboard' | 'reset' | 'retry';
+  action?: 'clock' | 'send' | 'dashboard' | 'reset' | 'retry' | 'checklists' | 'delete';
 }
 
 export interface DeletionPlan {
@@ -168,6 +182,13 @@ export interface DeletionPlan {
   finishOnDashboard: boolean;
 }
 
+/** A unit still checked out, and where to check it back in: the start of what deleting or signing out says of it. */
+const checkedOutWords = (unit: string) => `You still have ${unit} checked out. End use on the Checklists screen`;
+
+/** An old shift never clocked out: only a supervisor can set its end now. */
+const staleShiftWords = (stale: Shift, fmtDay: (ms: number) => string) =>
+  `Your shift of ${fmtDay(stale.clockIn.at)} has no clock-out. It counts no hours until a supervisor sets its end.`;
+
 /**
  * A shift still open: clock out first, before deleting the account or signing out of the phone (`then`).
  * Only this phone can clock it out, since phones do not receive time records. At lunch, after the lunch:
@@ -182,12 +203,12 @@ export function clockBlocker(openShift: Shift | undefined, now: number, then: 'd
     : { kind: 'on_clock', title: 'Clock out first', body: `You are on the clock. Clock out, then ${then}.`, action: 'clock' };
 }
 
-/** Records this phone has not sent yet: sent before its own company sign-in is deleted. */
-export function waitingBlocker(n: number, company: string, online: boolean): Blocker {
+/** Records this phone has not sent yet: sent before its own company sign-in is deleted, or before the phone is signed out. */
+export function waitingBlocker(n: number, company: string, online: boolean, before = 'your company sign-in is deleted'): Blocker {
   return {
     kind: 'waiting',
     title: `${n === 1 ? '1 record has' : `${n} records have`} not reached ${company} yet`,
-    body: `They are sent before your company sign-in is deleted, so the company has them.${online ? '' : ' This needs signal.'}`,
+    body: `They are sent before ${before}, so the company has them.${online ? '' : ' This needs signal.'}`,
     action: 'send',
   };
 }
@@ -386,9 +407,9 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
 
   // ---- Worth knowing first ------------------------------------------------------------------------
   const warnings: string[] = [];
-  if (me && input.openUnit) warnings.push(`You still have ${input.openUnit} checked out. End use on the Checklists screen so the next operator can take it.`);
+  if (me && input.openUnit) warnings.push(`${checkedOutWords(input.openUnit)} so the next operator can take it.`);
   if (me && keepsTime && input.staleShift) {
-    warnings.push(`Your shift of ${input.fmtDay(input.staleShift.clockIn.at)} has no clock-out. It counts no hours until a supervisor sets its end.`);
+    warnings.push(staleShiftWords(input.staleShift, input.fmtDay));
   }
   // What no round will send stays on the phone, and holds nothing up.
   const unsendable = sendsWithIt ? sync.waiting - canSend : 0;
@@ -431,6 +452,76 @@ export function deletionPlan(input: DeletionInput): DeletionPlan {
     ...(serverToo ? { passwordLabel: `Password for ${signIn.email}` } : null),
     finishOnDashboard: lastIn.length > 0,
   };
+}
+
+/** What signing out of a phone joined to its company goes by: the deletion plan's input, as much of it as signing out needs. */
+export type SignOutInput = Pick<DeletionInput, 'now' | 'company' | 'openShift' | 'staleShift' | 'openUnit' | 'otherAccounts' | 'caughtUp' | 'sync' | 'fmtTime' | 'fmtDay'>;
+
+/**
+ * What holds signing out of a phone joined to its company up, each with what to do, and what to look at
+ * first. Signing out empties the phone, so it waits as the deletion plan's clearing of a phone does
+ * (`clearsPhone`), until nothing on it would be lost: no shift open and no unit checked out, which only
+ * this phone can close; nobody else's account on it; the company's records read to the end; nothing
+ * waiting; and nothing the company turned down (`notTaken`, and what the server will not take as it is,
+ * `stuck`). From a sign-in off the company's roster nothing waiting can go, so the person deletes their
+ * account instead. An old shift never clocked out, which only a supervisor can end now, is a warning.
+ */
+export function signOutBlockers(input: SignOutInput): { blockers: Blocker[]; warnings: string[] } {
+  const { company, sync } = input;
+  const blockers: Blocker[] = [];
+  const clock = clockBlocker(input.openShift, input.now, 'sign out', input.fmtTime);
+  if (clock) blockers.push(clock);
+  if (input.openUnit) blockers.push({ kind: 'unit_out', title: 'End use first', body: `${checkedOutWords(input.openUnit)}, then sign out.`, action: 'checklists' });
+  if (input.otherAccounts > 0) {
+    const one = input.otherAccounts === 1;
+    blockers.push({
+      kind: 'other_accounts',
+      title: one ? 'Someone else has an account on this phone' : `${input.otherAccounts} other people have accounts on this phone`,
+      body: `Signing out empties the phone, and their ${one ? 'account' : 'accounts'} would go with it. A supervisor clears the phone once they are done with it.`,
+    });
+  }
+  if (!input.caughtUp) {
+    blockers.push({
+      kind: 'not_read',
+      title: `This phone has not read ${possessive(company)} records yet`,
+      body: 'Until it has, it cannot tell that everything on it has reached the company. Try again once it has had signal.',
+      action: 'send',
+    });
+  }
+  // What a round would still send, and what it never will: what the company turned down.
+  const toSend = Math.max(0, sync.waiting - sync.stuck);
+  const turnedDown = sync.notTaken + sync.stuck;
+  if (sync.trouble === 'not_member') {
+    const n = toSend + turnedDown;
+    if (n > 0) {
+      const one = n === 1;
+      blockers.push({
+        kind: 'not_member',
+        title: `This phone’s company sign-in is off ${possessive(company)} roster`,
+        body: `${one ? '1 record' : `${n} records`} on this phone cannot reach the company now, and signing out would lose ${one ? 'it' : 'them'}. Delete your account instead: ${one ? 'it stays' : 'they stay'} on this phone.`,
+        action: 'delete',
+      });
+    }
+  } else {
+    if (toSend > 0) {
+      const waiting = waitingBlocker(toSend, company, sync.online, 'this phone is signed out');
+      blockers.push(
+        sync.trouble === 'closed'
+          ? { kind: 'waiting', title: waiting.title, body: 'MineMuster has stopped for this company, so they wait on this phone. A supervisor can start it again on the dashboard’s Billing page.' }
+          : waiting,
+      );
+    }
+    if (turnedDown > 0) {
+      const one = turnedDown === 1;
+      blockers.push({
+        kind: 'not_taken',
+        title: `${company} turned down ${one ? '1 record' : `${turnedDown} records`}`,
+        body: `Signing out would take ${one ? 'it' : 'them'} off this phone. A supervisor can look at ${one ? 'it' : 'them'} with you.`,
+      });
+    }
+  }
+  const warnings = input.staleShift ? [staleShiftWords(input.staleShift, input.fmtDay)] : [];
+  return { blockers, warnings };
 }
 
 /** The row on More that opens it. */

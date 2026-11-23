@@ -8,9 +8,11 @@ import {
   moreRowWords,
   offRosterWords,
   sendable,
+  signOutBlockers,
   whoseSignIn,
   type DeletionCheckCompany,
   type DeletionInput,
+  type SignOutInput,
 } from '../accountDeletion';
 import { LUNCH_MS } from '../time';
 import type { Employee, Shift } from '../types';
@@ -473,5 +475,101 @@ describe('records that cannot be sent', () => {
   it('clears no phone that has not read its company’s records to the end', () => {
     expect(deletionPlan(ownPhone()).clearsPhone).toBe(true);
     expect(deletionPlan(ownPhone({ caughtUp: false })).clearsPhone).toBe(false);
+  });
+});
+
+describe('signing out of a phone', () => {
+  // Signing out empties the phone, so it waits as the deletion plan's clearing of a phone does, until nothing
+  // on it would be lost, and says what holds it up and what to do.
+  const quiet = { online: true, waiting: 0, notTaken: 0, stuck: 0, trouble: null };
+  /** Riley's own phone: nothing open, nothing waiting, no one else's account, the company's records read to the end. */
+  const out = (over: Partial<SignOutInput> = {}): SignOutInput => ({
+    now: NOW,
+    company: 'Test Pit A',
+    otherAccounts: 0,
+    caughtUp: true,
+    sync: quiet,
+    fmtTime: hhmm,
+    fmtDay: day,
+    ...over,
+  });
+
+  it('is allowed once nothing on the phone would be lost', () => {
+    expect(signOutBlockers(out())).toEqual({ blockers: [], warnings: [] });
+  });
+
+  it('waits for the shift and any unit, which only this phone can close', () => {
+    expect(signOutBlockers(out({ openShift: shiftAt(NOW - 3 * 3_600_000), openUnit: 'L-12' })).blockers).toEqual([
+      { kind: 'on_clock', title: 'Clock out first', body: 'You are on the clock. Clock out, then sign out.', action: 'clock' },
+      { kind: 'unit_out', title: 'End use first', body: 'You still have L-12 checked out. End use on the Checklists screen, then sign out.', action: 'checklists' },
+    ]);
+  });
+
+  it('waits for anyone else’s account on the phone, and for the company’s records read to the end', () => {
+    expect(signOutBlockers(out({ otherAccounts: 1, caughtUp: false })).blockers).toEqual([
+      {
+        kind: 'other_accounts',
+        title: 'Someone else has an account on this phone',
+        body: 'Signing out empties the phone, and their account would go with it. A supervisor clears the phone once they are done with it.',
+      },
+      {
+        kind: 'not_read',
+        title: 'This phone has not read Test Pit A’s records yet',
+        body: 'Until it has, it cannot tell that everything on it has reached the company. Try again once it has had signal.',
+        action: 'send',
+      },
+    ]);
+    expect(signOutBlockers(out({ otherAccounts: 2 })).blockers).toEqual([
+      {
+        kind: 'other_accounts',
+        title: '2 other people have accounts on this phone',
+        body: 'Signing out empties the phone, and their accounts would go with it. A supervisor clears the phone once they are done with it.',
+      },
+    ]);
+  });
+
+  it('waits for what has not reached the company, and for what the company turned down', () => {
+    // Two waiting, one of them a record the server will not take as it is, and one held.
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 2, stuck: 1, notTaken: 1 } })).blockers).toEqual([
+      { kind: 'waiting', title: '1 record has not reached Test Pit A yet', body: 'They are sent before this phone is signed out, so the company has them.', action: 'send' },
+      { kind: 'not_taken', title: 'Test Pit A turned down 2 records', body: 'Signing out would take them off this phone. A supervisor can look at them with you.' },
+    ]);
+    expect(signOutBlockers(out({ sync: { ...quiet, notTaken: 1 } })).blockers).toEqual([
+      { kind: 'not_taken', title: 'Test Pit A turned down 1 record', body: 'Signing out would take it off this phone. A supervisor can look at it with you.' },
+    ]);
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 3, online: false } })).blockers).toEqual([
+      { kind: 'waiting', title: '3 records have not reached Test Pit A yet', body: 'They are sent before this phone is signed out, so the company has them. This needs signal.', action: 'send' },
+    ]);
+    // MineMuster has stopped for the company: they wait until a supervisor starts it again.
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 1, trouble: 'closed' } })).blockers).toEqual([
+      {
+        kind: 'waiting',
+        title: '1 record has not reached Test Pit A yet',
+        body: 'MineMuster has stopped for this company, so they wait on this phone. A supervisor can start it again on the dashboard’s Billing page.',
+      },
+    ]);
+  });
+
+  it('says what waits can never reach the company from a sign-in off its roster, and to delete the account instead', () => {
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 2, notTaken: 1, trouble: 'not_member' } })).blockers).toEqual([
+      {
+        kind: 'not_member',
+        title: 'This phone’s company sign-in is off Test Pit A’s roster',
+        body: '3 records on this phone cannot reach the company now, and signing out would lose them. Delete your account instead: they stay on this phone.',
+        action: 'delete',
+      },
+    ]);
+    expect(signOutBlockers(out({ sync: { ...quiet, waiting: 1, trouble: 'not_member' } })).blockers[0].body).toBe(
+      '1 record on this phone cannot reach the company now, and signing out would lose it. Delete your account instead: it stays on this phone.',
+    );
+    // With nothing on the phone to lose, nothing holds it up.
+    expect(signOutBlockers(out({ sync: { ...quiet, trouble: 'not_member' } })).blockers).toEqual([]);
+  });
+
+  it('warns of an old shift with no clock-out, which only a supervisor can end now, as the deletion plan does', () => {
+    const stale = shiftAt(Date.UTC(2026, 10, 17, 14));
+    const words = 'Your shift of 2026-11-17 has no clock-out. It counts no hours until a supervisor sets its end.';
+    expect(signOutBlockers(out({ staleShift: stale }))).toEqual({ blockers: [], warnings: [words] });
+    expect(deletionPlan(input({ staleShift: stale })).warnings).toContain(words);
   });
 });

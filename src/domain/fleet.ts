@@ -82,23 +82,26 @@ export function withoutUnit<T extends { id: string }>(fleet: readonly T[], unitI
 }
 
 /**
- * A unit this person has checked out on this phone, to check back in with End use, or null: the unit of a
- * use of theirs that has not ended, in the fleet or kept in `gone` (`Receiving`) because the company took
- * it out of the fleet while it was checked out here. A use whose unit is in neither is shown nowhere on
- * the phone and cannot be ended, so it is never one.
+ * The units this person has checked out on this phone, each to check back in with End use: the unit of
+ * each use of theirs that has not ended, in the fleet, or kept in `gone` (`Receiving`) because the company
+ * took it out of the fleet while it was checked out here (`takenOut`). A use whose unit is in neither is
+ * shown nowhere on the phone and cannot be ended, so it is never one. The Clock and Checklists screens
+ * list these, and deleting an account or signing out of the phone goes by them.
  */
-export function unitCheckedOut(
+export function unitsCheckedOut(
   employeeId: string,
   opLogs: readonly OperatingLog[],
   fleet: readonly Equipment[],
   gone: Readonly<Record<string, Equipment>> | null | undefined,
-): Equipment | null {
+): { log: OperatingLog; unit: Equipment; takenOut: boolean }[] {
+  const out: { log: OperatingLog; unit: Equipment; takenOut: boolean }[] = [];
   for (const log of opLogs) {
     if (log.employeeId !== employeeId || log.endAt) continue;
-    const unit = fleet.find((e) => e.id === log.equipmentId) ?? gone?.[log.equipmentId];
-    if (unit) return unit;
+    const inFleet = fleet.find((e) => e.id === log.equipmentId);
+    const unit = inFleet ?? gone?.[log.equipmentId];
+    if (unit) out.push({ log, unit, takenOut: !inFleet });
   }
-  return null;
+  return out;
 }
 
 /**

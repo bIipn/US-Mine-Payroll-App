@@ -13,6 +13,7 @@ import { color, space, type Tone } from '../../theme/theme';
 import { fmtMeter, fmtRelativeDay, fmtTime, shortName } from '../../util/format';
 import { useNow } from '../../util/hooks';
 import { AreaList } from '../exam/AreaList';
+import { CheckedOutUnits } from './CheckedOutUnits';
 
 type Filter = 'all' | EquipmentCategory;
 type Tab = 'equipment' | 'area';
@@ -119,6 +120,9 @@ export function EquipmentScreen() {
                 onPress={() => navigation.navigate('ChecklistCard')}
               />
             </Panel>
+
+            {/* A unit taken out of the fleet while you had it checked out is in no list below: End use here. */}
+            {me ? <CheckedOutUnits employeeId={me.id} takenOutOnly /> : null}
 
             <Field
               testID="equipment-search"

@@ -21,7 +21,7 @@ import { fmtTime } from '../../util/format';
 import { color, font, radius, space } from '../../theme/theme';
 
 type Mode = 'signin' | 'signup';
-type Provider = Exclude<AuthProvider, 'password'>;
+type Provider = Exclude<AuthProvider, 'password' | 'company'>;
 
 const PROVIDERS: { id: Provider; name: string }[] = [
   { id: 'apple', name: 'Apple' },
