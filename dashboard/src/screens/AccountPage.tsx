@@ -90,7 +90,8 @@ export function AccountView({ email, check, typed, password, busy, problem, onRe
   };
 
   return (
-    <div className="stack" style={{ gap: '1.5rem', maxWidth: '44rem' }}>
+    // The address is said as one long word, here and in what deleting does: it may break anywhere, to fit a phone.
+    <div className="stack" style={{ gap: '1.5rem', maxWidth: '44rem', overflowWrap: 'anywhere' }}>
       <header className="page-head">
         <div className="page-head-text">
           <h1 className="h1" tabIndex={-1}>Your account</h1>

@@ -211,6 +211,9 @@ describe('the Roster page’s sign-in tools', () => {
     const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     expect(text).toContain('Supervisors sign in with email, not a passcode.');
     expect(text).toContain('Nothing changes until they accept');
+    // The person signs in already, with a passcode: what decides the email is their address.
+    expect(text).toContain('An address that already signs in to MineMuster gets no email');
+    expect(text).not.toContain('Someone who already signs in to MineMuster');
     expect(html).toMatch(/<label[^>]*>Email address for Ortiz, Sam<\/label>/);
     expect(text).toContain('Send invitation');
   });
@@ -221,7 +224,7 @@ describe('the Roster page’s sign-in tools', () => {
     const html = renderToStaticMarkup(createElement(InviteForm, { row, signIn: signIn({ sign_in: 'none' }), onClose: () => {}, onChanged: async () => {} }));
     const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     expect(text).toContain(
-      'Type Lee Park’s email address. Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. They take this row when they accept. Nothing changes until they do.',
+      'Type Lee Park’s email address. An address new to MineMuster gets an email with a link to the dashboard. An address that already signs in to MineMuster gets no email: the invitation waits for them when they sign in with it at app.minemuster.com, so tell them to look. They take this row when they accept. Nothing changes until they do.',
     );
     expect(text).not.toContain('They get an email with a link');
   });

@@ -95,10 +95,12 @@ export const deleteSignInQuestion = (name: string) =>
 /**
  * Who an invitation emails, said the same whatever the address, so the page never tells whether it has an account
  * (R20). Supabase Auth sends no email to an address that already signs in to MineMuster: the invitation waits on
- * the dashboard for that account, and the inviter is the one who can tell them to look.
+ * the dashboard for that account, and the inviter is the one who can tell them to look. It is said of the address,
+ * not of the person: a crew member made a supervisor signs in already, with a passcode, and their address still
+ * gets the email.
  */
 export const INVITE_EMAIL_WORDS =
-  'Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look.';
+  'An address new to MineMuster gets an email with a link to the dashboard. An address that already signs in to MineMuster gets no email: the invitation waits for them when they sign in with it at app.minemuster.com, so tell them to look.';
 
 /** The invite form's words for a row nobody holds. */
 export const inviteWords = (name: string) =>

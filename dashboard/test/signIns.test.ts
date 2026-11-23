@@ -174,7 +174,7 @@ describe('the words around a reset code and a deletion', () => {
   it('tells the inviter to have everything sent from the phone first, and that the phone then signs in again with email', () => {
     expect(makeSupervisorByEmail('Sam Ortiz')).toBe(
       'Supervisors sign in with email, not a passcode. Type Sam Ortiz’s email address to invite them. ' +
-        'Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. ' +
+        'An address new to MineMuster gets an email with a link to the dashboard. An address that already signs in to MineMuster gets no email: the invitation waits for them when they sign in with it at app.minemuster.com, so tell them to look. ' +
         'Nothing changes until they accept: then the passcode sign-in is let go of and the row becomes a supervisor’s. ' +
         'Before they accept, have them send everything on their phone with Send and receive now, under More, then Company account, until it says everything is sent: what is still on the phone once they accept cannot reach the company. If it cannot all go yet, wait, or cancel the invitation. ' +
         'Once they accept, they sign out of their phone and sign in again with Supervisor? Sign in with email, best when they are not on the clock.',
@@ -185,11 +185,19 @@ describe('the words around a reset code and a deletion', () => {
 describe('the words of an invitation, the same whether or not the address has an account (R20)', () => {
   it('says who gets an email and who does not, and that the invitation waits for someone who already signs in', () => {
     expect(INVITE_SENT_ALWAYS('riley.quinn@example.com')).toBe(
-      'Invitation sent to riley.quinn@example.com. Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. The invitation is good for 7 days. If the link has run out, use Send again.',
+      'Invitation sent to riley.quinn@example.com. An address new to MineMuster gets an email with a link to the dashboard. An address that already signs in to MineMuster gets no email: the invitation waits for them when they sign in with it at app.minemuster.com, so tell them to look. The invitation is good for 7 days. If the link has run out, use Send again.',
     );
     expect(inviteWords('Lee Park')).toBe(
-      'Type Lee Park’s email address. Someone new to MineMuster gets an email with a link to the dashboard. Someone who already signs in to MineMuster gets no email: the invitation waits for them when they sign in at app.minemuster.com, so tell them to look. They take this row when they accept. Nothing changes until they do.',
+      'Type Lee Park’s email address. An address new to MineMuster gets an email with a link to the dashboard. An address that already signs in to MineMuster gets no email: the invitation waits for them when they sign in with it at app.minemuster.com, so tell them to look. They take this row when they accept. Nothing changes until they do.',
     );
+  });
+
+  it('speaks of the address, not of whether the person signs in: a crew member made a supervisor signs in with a passcode, and their address is still sent the email', () => {
+    for (const words of [makeSupervisorByEmail('Sam Ortiz'), inviteWords('Lee Park'), INVITE_SENT_ALWAYS('riley.quinn@example.com')]) {
+      expect(words).toContain('An address new to MineMuster gets an email with a link to the dashboard.');
+      expect(words).toContain('An address that already signs in to MineMuster gets no email');
+      expect(words).not.toMatch(/Someone (new to|who already signs in to) MineMuster/);
+    }
   });
 
   it('says nothing about whether an address has an account: the words differ only by the address', () => {

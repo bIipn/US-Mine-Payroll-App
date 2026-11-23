@@ -507,7 +507,7 @@ describe('signing up and signing in with a passcode', () => {
     });
     expect(byId('company-made-supervisor')).not.toHaveLength(0);
     expect(shown()).toContain(
-      '3 records on this phone did not reach Test Pit A before you accepted, and this passcode sign-in cannot send them now, so this phone cannot sign out without losing them. Keep them here and tell the supervisor who invited you.',
+      '3 records on this phone have not been taken by Test Pit A: they were not sent before you accepted, or the company turned them down. This passcode sign-in cannot send them now, so this phone cannot sign out without losing them. Keep them here and tell the supervisor who invited you.',
     );
     expect(shown()).not.toContain('Sign out of this phone, then tap');
   });

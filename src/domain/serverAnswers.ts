@@ -694,8 +694,9 @@ export function crewWords(answer: CrewAnswer, now: number): { title: string; bod
  * The line of the off-the-roster card for someone made a supervisor. Accepting an invitation to supervise lets the
  * person's passcode sign-in go, so the phone finds that sign-in off the company's roster, as if they had been taken
  * off. Supervisors sign in with email: they sign out of this phone and sign in again that way. `held` is how many
- * records on the phone that sign-in can no longer send (waiting, and turned down: `heldOffRoster`). Signing out
- * would lose them, so it is refused, and the words then promise no sign-out and say what to do instead.
+ * records on the phone that sign-in can no longer send (waiting, and turned down: `heldOffRoster`), and the words
+ * are true of both: not taken by the company, as never sent or turned down. Signing out would lose them, so it is
+ * refused, and the words then promise no sign-out and say what to do instead.
  */
 export function madeSupervisorWords(company: string | null, held: number): { title: string; body: string } {
   const title = 'Made a supervisor?';
@@ -704,6 +705,6 @@ export function madeSupervisorWords(company: string | null, held: number): { tit
   const them = one ? 'it' : 'them';
   return {
     title,
-    body: `${one ? '1 record' : `${held} records`} on this phone did not reach ${company ?? 'your company'} before you accepted, and this passcode sign-in cannot send ${them} now, so this phone cannot sign out without losing ${them}. Keep ${them} here and tell the supervisor who invited you.`,
+    body: `${one ? '1 record on this phone has' : `${held} records on this phone have`} not been taken by ${company ?? 'your company'}: ${one ? 'it was' : 'they were'} not sent before you accepted, or the company turned ${them} down. This passcode sign-in cannot send ${them} now, so this phone cannot sign out without losing ${them}. Keep ${them} here and tell the supervisor who invited you.`,
   };
 }

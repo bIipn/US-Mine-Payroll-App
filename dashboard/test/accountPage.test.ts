@@ -93,6 +93,20 @@ describe('the page', () => {
     expect(html).not.toMatch(/type="password"/);
   });
 
+  it('lets a long address wrap at a phone’s width wherever the page says it: the page may break it anywhere', () => {
+    const email = 'riley.j.quinn.night.shift.crusher.operator@example.com';
+    const page = '<div class="stack" style="gap:1.5rem;max-width:44rem;overflow-wrap:anywhere">';
+    const checking = renderToStaticMarkup(createElement(AccountPage, { email, openCompany: null }));
+    const answered = view([], { email }).html;
+    for (const html of [checking, answered]) {
+      expect(html.startsWith(page)).toBe(true);
+      expect(html).toContain(`<p class="lede">Signed in as ${email}.</p>`);
+    }
+    // Once the server has answered, the address is said three times more: what goes, and the password's label.
+    expect(answered.split(email).length - 1).toBe(4);
+    expect(answered).toMatch(new RegExp(`<label[^>]*>Password for ${email.replace(/\./g, '\\.')}</label>`));
+  });
+
   it('says on the sign-in page what was done, once the browser is sent there', () => {
     expect(DELETED_PATH).toEqual({ deleted: '/?deleted=1', already: '/?deleted=already' });
     expect(deletedWords('?deleted=1')).toBe('Your account is deleted. This browser is signed out.');

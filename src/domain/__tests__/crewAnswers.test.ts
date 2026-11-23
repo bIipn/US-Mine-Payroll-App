@@ -195,13 +195,21 @@ describe('madeSupervisorWords', () => {
     expect(madeSupervisorWords('Test Pit A', 1)).toEqual({
       title: 'Made a supervisor?',
       body:
-        '1 record on this phone did not reach Test Pit A before you accepted, and this passcode sign-in cannot send it now, so this phone cannot sign out without losing it. Keep it here and tell the supervisor who invited you.',
+        '1 record on this phone has not been taken by Test Pit A: it was not sent before you accepted, or the company turned it down. This passcode sign-in cannot send it now, so this phone cannot sign out without losing it. Keep it here and tell the supervisor who invited you.',
     });
     const two = madeSupervisorWords(null, 2);
     expect(two.body).toBe(
-      '2 records on this phone did not reach your company before you accepted, and this passcode sign-in cannot send them now, so this phone cannot sign out without losing them. Keep them here and tell the supervisor who invited you.',
+      '2 records on this phone have not been taken by your company: they were not sent before you accepted, or the company turned them down. This passcode sign-in cannot send them now, so this phone cannot sign out without losing them. Keep them here and tell the supervisor who invited you.',
     );
     expect(two.body).not.toMatch(/Sign out of this phone, then/);
+  });
+
+  it('is true of every record it counts: those never sent, and those the company turned down (heldOffRoster counts both)', () => {
+    for (const held of [1, 3]) {
+      const { body } = madeSupervisorWords('Test Pit A', held);
+      expect(body).not.toMatch(/did not reach/);
+      expect(body).toMatch(/not been taken by Test Pit A: (it was|they were) not sent before you accepted, or the company turned (it|them) down\./);
+    }
   });
 
   it('never asks for an email address, and its title is in sentence case', () => {
