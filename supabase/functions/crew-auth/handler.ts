@@ -32,19 +32,26 @@
 //     Supabase Auth's admin delete, and the answer says why: the join's refusal (no_company, denied,
 //     ambiguous, or bad_name with the database's words for a name that only looks like one on the
 //     roster); already_signed_up when another sign-up took the name meanwhile (join_company leaves a
-//     request, already_claimed); busy for Supabase Auth's 429; and 500 try_again for anything else.
+//     request, already_claimed); busy for Supabase Auth's 429; and 500 try_again for anything else. An
+//     admin create with no answer may have made the account all the same: the login is signed in with,
+//     and an account it signs in to is deleted again.
 //  7. sign_in: crew_sign_in_check, then the password grant.
-//  8. reset: crew_reset_check, which keeps the new passcode; the password grant; and Supabase Auth's
-//     sign-out of every other session of the account, made with the fresh session, so a lost or old phone
-//     stops working. When that sign-out does not go through, no session is answered.
+//  8. reset: crew_reset_check, which keeps the new passcode and spends the code; the password grant; and
+//     Supabase Auth's sign-out of every other session of the account, made with the fresh session, so a
+//     lost or old phone stops working, tried once more when it fails. From the kept passcode on, nothing
+//     answers busy or try_again, which would have the person try a spent code: a sign-in that fails is
+//     200 { status: 'passcode_changed' }, to sign in with the new passcode, and the session answered says
+//     others_signed_out, false when the sign-out failed twice. The app then signs the other sessions out
+//     itself.
 //  9. confirm: whose the bearer token is, from Supabase Auth, read as delete-account reads it (401
 //     signed_out, 410 already_deleted); crew_confirm_check for that account; then the password grant: a
 //     fresh session to delete the account with. It names no company and says nothing of waiting: the
 //     check goes by the account, not by a code or a name, which a supervisor can change.
 // 10. A sign-in is 200 { status: 'signed_in', session: { access_token, refresh_token, expires_at,
-//     user_id }, company: { id, name }, waiting }, with join, join_company's answer, on sign_up besides.
-//     Supabase Auth's 429 at any step is 200 { status: 'busy' }. Missing settings are 500 not_set_up,
-//     before anything is asked; anything else that fails is 500 try_again.
+//     user_id }, company: { id, name }, waiting }, with join, join_company's answer, on sign_up besides,
+//     and others_signed_out on reset. Supabase Auth's 429 at any step but a reset's sign-in is 200
+//     { status: 'busy' }. Missing settings are 500 not_set_up, before anything is asked; anything else
+//     that fails is 500 try_again.
 //
 // It logs what happened as a code: never a name, a passcode, a reset code, a company code, an address,
 // an email, a token, a key or an id.
@@ -106,20 +113,16 @@ const HEX_GROUP = /^[0-9a-f]{1,4}$/i;
 
 /** An IPv6 address: eight groups of hex digits, or fewer with one ::, and an IPv4 address in place of the last two. No zone, no brackets. */
 function isIpv6(text: string): boolean {
-  const halves = text.split('::');
-  if (!text.includes(':') || halves.length > 2) return false;
-  const groupsOf = (part: string) => (part === '' ? [] : part.split(':'));
-  const head = groupsOf(halves[0]);
-  const tail = halves.length === 2 ? groupsOf(halves[1]) : [];
-  const ending = halves.length === 2 ? tail : head;
-  const last = ending[ending.length - 1];
-  let size = head.length + tail.length;
-  if (last !== undefined && last.includes('.')) {
-    if (!IPV4.test(last)) return false;
-    ending.pop();
-    size += 1;
-  }
-  return [...head, ...tail].every((group) => HEX_GROUP.test(group)) && (halves.length === 2 ? size <= 7 : size === 8);
+  // An IPv4 address can only end it, after its last colon. It is checked, then read as the two groups it stands for.
+  const end = text.slice(text.lastIndexOf(':') + 1);
+  if (end.includes('.') && !IPV4.test(end)) return false;
+  const hex = end.includes('.') ? `${text.slice(0, text.length - end.length)}0:0` : text;
+  const halves = hex.split('::');
+  if (halves.length > 2) return false;
+  const groups = halves.filter((half) => half !== '').flatMap((half) => half.split(':'));
+  if (!groups.every((group) => HEX_GROUP.test(group))) return false;
+  // With :: the groups it leaves out are at least one; without, all eight are written.
+  return halves.length === 2 ? groups.length <= 7 : groups.length === 8;
 }
 
 /**
@@ -208,6 +211,13 @@ interface Session {
   user_id: string;
 }
 
+/** A person a check let in, signed in: the session, their company, and whether they wait for a supervisor. */
+interface SignedIn {
+  session: Session;
+  company: { id: string; name: string };
+  waiting: boolean;
+}
+
 /** The session in the password grant's answer, or null when there is none. */
 function sessionOf(body: Json, nowMs: number): Session | null {
   const { access_token, refresh_token, expires_at, expires_in } = body;
@@ -221,18 +231,26 @@ function sessionOf(body: Json, nowMs: number): Session | null {
 /** A code from an answer, for the log (Supabase Auth's error_code, the database's SQLSTATE), only when it looks like one. */
 const codeOf = (value: unknown): string => (typeof value === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(value) ? ` ${value}` : '');
 
-/** A call to Supabase Auth that did not go through: busy for its 429, and why, as codes for the log. */
+/**
+ * A call to Supabase Auth that did not go through: busy for its 429; whether it was answered at all (one
+ * that was not may have been carried out all the same); and why, as codes for the log.
+ */
 interface Failed {
   failed: true;
   busy: boolean;
+  answered: boolean;
   why: string;
 }
 
 const failure = (what: string, response: Response | null, body: Json): Failed => ({
   failed: true,
   busy: response?.status === 429,
+  answered: response !== null,
   why: response ? `${what} answered ${response.status}${codeOf(body.error_code)}` : `${what} got no answer`,
 });
+
+/** A failure of something that was answered, and read: never busy. */
+const unreadable = (why: string): Failed => ({ failed: true, busy: false, answered: true, why });
 
 const answer = (status: number, body: Json, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
@@ -286,7 +304,7 @@ export function makeHandler(deps: CrewDeps): (request: Request) => Promise<Respo
     });
     const body: Json = response ? objectOf(await jsonOf(response)) : {};
     if (!response || !response.ok) return failure('the admin create', response, body);
-    return typeof body.id === 'string' && body.id ? { id: body.id } : { failed: true, busy: false, why: 'the admin create answered no account' };
+    return typeof body.id === 'string' && body.id ? { id: body.id } : unreadable('the admin create answered no account');
   }
 
   /** A session for a login, by Supabase Auth's password grant, made with the publishable key as a phone's own sign-in is. */
@@ -299,14 +317,47 @@ export function makeHandler(deps: CrewDeps): (request: Request) => Promise<Respo
     const body: Json = response ? objectOf(await jsonOf(response)) : {};
     if (!response || !response.ok) return failure('the password grant', response, body);
     const session = sessionOf(body, now());
-    return session ? { session } : { failed: true, busy: false, why: 'the password grant answered no session' };
+    return session ? { session } : unreadable('the password grant answered no session');
   }
 
-  /** Supabase Auth's sign-out of every other session of the account, made with this session's own token: null once done. */
-  async function signOutOthers(server: Server, publishable: string, token: string): Promise<Failed | null> {
-    const response = await callWithin(deps.fetch, `${server.url}/auth/v1/logout?scope=others`, { method: 'POST', headers: personHeaders(publishable, token) });
-    const body: Json = response ? objectOf(await jsonOf(response)) : {};
-    return response && response.ok ? null : failure('the sign-out of the other sessions', response, body);
+  /**
+   * The person a check found and let in (sign_in, reset), signed in with the login it gave: the session,
+   * the company and whether they wait for a supervisor, or why not.
+   */
+  async function checkedLogin(server: Server, publishable: string, data: Json): Promise<SignedIn | Failed> {
+    const login = loginOf(data);
+    const company = companyOf(data);
+    const { waiting } = data;
+    if (!login || !company || typeof waiting !== 'boolean') return unreadable('the check answered a login this cannot read');
+    const signed = await signIn(server, publishable, login);
+    return 'failed' in signed ? signed : { session: signed.session, company, waiting };
+  }
+
+  /**
+   * Supabase Auth's sign-out of every other session of the account, made with this session's own token,
+   * and made once more when it fails: whether the other sessions are signed out.
+   */
+  async function signOutOthers(server: Server, publishable: string, token: string): Promise<boolean> {
+    for (const what of ['the sign-out of the other sessions', 'the sign-out of the other sessions, tried again,']) {
+      const response = await callWithin(deps.fetch, `${server.url}/auth/v1/logout?scope=others`, { method: 'POST', headers: personHeaders(publishable, token) });
+      const body: Json = response ? objectOf(await jsonOf(response)) : {};
+      if (response && response.ok) return true;
+      said(`reset: ${failure(what, response, body).why}`);
+    }
+    return false;
+  }
+
+  /**
+   * The account an admin create with no answer may have made all the same: the login is signed in with,
+   * and an account it signs in to, at an address nobody else has, is deleted again.
+   */
+  async function unmakeUnanswered(server: Server, publishable: string, login: Login): Promise<void> {
+    const signed = await signIn(server, publishable, login);
+    if ('failed' in signed) {
+      said(`sign_up: no account found to delete after the admin create got no answer (${signed.why})`);
+      return;
+    }
+    await unmake(server, signed.session.user_id);
   }
 
   /** The account a sign-up made, deleted again for good. */
@@ -348,7 +399,11 @@ export function makeHandler(deps: CrewDeps): (request: Request) => Promise<Respo
     }
 
     const made = await makeAccount(server, login);
-    if ('failed' in made) return failed('sign_up', made);
+    if ('failed' in made) {
+      const reply = failed('sign_up', made);
+      if (!made.answered) await unmakeUnanswered(server, publishable, login);
+      return reply;
+    }
     // From here on, whatever goes wrong deletes the account again before the answer goes.
     const undo = async (reply: Response): Promise<Response> => {
       await unmake(server, made.id);
@@ -411,16 +466,10 @@ export function makeHandler(deps: CrewDeps): (request: Request) => Promise<Respo
     });
     if (!data) return tryAgain();
     if (data.status !== 'ok') return refused('sign_in', data);
-    const login = loginOf(data);
-    const company = companyOf(data);
-    if (!login || !company || typeof data.waiting !== 'boolean') {
-      said('sign_in: crew_sign_in_check answered a login this cannot read');
-      return tryAgain();
-    }
-    const signed = await signIn(server, publishable, login);
+    const signed = await checkedLogin(server, publishable, data);
     if ('failed' in signed) return failed('sign_in', signed);
     said('sign_in signed_in');
-    return answer(200, { status: 'signed_in', session: signed.session, company, waiting: data.waiting });
+    return answer(200, { status: 'signed_in', ...signed });
   }
 
   async function reset(server: Server, publishable: string, fields: Fields, address: string): Promise<Response> {
@@ -434,19 +483,19 @@ export function makeHandler(deps: CrewDeps): (request: Request) => Promise<Respo
     });
     if (!data) return tryAgain();
     if (data.status !== 'ok') return refused('reset', data);
-    const login = loginOf(data);
-    const company = companyOf(data);
-    if (!login || !company || typeof data.waiting !== 'boolean') {
-      said('reset: crew_reset_check answered a login this cannot read');
-      return tryAgain();
+    // The new passcode is kept from here on, and the code is spent: nothing below answers busy or
+    // try_again, which would have the person try the code again. A sign-in that fails says the passcode
+    // is changed, for the person to sign in with it.
+    const signed = await checkedLogin(server, publishable, data);
+    if ('failed' in signed) {
+      said(`reset passcode_changed (${signed.why})`);
+      return answer(200, { status: 'passcode_changed' });
     }
-    // The new passcode is kept from here on, whatever follows: the person can sign in with it.
-    const signed = await signIn(server, publishable, login);
-    if ('failed' in signed) return failed('reset', signed);
-    const others = await signOutOthers(server, publishable, signed.session.access_token);
-    if (others) return failed('reset', others);
-    said('reset signed_in, the other sessions signed out');
-    return answer(200, { status: 'signed_in', session: signed.session, company, waiting: data.waiting });
+    // Whether or not the sign-out went through, the session goes back: when others_signed_out is false,
+    // the app signs the other sessions out itself.
+    const othersSignedOut = await signOutOthers(server, publishable, signed.session.access_token);
+    said(othersSignedOut ? 'reset signed_in, the other sessions signed out' : 'reset signed_in, the other sessions still signed in');
+    return answer(200, { status: 'signed_in', ...signed, others_signed_out: othersSignedOut });
   }
 
   async function confirm(server: Server, publishable: string, fields: Fields, request: Request): Promise<Response> {

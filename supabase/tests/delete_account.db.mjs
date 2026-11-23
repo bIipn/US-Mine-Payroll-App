@@ -1,32 +1,21 @@
-// The delete-account edge function (supabase/functions/delete-account), run under Node: Node strips
-// the types from its .ts files, and there is no Deno here. A stand-in for fetch plays Supabase: Auth's
-// /auth/v1/user and its admin delete, and PostgREST's /rest/v1/rpc/*, each passed to a local database.
-// Auth answers the way Supabase Auth v2.198.0 answered on the private local scan stack
-// (scripts/security-scan/stack), 20 November 2026: no token 401 no_authorization; a token it did not
-// sign 403 bad_jwt; a deleted account's token 403 user_not_found; a signed-out session's token 403
-// session_not_found; the admin delete 200 {} when it goes through, and 500 carrying the database's own
-// code (23514) when the last-supervisor guard refuses it. Supabase's gateway, which refuses a key before
-// Auth sees the request, answers 401 with a message and no error_code.
-// Its access token's amr is [{ method: 'password', timestamp }], the sign-in's time, kept through every
-// refresh of that session.
+// The delete-account edge function (supabase/functions/delete-account), run under Node on the stand-ins
+// in stand-ins.mjs: Supabase Auth's /auth/v1/user and its admin delete, and PostgREST's /rest/v1/rpc/*,
+// each passed to a local database, answering as Supabase Auth v2.198.0 answered on the private local scan
+// stack. Every database function it calls is the person's own: none goes with the server key.
 //
 // The keys, tokens, ids and names here are made up.
 
 import assert from 'node:assert/strict';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { join, newMember, secondSupervisor, startCompany, startDatabase } from './harness.mjs';
+import { adminDeletes, b64, ENV, json, NOW, PUBLISHABLE_KEY as PUBLISHABLE, SECRET_KEY, serveFunction, SUPABASE_URL as URL_ } from './stand-ins.mjs';
 
 const FUNCTION = new URL('../functions/delete-account/', import.meta.url);
 const { ALLOWED_ORIGIN, MAX_BODY_BYTES, MAX_CLOSE, PASSWORD_FRESH_SECONDS, makeHandler, passwordTypedAt } = await import(new URL('handler.ts', FUNCTION));
 const { keyHeaders, publishableKeyFrom, serverFrom } = await import(new URL('../functions/_shared/server.ts', import.meta.url));
 
-const URL_ = 'https://project.example.test';
 const ENDPOINT = `${URL_}/functions/v1/delete-account`;
-const PUBLISHABLE = 'sb_publishable_test_madeup';
-const SECRET_KEY = 'sb_secret_test_madeup';
-const ENV = { SUPABASE_URL: URL_, SUPABASE_SECRET_KEYS: JSON.stringify({ default: SECRET_KEY }), SUPABASE_PUBLISHABLE_KEYS: JSON.stringify({ default: PUBLISHABLE }) };
-const NOW = 1795000000;
 
 let db;
 before(async () => {
@@ -36,119 +25,8 @@ after(async () => {
   await db?.close();
 });
 
-const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-const json = (status, body) => (body === undefined ? new Response(null, { status }) : new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
-const bearer = (headers) => /^Bearer (\S+)$/.exec(headers.get('authorization') ?? '')?.[1] ?? null;
-/** The HTTP status PostgREST gives a SQLSTATE: PTnnn is nnn, 42501 is 403 with a token, 22023 and 23514 are 400. */
-const statusOf = (code) => (/^PT\d{3}$/.test(code) ? Number(code.slice(2)) : code === '42501' ? 403 : /^(22|23)/.test(code) ? 400 : 500);
-
-/** Supabase, as far as the function reaches it, over the local database. */
-function supabase({ clock }) {
-  const tokens = new Map();
-  const calls = [];
-  let adminAnswer = null;
-  let userAnswer = null;
-  const fetch = async (url, init = {}) => {
-    const { pathname } = new URL(url);
-    const headers = new Headers(init.headers);
-    calls.push({ method: init.method ?? 'GET', path: pathname, apikey: headers.get('apikey'), authorization: headers.get('authorization'), body: init.body ?? null });
-    if (pathname === '/auth/v1/user') {
-      assert.equal(headers.get('apikey'), PUBLISHABLE, 'Auth is asked with the publishable key');
-      if (userAnswer) {
-        const answer = await userAnswer();
-        if (answer) return answer;
-      }
-      const token = bearer(headers);
-      if (!token) return json(401, { code: 401, error_code: 'no_authorization', msg: 'This endpoint requires a valid Bearer token' });
-      const held = tokens.get(token);
-      if (!held) return json(403, { code: 403, error_code: 'bad_jwt', msg: 'invalid JWT: unable to parse or verify signature' });
-      if (held.signedOut) return json(403, { code: 403, error_code: 'session_not_found', msg: 'Session from session_id claim in JWT does not exist' });
-      const [user] = await db.adminRows('select id, email from auth.users where id = $1', [held.sub]);
-      if (!user) return json(403, { code: 403, error_code: 'user_not_found', msg: 'User from sub claim in JWT does not exist' });
-      return json(200, { id: user.id, aud: 'authenticated', role: 'authenticated', email: user.email });
-    }
-    if (pathname.startsWith('/rest/v1/rpc/')) {
-      assert.equal(headers.get('apikey'), PUBLISHABLE, 'the person’s own calls go with the publishable key');
-      // PostgREST takes any token the project signed until it expires: it does not ask Auth.
-      const held = tokens.get(bearer(headers) ?? '');
-      if (!held) return json(401, { code: 'PGRST301', message: 'JWT could not be decoded' });
-      const name = pathname.slice('/rest/v1/rpc/'.length);
-      // The token's amr goes to the database as request.jwt.claims, as PostgREST hands it over. The
-      // database keeps real time and these tests a clock of their own, so each time is moved by the
-      // difference: the sign-in is as old to the database as it is to the function.
-      const shift = Math.floor(Date.now() / 1000) - Math.floor(clock.now / 1000);
-      const amr =
-        held.databaseAmr ?? (Array.isArray(held.amr) ? held.amr.map((e) => (e && typeof e.timestamp === 'number' ? { ...e, timestamp: e.timestamp + shift } : e)) : held.amr);
-      try {
-        const result = await db.as(held.sub, amr === undefined ? {} : { amr }).call(name, JSON.parse(init.body || '{}'));
-        return result === '' || result === null ? json(204) : json(200, result);
-      } catch (error) {
-        return json(statusOf(error.code), { code: error.code, message: error.message, details: null, hint: error.hint ?? null });
-      }
-    }
-    if (init.method === 'DELETE' && pathname.startsWith('/auth/v1/admin/users/')) {
-      assert.equal(headers.get('apikey'), SECRET_KEY, 'the admin delete goes with the server key');
-      assert.equal(headers.get('authorization'), null, 'a secret key is sent as apikey only');
-      assert.deepEqual(JSON.parse(init.body), { should_soft_delete: false });
-      const id = decodeURIComponent(pathname.slice('/auth/v1/admin/users/'.length));
-      if (adminAnswer) {
-        const answer = await adminAnswer(id);
-        if (answer) return answer;
-      }
-      try {
-        await db.admin('delete from auth.users where id = $1', [id]);
-        return json(200, {});
-      } catch (error) {
-        return json(500, { code: error.code, msg: error.message });
-      }
-    }
-    return json(404, { message: 'no such route' });
-  };
-  /**
-   * An access token for an account, as Supabase Auth signs one at a password sign-in this many seconds
-   * ago. `databaseAmr` is the amr the database is handed instead, on its own clock.
-   */
-  const tokenFor = (sub, { typedAgo = 5, amr, noAmr = false, databaseAmr } = {}) => {
-    const at = Math.floor(clock.now / 1000) - typedAgo;
-    const claims = { sub, aud: 'authenticated', role: 'authenticated', iat: at, exp: at + 3600, session_id: randomUUID(), aal: 'aal1' };
-    if (!noAmr) claims.amr = amr ?? [{ method: 'password', timestamp: at }];
-    const token = `${b64({ alg: 'ES256', typ: 'JWT', kid: 'test' })}.${b64(claims)}.${randomBytes(32).toString('base64url')}`;
-    tokens.set(token, { sub, amr: claims.amr, databaseAmr });
-    return token;
-  };
-  return {
-    fetch,
-    calls,
-    tokenFor,
-    /** The session is signed out: Auth turns its token down, and PostgREST still takes it until it expires. */
-    signOut: (token) => (tokens.get(token).signedOut = true),
-    answerAdminWith: (f) => (adminAnswer = f),
-    answerUserWith: (f) => (userAnswer = f),
-  };
-}
-
 const said = { logs: [], bodies: [] };
-function handler({ env = ENV } = {}) {
-  const clock = { now: NOW * 1000 };
-  const auth = supabase({ clock });
-  const logged = [];
-  const handle = makeHandler({
-    env: (name) => env[name],
-    fetch: auth.fetch,
-    now: () => clock.now,
-    log: (line) => {
-      logged.push(line);
-      said.logs.push(line);
-    },
-  });
-  const ask = async (request) => {
-    const response = await handle(request);
-    const text = await response.text();
-    said.bodies.push(text);
-    return { status: response.status, headers: response.headers, body: text ? JSON.parse(text) : null };
-  };
-  return { ask, handle, auth, clock, logged };
-}
+const handler = ({ env = ENV } = {}) => serveFunction(makeHandler, db, { env, said });
 
 function post(token, body = {}, { origin = null, raw = null } = {}) {
   const headers = { 'Content-Type': 'application/json', apikey: PUBLISHABLE };
@@ -159,7 +37,6 @@ function post(token, body = {}, { origin = null, raw = null } = {}) {
 
 const accountExists = async (id) => (await db.adminRows('select count(*)::int as n from auth.users where id = $1', [id]))[0].n === 1;
 const companyExists = async (id) => (await db.adminRows('select count(*)::int as n from public.companies where id = $1', [id]))[0].n === 1;
-const adminDeletes = (calls) => calls.filter((c) => c.method === 'DELETE');
 const revOf = (record) => createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0, 20);
 
 describe('the request', () => {
@@ -247,14 +124,14 @@ describe('the request', () => {
     assert.deepEqual([out.status, out.body.error], [401, 'signed_out']);
 
     // The gateway turns the key down before Auth sees the request: a setup problem, never a deletion.
-    auth.answerUserWith(() => json(401, { message: 'Invalid API key', hint: 'Double check your Supabase `anon` or `service_role` API key.' }));
+    auth.when('user', () => json(401, { message: 'Invalid API key', hint: 'Double check your Supabase `anon` or `service_role` API key.' }));
     const refused = await ask(post(auth.tokenFor(riley), {}));
     assert.deepEqual([refused.status, refused.body.error], [500, 'not_set_up']);
     assert.match(logged.at(-1), /no reason of its own \(401\)/);
-    auth.answerUserWith(() => json(503, { message: 'upstream connect error' }));
+    auth.when('user', () => json(503, { message: 'upstream connect error' }));
     const down = await ask(post(auth.tokenFor(riley), {}));
     assert.deepEqual([down.status, down.body.error], [500, 'try_again']);
-    auth.answerUserWith(null);
+    auth.when('user', null);
     assert.deepEqual(adminDeletes(auth.calls), []);
     assert.ok(await accountExists(riley));
 
@@ -476,7 +353,7 @@ describe('deleting', () => {
     const { ask, auth } = handler();
     const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
     const riley = await newMember(db, company, 'Riley', 'Quinn');
-    auth.answerAdminWith(() => json(500, { code: 'unexpected_failure', msg: 'Database error deleting user' }));
+    auth.when('admin_delete', () => json(500, { code: 'unexpected_failure', msg: 'Database error deleting user' }));
     const failed = await ask(post(auth.tokenFor(riley), {}));
     assert.deepEqual([failed.status, failed.body.error, failed.body.closed], [500, 'try_again', []]);
     assert.ok(await accountExists(riley));
@@ -484,7 +361,7 @@ describe('deleting', () => {
     // Two supervisors; the other steps down between the check and the delete, so the guard refuses it.
     const pit = await startCompany(db, { name: 'Test Pit R' });
     const second = await secondSupervisor(db, pit, 'Ana', 'Diaz');
-    auth.answerAdminWith(async () => {
+    auth.when('admin_delete', async () => {
       await db.as(second).query("update public.roster set role = 'employee' where id = $1", [pit.rows['Ana Diaz']]);
       return null;
     });
@@ -534,7 +411,7 @@ describe('deleting', () => {
     const bo = await newMember(db, company, 'Bo', 'Lark');
 
     // The delete went through, and its answer was lost on the way back.
-    auth.answerAdminWith(async (id) => {
+    auth.when('admin_delete', async (_call, { id }) => {
       await db.admin('delete from auth.users where id = $1', [id]);
       throw new TypeError('fetch failed');
     });
@@ -543,7 +420,7 @@ describe('deleting', () => {
     assert.equal(await accountExists(riley), false);
 
     // No answer, and the account is still there: it may yet be deleted, so nothing is promised either way.
-    auth.answerAdminWith(() => {
+    auth.when('admin_delete', () => {
       throw new TypeError('fetch failed');
     });
     const silent = await ask(post(auth.tokenFor(lee), {}));
@@ -551,12 +428,12 @@ describe('deleting', () => {
     assert.ok(await accountExists(lee));
 
     // A gateway's timeout is no answer from Auth either.
-    auth.answerAdminWith(() => json(504, { message: 'The upstream server is timing out' }));
+    auth.when('admin_delete', () => json(504, { message: 'The upstream server is timing out' }));
     const timedOut = await ask(post(auth.tokenFor(bo), {}));
     assert.deepEqual([timedOut.status, timedOut.body.error], [504, 'not_known']);
 
     // Auth's own refusal, for a delete Auth answered: nothing was deleted.
-    auth.answerAdminWith(() => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error deleting user' }));
+    auth.when('admin_delete', () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error deleting user' }));
     const turnedDown = await ask(post(auth.tokenFor(bo), {}));
     assert.deepEqual([turnedDown.status, turnedDown.body.error], [500, 'try_again']);
     assert.ok(await accountExists(bo));

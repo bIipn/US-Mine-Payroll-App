@@ -1,39 +1,24 @@
-// The crew-auth edge function (supabase/functions/crew-auth), run under Node: Node strips the types from
-// its .ts files, and there is no Deno here. A stand-in for fetch plays Supabase over the local database,
-// as delete_account.db.mjs's does: PostgREST's /rest/v1/rpc/* (by POST only, since a GET would run a
-// function in a read-only transaction), Supabase Auth's /auth/v1/user and its admin delete, answering as
-// that file describes, and besides them
-//   POST /auth/v1/admin/users                makes the account, an auth.users row whose address is
-//                                            confirmed when email_confirm is true, and answers the user;
-//   POST /auth/v1/token?grant_type=password  signs in when the password is the one crew_login_password
-//                                            works out in the database for the address (and the one the
-//                                            account was made with), answering a session whose access
-//                                            token carries a password entry in its amr; 400
-//                                            invalid_credentials otherwise, and 429
-//                                            over_request_rate_limit while a test turns that switch on;
-//   POST /auth/v1/logout?scope=others        signs out every other session of the token's account.
-// Those three answer in the shapes of Supabase Auth's API (the user; { access_token, token_type,
-// expires_in, expires_at, refresh_token, user }; 204), which no live or local Auth has been asked here.
+// The crew-auth edge function (supabase/functions/crew-auth), run under Node on the stand-ins in
+// stand-ins.mjs: PostgREST's /rest/v1/rpc/* over a local database, where the checks and crew_keep_passcode
+// come with the server key and join_company as the new account; and Supabase Auth's /auth/v1/user, its
+// admin create and delete, its password grant and its sign-out of other sessions.
 //
 // The keys, tokens, ids, names, passcodes, codes and addresses here are made up (the addresses are from
 // the ranges kept for documentation). No test message names a passcode, an address or a login: the
-// tests assert on them.
+// tests assert on them. What every test sends, logs and is answered, and every token and account the
+// stand-ins make, is kept (said), and the last test holds every log in the file to none of it.
 
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { addToRoster, join, newMember, NOT_FOUND, refused, startCompany, startDatabase } from './harness.mjs';
+import { adminDeletes, b64, crewLoginPassword, ENV, json, NOW, PUBLISHABLE_KEY as PUBLISHABLE, SECRET_KEY, serveFunction, SUPABASE_URL } from './stand-ins.mjs';
 
 const FUNCTION = new URL('../functions/crew-auth/', import.meta.url);
 const { CREW_DOMAIN, MAX_BODY_BYTES, clientAddress, makeHandler } = await import(new URL('handler.ts', FUNCTION));
 const { CALL_TIMEOUT_MS } = await import(new URL('../functions/_shared/http.ts', import.meta.url));
 
-const URL_ = 'https://project.example.test';
-const ENDPOINT = `${URL_}/functions/v1/crew-auth`;
-const PUBLISHABLE = 'sb_publishable_test_madeup';
-const SECRET_KEY = 'sb_secret_test_madeup';
-const ENV = { SUPABASE_URL: URL_, SUPABASE_SECRET_KEYS: JSON.stringify({ default: SECRET_KEY }), SUPABASE_PUBLISHABLE_KEYS: JSON.stringify({ default: PUBLISHABLE }) };
-const NOW = 1795000000;
+const ENDPOINT = `${SUPABASE_URL}/functions/v1/crew-auth`;
 const MINUTE = 60 * 1000;
 
 // Three that pass the passcode rule, and one that is wrong for all of them.
@@ -43,6 +28,9 @@ const THIRD = '275019';
 const WRONG = '583921';
 
 const HIDDEN_ADDRESS = /^crew-[0-9a-f]{32}@crew\.minemuster\.com$/;
+/** The database functions crew-auth calls with the server key. join_company it calls as the new account. */
+const SERVER_FUNCTIONS = ['crew_lookup', 'crew_sign_up_check', 'crew_sign_in_check', 'crew_reset_check', 'crew_confirm_check', 'crew_keep_passcode'];
+const TOO_MANY = { code: 429, error_code: 'over_request_rate_limit', msg: 'Request rate limit reached' };
 
 let db;
 before(async () => {
@@ -52,217 +40,23 @@ after(async () => {
   await db?.close();
 });
 
-const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-const json = (status, body) => (body === undefined ? new Response(null, { status }) : new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
-const bearer = (headers) => /^Bearer (\S+)$/.exec(headers.get('authorization') ?? '')?.[1] ?? null;
-/** The HTTP status PostgREST gives a SQLSTATE: PTnnn is nnn, 42501 is 403 with a token, 22023 and 23514 are 400. */
-const statusOf = (code) => (/^PT\d{3}$/.test(code) ? Number(code.slice(2)) : code === '42501' ? 403 : /^(22|23)/.test(code) ? 400 : 500);
-const loginPassword = async (email) => (await db.adminRows('select public.crew_login_password($1) as password', [email]))[0].password;
-const TOO_MANY = { code: 429, error_code: 'over_request_rate_limit', msg: 'Request rate limit reached' };
+const loginPassword = (email) => crewLoginPassword(db, email);
 
-/** Every address, password and email the admin create was given, in every test, for the check of the logs. */
-const EVER_MADE = [];
+/** What every test in this file sent, logged and was answered, and every token minted and account made. */
+const said = { logs: [], bodies: [], sent: [], minted: [], made: [] };
 
-/** The route a call goes to, as the stand-in and the tests name it. */
-function routeOf(method, path) {
-  if (path.startsWith('/rest/v1/rpc/')) return `rpc:${path.slice('/rest/v1/rpc/'.length)}`;
-  if (path === '/auth/v1/user') return 'user';
-  if (path === '/auth/v1/admin/users' && method === 'POST') return 'admin_create';
-  if (path.startsWith('/auth/v1/admin/users/') && method === 'DELETE') return 'admin_delete';
-  if (path === '/auth/v1/token' && method === 'POST') return 'token';
-  if (path === '/auth/v1/logout' && method === 'POST') return 'logout';
-  return 'unknown';
-}
-
-/** Supabase, as far as the function reaches it, over the local database. */
-function supabase({ clock }) {
-  /** Access tokens Supabase Auth signed, with the account and the session of each. */
-  const tokens = new Map();
-  const signedOut = new Set();
-  /** What the admin create was given for each account it made. */
-  const made = new Map();
-  const calls = [];
-  const logouts = [];
-  /** A test's own answer for a route, in place of the route's: it answers, or returns null to go on. */
-  const instead = new Map();
-  let tooMany = false;
-
-  /** An access token for an account, as Supabase Auth signs one at a password sign-in, in a session of its own. */
-  const tokenFor = (sub, session = randomUUID()) => {
-    const at = Math.floor(clock.now / 1000);
-    const claims = { sub, aud: 'authenticated', role: 'authenticated', iat: at, exp: at + 3600, session_id: session, aal: 'aal1', amr: [{ method: 'password', timestamp: at }] };
-    const token = `${b64({ alg: 'ES256', typ: 'JWT', kid: 'test' })}.${b64(claims)}.${randomBytes(32).toString('base64url')}`;
-    tokens.set(token, { sub, session, amr: claims.amr });
-    return token;
-  };
-
-  /** Whose a token is, as Supabase Auth's /auth/v1/user finds it: { sub }, or { error_code }. */
-  const whose = async (token) => {
-    const held = tokens.get(token ?? '');
-    if (!held) return { error_code: 'bad_jwt' };
-    if (signedOut.has(held.session)) return { error_code: 'session_not_found' };
-    const [user] = await db.adminRows('select id from auth.users where id = $1', [held.sub]);
-    return user ? { sub: held.sub } : { error_code: 'user_not_found' };
-  };
-  const appMetadataOf = (id) => made.get(id)?.app_metadata ?? { provider: 'email', providers: ['email'] };
-
-  const fetch = async (url, init = {}) => {
-    const { pathname, searchParams } = new URL(url);
-    const headers = new Headers(init.headers);
-    const method = init.method ?? 'GET';
-    const call = { method, path: pathname, query: searchParams.toString(), apikey: headers.get('apikey'), authorization: headers.get('authorization'), body: init.body ?? null, signal: init.signal ?? null };
-    calls.push(call);
-    const route = routeOf(method, pathname);
-    const held = tokens.get(bearer(headers) ?? '');
-    const hook = instead.get(route);
-    if (hook) {
-      const answer = await hook(call, held?.sub ?? null);
-      if (answer) return answer;
-    }
-
-    if (route === 'user') {
-      assert.equal(call.apikey, PUBLISHABLE, 'Auth is asked with the publishable key');
-      if (!bearer(headers)) return json(401, { code: 401, error_code: 'no_authorization', msg: 'This endpoint requires a valid Bearer token' });
-      const found = await whose(bearer(headers));
-      if (found.error_code === 'bad_jwt') return json(403, { code: 403, error_code: 'bad_jwt', msg: 'invalid JWT: unable to parse or verify signature' });
-      if (found.error_code === 'session_not_found') return json(403, { code: 403, error_code: 'session_not_found', msg: 'Session from session_id claim in JWT does not exist' });
-      if (found.error_code === 'user_not_found') return json(403, { code: 403, error_code: 'user_not_found', msg: 'User from sub claim in JWT does not exist' });
-      const [user] = await db.adminRows('select id, email from auth.users where id = $1', [found.sub]);
-      return json(200, { id: user.id, aud: 'authenticated', role: 'authenticated', email: user.email, app_metadata: appMetadataOf(user.id) });
-    }
-
-    if (route.startsWith('rpc:')) {
-      assert.equal(method, 'POST', 'a database function is called by POST: a GET runs it in a read-only transaction');
-      const name = route.slice('rpc:'.length);
-      let as;
-      if (call.apikey === SECRET_KEY) {
-        assert.equal(call.authorization, null, 'a secret key is sent as apikey only');
-        as = db.serviceRole();
-      } else {
-        assert.equal(call.apikey, PUBLISHABLE, 'a person’s own calls go with the publishable key');
-        // PostgREST takes any token the project signed until it expires: it does not ask Auth.
-        if (!held) return json(401, { code: 'PGRST301', message: 'JWT could not be decoded' });
-        as = db.as(held.sub, { amr: held.amr });
-      }
-      try {
-        const result = await as.call(name, JSON.parse(init.body || '{}'));
-        call.answer = result;
-        return result === '' || result === null ? json(204) : json(200, result);
-      } catch (error) {
-        call.answer = { code: error.code };
-        return json(statusOf(error.code), { code: error.code, message: error.message, details: null, hint: error.hint ?? null });
-      }
-    }
-
-    if (route === 'admin_create') {
-      assert.equal(call.apikey, SECRET_KEY, 'the admin create goes with the server key');
-      assert.equal(call.authorization, null, 'a secret key is sent as apikey only');
-      const body = JSON.parse(init.body);
-      const [taken] = await db.adminRows('select id from auth.users where lower(email) = lower($1)', [body.email]);
-      if (taken) return json(422, { code: 422, error_code: 'email_exists', msg: 'A user with this email address has already been registered' });
-      const id = randomUUID();
-      await db.admin('insert into auth.users (id, email, email_confirmed_at) values ($1, $2, case when $3::boolean then now() end)', [id, body.email, body.email_confirm === true]);
-      const app_metadata = { provider: 'email', providers: ['email'], ...(body.app_metadata ?? {}) };
-      made.set(id, { email: body.email, password: body.password, email_confirm: body.email_confirm, app_metadata });
-      EVER_MADE.push(body.email, body.password);
-      const [user] = await db.adminRows('select email_confirmed_at from auth.users where id = $1', [id]);
-      return json(200, { id, aud: 'authenticated', role: 'authenticated', email: body.email, email_confirmed_at: user.email_confirmed_at, app_metadata, user_metadata: {}, identities: [] });
-    }
-
-    if (route === 'token') {
-      assert.equal(searchParams.get('grant_type'), 'password');
-      assert.equal(call.apikey, PUBLISHABLE, 'a sign-in goes with the publishable key, as a phone’s own would');
-      if (tooMany) return json(429, TOO_MANY);
-      const { email, password } = JSON.parse(init.body);
-      const invalid = () => json(400, { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' });
-      const [user] = await db.adminRows('select id, email from auth.users where lower(email) = lower($1)', [typeof email === 'string' ? email : '']);
-      if (!user || typeof password !== 'string') return invalid();
-      if (password !== (await loginPassword(user.email))) return invalid();
-      if (made.has(user.id) && made.get(user.id).password !== password) return invalid();
-      const at = Math.floor(clock.now / 1000);
-      return json(200, {
-        access_token: tokenFor(user.id),
-        token_type: 'bearer',
-        expires_in: 3600,
-        expires_at: at + 3600,
-        refresh_token: randomBytes(16).toString('hex'),
-        user: { id: user.id, aud: 'authenticated', role: 'authenticated', email: user.email, app_metadata: appMetadataOf(user.id) },
-      });
-    }
-
-    if (route === 'logout') {
-      assert.equal(call.apikey, PUBLISHABLE, 'a sign-out goes with the publishable key and the session’s own token');
-      const found = await whose(bearer(headers));
-      if (!found.sub) return json(403, { code: 403, error_code: found.error_code, msg: 'The session could not be found' });
-      const scope = searchParams.get('scope') ?? 'global';
-      logouts.push({ scope, sub: held.sub, session: held.session });
-      for (const other of tokens.values()) {
-        if (other.sub !== held.sub) continue;
-        if (scope === 'global' || (scope === 'others') === (other.session !== held.session)) signedOut.add(other.session);
-      }
-      return json(204);
-    }
-
-    if (route === 'admin_delete') {
-      assert.equal(call.apikey, SECRET_KEY, 'the admin delete goes with the server key');
-      assert.equal(call.authorization, null, 'a secret key is sent as apikey only');
-      assert.deepEqual(JSON.parse(init.body), { should_soft_delete: false });
-      const id = decodeURIComponent(pathname.slice('/auth/v1/admin/users/'.length));
-      try {
-        const removed = await db.admin('delete from auth.users where id = $1', [id]);
-        return removed.affectedRows ? json(200, {}) : json(404, { code: 404, error_code: 'user_not_found', msg: 'User not found' });
-      } catch (error) {
-        return json(500, { code: error.code, msg: error.message });
-      }
-    }
-    return json(404, { message: 'no such route' });
-  };
-
-  return {
-    fetch,
-    calls,
-    made,
-    logouts,
-    tokenFor,
-    /** The account Supabase Auth says a token signs in, or null. Not a call of the function's. */
-    accountOf: async (token) => (await whose(token)).sub ?? null,
-    /** The session is signed out: Auth turns its token down, and PostgREST still takes it until it expires. */
-    signOut: (token) => signedOut.add(tokens.get(token).session),
-    /** The switch: the password grant answers 429, too many sign-ins, while it is on. */
-    tooManySignIns: (on) => (tooMany = on),
-    /** A test's own answer for a route ('rpc:<name>', 'user', 'admin_create', 'admin_delete', 'token', 'logout'), or null to take it off. */
-    when: (route, answer) => (answer ? instead.set(route, answer) : instead.delete(route)),
-    /** Something done once, as the account a sign-up made joins, just before join_company runs: it gets that account. */
-    beforeJoin: (work) =>
-      instead.set('rpc:join_company', async (_call, sub) => {
-        instead.delete('rpc:join_company');
-        await work(sub);
-        return null;
-      }),
-  };
-}
-
-const said = { logs: [], bodies: [] };
 function handler({ env = ENV } = {}) {
-  const clock = { now: NOW * 1000 };
-  const auth = supabase({ clock });
-  const logged = [];
-  const handle = makeHandler({
-    env: (name) => env[name],
-    fetch: auth.fetch,
-    now: () => clock.now,
-    log: (line) => {
-      logged.push(line);
-      said.logs.push(line);
-    },
+  const served = serveFunction(makeHandler, db, { env, said, serverFunctions: SERVER_FUNCTIONS });
+  return { ...served, send: (body, options) => served.ask(post(body, options)) };
+}
+
+/** Something done once, as the account a sign-up made joins, just before join_company runs: it gets that account. */
+function beforeJoin(auth, work) {
+  auth.when('rpc:join_company', async (_call, { sub }) => {
+    auth.when('rpc:join_company', null);
+    await work(sub);
+    return null;
   });
-  const ask = async (request) => {
-    const response = await handle(request);
-    const text = await response.text();
-    said.bodies.push(text);
-    return { status: response.status, headers: response.headers, body: text ? JSON.parse(text) : null };
-  };
-  return { ask, send: (body, options) => ask(post(body, options)), handle, auth, clock, logged };
 }
 
 let sent = 0;
@@ -271,13 +65,14 @@ const anyAddress = () => `2001:db8:6::${(sent += 1).toString(16)}`;
 
 /**
  * A request as the app sends it: POST, JSON and no Origin, from the phone's address as Supabase's edge
- * hands it on (cf-connecting-ip). `address` null sends none.
+ * hands it on (cf-connecting-ip). `address` null sends none. What it sends is kept, for the last test.
  */
 function post(body, { address = anyAddress(), bearer: token = null, origin = null, raw = null, headers = {} } = {}) {
   const sending = { 'Content-Type': 'application/json', ...headers };
   if (address !== null) sending['cf-connecting-ip'] = address;
   if (token) sending.Authorization = `Bearer ${token}`;
   if (origin) sending.Origin = origin;
+  said.sent.push({ body, raw, headers: sending });
   return new Request(ENDPOINT, { method: 'POST', headers: sending, body: raw ?? JSON.stringify(body) });
 }
 
@@ -302,7 +97,6 @@ const everything = async () =>
 const accountExists = async (id) => (await db.adminRows('select count(*)::int as n from auth.users where id = $1', [id]))[0].n === 1;
 const holderOf = async (rowId) => (await db.adminRows('select user_id from public.roster where id = $1', [rowId]))[0].user_id;
 const countsOf = async (account) => (await db.adminRows('select wrong_in_a_row from public.crew_logins where user_id = $1', [account]))[0];
-const adminDeletes = (calls) => calls.filter((c) => c.method === 'DELETE');
 const routes = (calls) => calls.map((c) => `${c.method} ${c.path}`);
 const revOf = (record) => createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0, 20);
 const resetCodeFor = (company, name) => db.as(company.owner).call('make_passcode_reset_code', { p_roster_id: company.rows[name] });
@@ -382,7 +176,7 @@ describe('the phone’s address', () => {
     for (const good of ['192.0.2.1', '0.0.0.0', '255.255.255.255', '::', '::1', '1::', '2001:DB8::7', '2001:db8:0:0:0:0:2:1', '1:2:3:4:5:6:7::', '::ffff:192.0.2.128', '64:ff9b::192.0.2.33', '1:2:3:4:5:6:192.0.2.1']) {
       assert.ok(from({ 'cf-connecting-ip': good }) === good, `address ${good.length}`);
     }
-    const junk = ['', 'unknown', '256.1.1.1', '192.0.2', '192.0.2.1.5', '01.2.3.4', '192.0.2.1/24', '[2001:db8::1]', '2001:db8::1%eth0', '1::2::3', '1:2:3:4:5:6:7:8:9', ':::', '1:2:3:4:5:6:7', '12345::1', 'g::1', '1.2.3.4::', '::1.2.3', '::ffff:256.1.1.1', 'x'.repeat(100)];
+    const junk = ['', 'unknown', '256.1.1.1', '192.0.2', '192.0.2.1.5', '01.2.3.4', '192.0.2.1/24', '[2001:db8::1]', '2001:db8::1%eth0', '1::2::3', '1:2::3:4::5:6:7:8', '1:2:3:4:5:6:7:8:9', '1:2:3:4:5:6:7:8::', '::1:2:3:4:5:6:7:8', ':::', '1:2:3:4:5:6:7', '12345::1', 'g::1', '1.2.3.4::', '::1.2.3', '::ffff:256.1.1.1', 'x'.repeat(100)];
     for (const [i, value] of junk.entries()) {
       // A cf-connecting-ip that is not an address is not passed over for X-Forwarded-For, which a caller can write.
       assert.equal(from({ 'cf-connecting-ip': value, 'x-forwarded-for': '198.51.100.1' }), '', `junk ${i}`);
@@ -468,16 +262,16 @@ describe('sign_up', () => {
     // Kit MarIow (a capital I for the l) passes the check while nobody like it is on the roster. A
     // supervisor puts Kit Marlow on before it joins, and join_company refuses a name that only looks like
     // one on the roster.
-    auth.beforeJoin(() => addToRoster(db, company.owner, company.id, { first: 'Kit', last: 'Marlow' }));
+    beforeJoin(auth, () => addToRoster(db, company.owner, company.id, { first: 'Kit', last: 'Marlow' }));
     const lookalike = await send(signUp(company.code, 'Kit', 'MarIow'));
     assert.deepEqual([lookalike.status, lookalike.body], [200, { status: 'bad_name', message: 'Type your name the way it is written on the roster.' }]);
     // A name that fits two rows and is neither: join_company records nothing, and asks for the name as it is on the roster.
     assert.deepEqual((await send(signUp(company.code, 'Roy', 'Park'))).body, { status: 'ambiguous' });
     // A supervisor's bar on the account, as it joins.
-    auth.beforeJoin((account) => db.admin("insert into public.join_holds (company_id, user_id, kind) values ($1, $2, 'barred')", [company.id, account]));
+    beforeJoin(auth, (account) => db.admin("insert into public.join_holds (company_id, user_id, kind) values ($1, $2, 'barred')", [company.id, account]));
     assert.deepEqual((await send(signUp(company.code, 'Jo', 'Vale'))).body, { status: 'denied' });
     // The code changed while it signed up.
-    auth.beforeJoin(() => db.as(company.owner).call('rotate_join_code', { company_id: company.id }));
+    beforeJoin(auth, () => db.as(company.owner).call('rotate_join_code', { company_id: company.id }));
     assert.deepEqual((await send(signUp(company.code, 'Jo', 'Vale'))).body, { status: 'no_company' });
 
     // Each account it made is deleted again, and what joining left of it with it: nothing is kept.
@@ -562,7 +356,7 @@ describe('sign_up', () => {
     const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
     // Another sign-up for the name claims the row between this one's check and its join.
     let other = null;
-    auth.beforeJoin(async () => {
+    beforeJoin(auth, async () => {
       other = await crewAccount(OTHER);
       assert.equal((await join(db, other, company.code, 'Riley J', 'Quinn')).status, 'joined');
     });
@@ -605,9 +399,10 @@ describe('sign_up', () => {
     auth.when('user', () => json(429, TOO_MANY));
     assert.deepEqual((await send(confirm(), { bearer: riley.access_token })).body, { status: 'busy' });
     auth.when('user', null);
-    // A reset keeps the new passcode before Auth turns its sign-in down: the person then signs in with it.
+    // A reset keeps the new passcode before Auth turns its sign-in down. It says so, never busy, so the
+    // person signs in with the new passcode rather than try a code that is spent.
     const code = await resetCodeFor(company, 'Riley J Quinn');
-    assert.deepEqual((await send(reset(company.code, 'Riley', 'Quinn', code, OTHER))).body, { status: 'busy' });
+    assert.deepEqual((await send(reset(company.code, 'Riley', 'Quinn', code, OTHER))).body, { status: 'passcode_changed' });
     // Auth's 429 at the admin create is busy as well, and makes nothing.
     auth.tooManySignIns(false);
     auth.when('admin_create', () => json(429, TOO_MANY));
@@ -620,6 +415,44 @@ describe('sign_up', () => {
     assert.equal((await send(signIn(company.code, 'Riley', 'Quinn', OTHER))).body.status, 'signed_in');
     const again = await send(signUp(company.code, 'Kit', 'Marlow'));
     assert.deepEqual([again.body.status, again.body.join.status], ['signed_in', 'joined']);
+  });
+
+  it('a sign_up whose admin create gets no answer signs in to find the account, and deletes one it finds', async () => {
+    const { send, auth } = handler();
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const before = await everything();
+
+    // Made, and the answer lost on its way back: the login signs in to it, and it is deleted again.
+    auth.when('admin_create', async (_call, { proceed }) => {
+      await proceed();
+      throw new TypeError('fetch failed');
+    });
+    let calls = auth.calls.length;
+    const lost = await send(signUp(company.code, 'Riley', 'Quinn'));
+    assert.deepEqual([lost.status, lost.body.error], [500, 'try_again']);
+    const [madeId] = auth.made.keys();
+    assert.deepEqual(routes(auth.calls.slice(calls)), ['POST /rest/v1/rpc/crew_sign_up_check', 'POST /auth/v1/admin/users', 'POST /auth/v1/token', `DELETE /auth/v1/admin/users/${madeId}`]);
+    assert.equal(await accountExists(madeId), false);
+    assert.deepEqual(await everything(), before);
+
+    // Not made, and no answer: the login signs in to nothing, and nothing is deleted.
+    auth.when('admin_create', () => {
+      throw new TypeError('fetch failed');
+    });
+    calls = auth.calls.length;
+    const none = await send(signUp(company.code, 'Riley', 'Quinn'));
+    assert.deepEqual([none.status, none.body.error], [500, 'try_again']);
+    assert.deepEqual(routes(auth.calls.slice(calls)), ['POST /rest/v1/rpc/crew_sign_up_check', 'POST /auth/v1/admin/users', 'POST /auth/v1/token']);
+    assert.equal(auth.made.size, 1);
+    assert.deepEqual(await everything(), before);
+
+    // A create Auth answered, and turned down, made nothing: there is nothing to look for.
+    auth.when('admin_create', () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error creating new user' }));
+    calls = auth.calls.length;
+    assert.deepEqual((await send(signUp(company.code, 'Riley', 'Quinn'))).body.error, 'try_again');
+    assert.deepEqual(routes(auth.calls.slice(calls)), ['POST /rest/v1/rpc/crew_sign_up_check', 'POST /auth/v1/admin/users']);
+    auth.when('admin_create', null);
+    assert.equal((await send(signUp(company.code, 'Riley', 'Quinn'))).body.status, 'signed_in');
   });
 
   it('a sign_up deletes the account it made when a later step fails, and answers try_again', async () => {
@@ -760,7 +593,7 @@ describe('reset', () => {
     const calls = auth.calls.length;
     const answer = await send(reset(company.code, 'Riley', 'Quinn', code, OTHER));
     const { session, ...rest } = answer.body;
-    assert.deepEqual([answer.status, rest], [200, { status: 'signed_in', company: { id: company.id, name: 'Test Pit A' }, waiting: false }]);
+    assert.deepEqual([answer.status, rest], [200, { status: 'signed_in', company: { id: company.id, name: 'Test Pit A' }, waiting: false, others_signed_out: true }]);
     assert.equal(await sessionAccount(auth, session), riley);
     // The check, the sign-in, and the sign-out of every other session, made with the fresh session.
     assert.deepEqual(routes(auth.calls.slice(calls)), ['POST /rest/v1/rpc/crew_reset_check', 'POST /auth/v1/token', 'POST /auth/v1/logout']);
@@ -776,16 +609,86 @@ describe('reset', () => {
     assert.equal((await send(signIn(company.code, 'Riley', 'Quinn', OTHER))).body.status, 'signed_in');
     assert.deepEqual((await send(signIn(company.code, 'Riley', 'Quinn', PASSCODE))).body, { status: 'wrong', tries_left: 4 });
     assert.deepEqual((await send(reset(company.code, 'Riley', 'Quinn', code, THIRD))).body, { status: 'expired' });
+  });
 
-    // When the other sessions cannot be signed out, no session is answered: the new passcode is kept, and
-    // the person signs in with it.
-    auth.when('logout', () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error' }));
-    const failed = await send(reset(company.code, 'Riley', 'Quinn', await resetCodeFor(company, 'Riley J Quinn'), THIRD));
-    assert.deepEqual([failed.status, failed.body.error], [500, 'try_again']);
+  it('once a reset has kept the new passcode, a sign-in that fails answers passcode_changed, never busy or try_again', async () => {
+    const { send, auth } = handler();
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    await send(signUp(company.code, 'Riley', 'Quinn'));
+    const resetTo = async (passcode) => send(reset(company.code, 'Riley', 'Quinn', await resetCodeFor(company, 'Riley J Quinn'), passcode));
+    const signsIn = async (passcode) => (await send(signIn(company.code, 'Riley', 'Quinn', passcode))).body.status;
+
+    // Auth's 429 at the sign-in after a good reset: the code is spent and the new passcode kept, so the
+    // answer says to sign in with it, never busy.
+    auth.tooManySignIns(true);
+    const limited = await resetTo(OTHER);
+    assert.deepEqual([limited.status, limited.body], [200, { status: 'passcode_changed' }]);
+    auth.tooManySignIns(false);
+    assert.equal(await signsIn(OTHER), 'signed_in');
+
+    // Any other failure of the sign-in after a good reset: an error, no answer, or no session in the answer.
+    const failures = [
+      [THIRD, () => json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error querying schema' })],
+      [
+        PASSCODE,
+        () => {
+          throw new TypeError('fetch failed');
+        },
+      ],
+      [OTHER, () => json(200, { token_type: 'bearer' })],
+    ];
+    for (const [i, [passcode, failure]] of failures.entries()) {
+      auth.when('token', failure);
+      const answer = await resetTo(passcode);
+      auth.when('token', null);
+      assert.deepEqual([answer.status, answer.body], [200, { status: 'passcode_changed' }], `failure ${i}`);
+      assert.equal(await signsIn(passcode), 'signed_in', `the new passcode signs in after failure ${i}`);
+    }
+    // A good reset whose answer has no login this can sign in with: the passcode is kept all the same.
+    auth.when('rpc:crew_reset_check', async (_call, { proceed }) => {
+      await proceed();
+      return json(200, { status: 'ok', company_id: company.id, company_name: 'Test Pit A', waiting: false });
+    });
+    assert.deepEqual((await resetTo(THIRD)).body, { status: 'passcode_changed' });
+    auth.when('rpc:crew_reset_check', null);
+    assert.equal(await signsIn(THIRD), 'signed_in');
+    // With no session, nothing could sign the other sessions out: that is the app's to do, once it signs in.
+    assert.equal(auth.logouts.length, 0);
+  });
+
+  it('a reset tries the sign-out of the other sessions once more, and says whether they are signed out', async () => {
+    const { send, auth } = handler();
+    const company = await startCompany(db, { roster: [{ first: 'Riley J', last: 'Quinn' }] });
+    const earlier = (await send(signUp(company.code, 'Riley', 'Quinn'))).body.session;
+    const riley = earlier.user_id;
+    const resetTo = async (passcode) => send(reset(company.code, 'Riley', 'Quinn', await resetCodeFor(company, 'Riley J Quinn'), passcode));
+    const theirs = { id: company.id, name: 'Test Pit A' };
+
+    // Turned down once: tried again, and the second goes through.
+    let refusals = 1;
+    auth.when('logout', () => (refusals-- > 0 ? json(500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error' }) : null));
+    let calls = auth.calls.length;
+    const once = await resetTo(OTHER);
+    const { session: fresh, ...rest } = once.body;
+    assert.deepEqual([once.status, rest], [200, { status: 'signed_in', company: theirs, waiting: false, others_signed_out: true }]);
+    assert.deepEqual(routes(auth.calls.slice(calls)), ['POST /rest/v1/rpc/crew_reset_check', 'POST /auth/v1/token', 'POST /auth/v1/logout', 'POST /auth/v1/logout']);
+    assert.ok(auth.calls.slice(-2).every((c) => c.authorization === `Bearer ${fresh.access_token}`), 'both with the fresh session');
+    assert.equal(await auth.accountOf(earlier.access_token), null, 'the phone signed in before is signed out');
+    assert.equal(await auth.accountOf(fresh.access_token), riley);
+
+    // Turned down twice: the session is answered all the same, saying the other sessions are still signed
+    // in, for the app to sign them out.
+    const other = (await send(signIn(company.code, 'Riley', 'Quinn', OTHER))).body.session;
     auth.when('logout', () => json(429, TOO_MANY));
-    assert.deepEqual((await send(reset(company.code, 'Riley', 'Quinn', await resetCodeFor(company, 'Riley J Quinn'), PASSCODE))).body, { status: 'busy' });
+    calls = auth.calls.length;
+    const twice = await resetTo(THIRD);
     auth.when('logout', null);
-    assert.equal((await send(signIn(company.code, 'Riley', 'Quinn', PASSCODE))).body.status, 'signed_in');
+    const { session: last, ...restTwice } = twice.body;
+    assert.deepEqual([twice.status, restTwice], [200, { status: 'signed_in', company: theirs, waiting: false, others_signed_out: false }]);
+    assert.equal(await sessionAccount(auth, last), riley);
+    assert.deepEqual(routes(auth.calls.slice(calls)), ['POST /rest/v1/rpc/crew_reset_check', 'POST /auth/v1/token', 'POST /auth/v1/logout', 'POST /auth/v1/logout']);
+    assert.equal(await auth.accountOf(other.access_token), riley, 'the other session is still signed in');
+    assert.equal((await send(signIn(company.code, 'Riley', 'Quinn', THIRD))).body.status, 'signed_in');
   });
 });
 
@@ -932,14 +835,11 @@ describe('the request', () => {
 
 describe('the calls it makes', () => {
   it('answers 500 try_again when neither Supabase Auth nor the database can be reached', async () => {
-    const logged = [];
-    const failing = makeHandler({
-      env: (name) => ENV[name],
+    const { ask, logged } = serveFunction(makeHandler, db, {
+      said,
       fetch: async () => {
         throw new TypeError('fetch failed');
       },
-      now: () => NOW * 1000,
-      log: (line) => logged.push(line),
     });
     for (const [i, request] of [
       post(lookup('ABCD2345')),
@@ -948,8 +848,8 @@ describe('the calls it makes', () => {
       post(reset('ABCD2345', 'Pat', 'Cole', '123456', OTHER)),
       post(confirm(), { bearer: 'a.b.c' }),
     ].entries()) {
-      const response = await failing(request);
-      assert.deepEqual([response.status, (await response.json()).error], [500, 'try_again'], `request ${i}`);
+      const answer = await ask(request);
+      assert.deepEqual([answer.status, answer.body.error], [500, 'try_again'], `request ${i}`);
     }
     assert.equal(logged.length, 5);
   });
@@ -975,6 +875,19 @@ describe('the calls it makes', () => {
     const noLogin = await send(signIn(company.code, 'Riley', 'Quinn'));
     assert.deepEqual([noLogin.status, noLogin.body.error], [500, 'try_again']);
     assert.ok(!auth.calls.some((c) => c.path === '/auth/v1/token' || c.path === '/auth/v1/admin/users'), 'nobody is signed in or made');
+    // A real login, its answer short of the company or of whether the person waits: nobody is signed in.
+    const riley = (await send(signUp(company.code, 'Riley', 'Quinn'))).body.session.user_id;
+    for (const left of ['company_id', 'waiting']) {
+      auth.when('rpc:crew_sign_in_check', async (_call, { proceed }) => {
+        const real = await (await proceed()).json();
+        delete real[left];
+        return json(200, real);
+      });
+      const short = await send(signIn(company.code, 'Riley', 'Quinn'));
+      assert.deepEqual([short.status, short.body.error], [500, 'try_again'], left);
+    }
+    auth.when('rpc:crew_sign_in_check', null);
+    assert.equal((await send(signIn(company.code, 'Riley', 'Quinn'))).body.session.user_id, riley);
   });
 
   it('reads when a session expires from expires_in when Supabase Auth gives no expires_at, and takes no session without either', async () => {
@@ -1056,7 +969,7 @@ describe('what it says', () => {
     await run(signUp(company.code, 'Pat', 'Cole', OTHER));
     await run(signUp(company.code, 'Riley', 'Quinn', THIRD));
     await run(signUp(company.code, 'Jo', 'Vale', '123456'));
-    auth.beforeJoin(() => addToRoster(db, company.owner, company.id, { first: 'Kit', last: 'Marlow' }));
+    beforeJoin(auth, () => addToRoster(db, company.owner, company.id, { first: 'Kit', last: 'Marlow' }));
     await run(signUp(company.code, 'Kit', 'MarIow'));
     auth.tooManySignIns(true);
     await run(signUp(company.code, 'Jo', 'Vale'));
@@ -1071,38 +984,71 @@ describe('what it says', () => {
     await run(confirm(WRONG), { bearer: done.body.session.access_token });
     await run(confirm(OTHER));
     await run({ action: 'lookup', code: company.code, first_name: 'Riley' });
-
-    const madeWith = [...auth.made.values()];
-    const accounts = [...auth.made.keys()];
-    const tokens = answers.flatMap((a) => (a.body?.session ? [a.body.session.access_token, a.body.session.refresh_token] : []));
-    const [{ email: ownerEmail }] = await db.adminRows('select email from auth.users where id = $1', [company.owner]);
-    const typedCode = company.code.toLowerCase();
-    const secrets = [
-      PASSCODE, OTHER, THIRD, WRONG, '123456', code, otherThan(code),
-      company.code, typedCode,
-      ...addresses,
-      ...madeWith.map((m) => m.email), ownerEmail,
-      ...madeWith.map((m) => m.password),
-      ...tokens,
-      SECRET_KEY, PUBLISHABLE,
-      ...accounts, company.owner, company.id,
-    ];
-    const log = logged.join('\n');
     assert.ok(logged.length >= answers.length, 'something is said of each request');
-    for (const [i, secret] of secrets.entries()) assert.ok(!log.includes(secret), `the log holds secret ${i}`);
-    // The names typed, as words in any case.
-    for (const name of ['Riley', 'Quinn', 'Pat', 'Cole', 'Jo', 'Vale', 'Kit', 'MarIow']) assert.doesNotMatch(log, new RegExp(`\\b${name}\\b`, 'i'));
 
-    // The answers never carry a login: neither the hidden address nor its password, nor a key.
-    const bodies = answers.map((a) => JSON.stringify(a.body)).join('\n');
-    for (const [i, secret] of [...madeWith.map((m) => m.email), ...madeWith.map((m) => m.password), SECRET_KEY, PUBLISHABLE].entries()) {
-      assert.ok(!bodies.includes(secret), `an answer holds secret ${i}`);
-    }
-    assert.doesNotMatch(bodies, /login_email|login_password/);
-
-    // Nor did the log of any test in this file.
+    // Over every test in this file, this one last: no log holds anything any test sent (the codes, the
+    // names, the passcodes and reset codes typed, the addresses, the session tokens), nor any token or
+    // account the stand-ins made (its address, its password, its id), nor a key, nor any account's or
+    // company's id or address, nor any company's code.
     const allLogs = said.logs.join('\n');
-    for (const [i, secret] of [...EVER_MADE, PASSCODE, OTHER, THIRD, WRONG, SECRET_KEY, PUBLISHABLE].entries()) assert.ok(!allLogs.includes(secret), `a log holds secret ${i}`);
+    const lowered = allLogs.toLowerCase();
+    const { texts, names } = await whatNoLogHolds();
+    assert.ok(texts.size > 100 && names.size > 10, `${texts.size} values and ${names.size} names looked for`);
+    for (const [i, text] of [...texts].entries()) assert.ok(!lowered.includes(text.toLowerCase()), `a log holds value ${i}`);
+    for (const name of names) assert.doesNotMatch(allLogs, new RegExp(`\\b${name}\\b`, 'i'));
     assert.doesNotMatch(allLogs, /2001:db8|203\.0\.113|198\.51\.100/, 'no address');
+
+    // No answer in this file carries a login (a hidden address or its password) or a key.
+    const allBodies = said.bodies.join('\n');
+    for (const [i, secret] of [...said.made.flatMap((m) => [m.email, m.password]), SECRET_KEY, PUBLISHABLE].entries()) {
+      assert.ok(!allBodies.includes(secret), `an answer holds secret ${i}`);
+    }
+    assert.doesNotMatch(allBodies, /login_email|login_password/);
   });
 });
+
+/**
+ * What no log may hold, from every test in this file: each value a test sent but the action (names as
+ * the words of the names typed, the rest as they are), each address and bearer token it sent, each token
+ * and account the stand-ins made, the keys, and every account's and company's id, address and code.
+ */
+async function whatNoLogHolds() {
+  const texts = new Set([SECRET_KEY, PUBLISHABLE, ...said.minted]);
+  const names = new Set();
+  for (const { id, email, password } of said.made) for (const value of [id, email, password]) texts.add(value);
+  for (const { body, raw, headers } of said.sent) {
+    let fields = body;
+    if (typeof raw === 'string') {
+      try {
+        fields = JSON.parse(raw);
+      } catch {
+        fields = null;
+      }
+    }
+    if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
+      for (const [key, value] of Object.entries(fields)) {
+        if (key === 'action' || typeof value !== 'string') continue;
+        if (key === 'first_name' || key === 'last_name') {
+          for (const word of value.split(/\s+/).map((w) => w.replace(/^\W+|\W+$/g, ''))) if (word.length >= 2) names.add(word.toLowerCase());
+        } else if (value.trim().length >= 4) {
+          texts.add(value.trim());
+        }
+      }
+    }
+    for (const [header, value] of Object.entries(headers)) {
+      if (header === 'Authorization') texts.add(value.replace(/^Bearer\s+/, ''));
+      if (header === 'cf-connecting-ip' || header === 'x-forwarded-for') {
+        for (const part of value.split(',')) if (part.trim().length >= 4) texts.add(part.trim());
+      }
+    }
+  }
+  for (const { id, email } of await db.adminRows('select id::text as id, email from auth.users')) {
+    texts.add(id);
+    if (email) texts.add(email);
+  }
+  for (const { id, join_code } of await db.adminRows('select id::text as id, join_code from public.companies')) {
+    texts.add(id);
+    texts.add(join_code);
+  }
+  return { texts, names };
+}
