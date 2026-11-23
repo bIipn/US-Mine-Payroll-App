@@ -68,7 +68,9 @@
 -- So does deleting a row, which deletes its invitations through the cascade,
 -- and deleting a company, which reaches invitations through its rows alone.
 -- None of them ever holds an invitation while it waits for that invitation's
--- row.
+-- row. Accepting, which can write a hold that points at the company, takes a
+-- share of the company's row before the roster row, as close_company locks the
+-- company's row before its roster.
 
 -- ---- The invitations --------------------------------------------------------------------------------
 
@@ -530,13 +532,21 @@ $$;
 --
 -- It finds the invitation's row with no lock. It takes join_company's lock
 -- for the caller and the company, so a name typed in the app at the same
--- moment never puts the account on a second row there. Then it locks the row,
--- then the invitation (a row before its invitations), and finds the
--- invitation again, still that row's. Every condition is checked under those
--- locks: two acceptances of one invitation, or an acceptance and a new
--- invitation onto the row, take turns, and the second sees what the first
--- did. The roster's write trigger takes the account's lock last, in the
--- writes. It refuses, in this order:
+-- moment never puts the account on a second row there. Then it takes a share
+-- of the company's row (for key share), then locks the row, then the
+-- invitation (a row before its invitations), and finds the invitation again,
+-- still that row's. Every condition is checked under those locks: two
+-- acceptances of one invitation, or an acceptance and a new invitation onto
+-- the row, take turns, and the second sees what the first did. The roster's
+-- write trigger takes the account's lock last, in the writes.
+--
+-- The company's row comes before the roster row, in close_company's order
+-- (the company's row for update, then every row of its roster). The released
+-- hold written below points at the company, and its key takes this same share
+-- of the company's row; taken only there, after the roster row, it could wait
+-- for close_company while close_company waited for that roster row, and one of
+-- the two would end in a deadlock. Taken first, the acceptance and
+-- close_company take turns on the company's row. It refuses, in this order:
 --   42501  nobody signed in;
 --   PT404  no such invitation, or none any longer once its row is locked;
 --   PT409  wrong_email: the caller's confirmed address (confirmed_email_of) is
@@ -545,8 +555,9 @@ $$;
 --   PT409  invitation_closed: expired, cancelled or accepted;
 --   PT409  invitation_closed: its inviter is no longer a supervisor of the
 --          company (still_a_supervisor). The inviter's row is read, not
---          locked: locking a second row of the roster could deadlock against
---          close_company, which locks every row of the company;
+--          locked: a second roster row locked here, in no order fixed with
+--          the invited row, could deadlock against a call that locks the two
+--          the other way round;
 --   PT409  already_on_roster: the caller holds a row of the company, on the
 --          roster or taken off it (an account holds one row per company);
 --   PT409  row_taken: the row is taken off the roster, or an email account
@@ -591,6 +602,8 @@ begin
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended('join_company ' || caller::text || ' ' || seen.company_id::text, 0)
   );
+
+  perform 1 from public.companies c where c.id = seen.company_id for key share;
 
   select r.* into target
   from public.roster r

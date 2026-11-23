@@ -88,8 +88,10 @@ alter table public.crew_logins enable row level security;
 revoke all on table public.crew_key from public, anon, authenticated, service_role;
 revoke all on table public.crew_logins from public, anon, authenticated, service_role;
 
--- No planner statistics, before either holds data (see migration
--- 20261116002200 and the README).
+-- No planner statistics (see migration 20261116002200 and the README), turned
+-- off before any can be gathered: crew_logins holds nothing yet, and
+-- crew_key's one row was written above, in this same transaction, which no
+-- ANALYZE sees before it commits.
 do $$
 declare
   col record;
@@ -394,8 +396,10 @@ revoke all on function public.crew_check_passcode(uuid, text) from public, anon,
 -- The crew-auth requests let through from each network address in the last
 -- 10 minutes, one row each, for the limit: a digest of the address made with
 -- the crew key (SHA-256 of the key and the address), never the address, so
--- the rows cannot be turned back into addresses by trying every address. The
--- next request deletes a row once it is 10 minutes old.
+-- the rows cannot be turned back into addresses by trying every address. A
+-- row is deleted by a request that comes after its 10 minutes: the next one,
+-- unless another request is deleting old rows at that moment, and then a
+-- later one (crew_try_counted).
 create table public.crew_sign_in_tries (
   sender bytea not null,
   at timestamptz not null default now(),
@@ -425,7 +429,22 @@ alter table public.crew_sign_in_tries alter column at set statistics 0;
 --
 -- Requests from one address take turns from the count to the commit, so two
 -- at once cannot both slip under the limit. What is older than the 10 minutes
--- is deleted, whoever it came from, as the contact form deletes its senders.
+-- is deleted, whoever it came from, as the contact form deletes its senders,
+-- by one request at a time: the one that gets the prune's own lock, the same
+-- for every address, which a request tries for and never waits for. A request
+-- that finds another deleting passes the old rows by and leaves them to it, or
+-- to a later request: its count reads only the last 10 minutes, so that
+-- changes no answer, and an old row outlives its 10 minutes only until a
+-- request gets the lock. Two deletes from two addresses that went through the
+-- rows in opposite orders at the same moment would deadlock; one at a time
+-- never meets another.
+--
+-- The prune's lock has a key of two integers. Every other advisory lock these
+-- migrations take has one key, a bigint (hashtextextended of a text: the
+-- per-address lock here, an account's crew_logins lock, join_company's,
+-- create_company's and the contact form's), and PostgreSQL keeps the two kinds
+-- of key apart, so no other lock of the migrations can be this one.
+--
 -- With no key the digest is null and the insert is refused, before any
 -- passcode is checked. No API role: the checks below call it.
 create function public.crew_try_counted(p_address text)
@@ -443,7 +462,9 @@ begin
 
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_sign_in_tries ' || pg_catalog.encode(who, 'hex'), 0));
 
-  delete from public.crew_sign_in_tries t where t.at <= pg_catalog.now() - interval '10 minutes';
+  if pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtext('crew_sign_in_tries'), pg_catalog.hashtext('prune')) then
+    delete from public.crew_sign_in_tries t where t.at <= pg_catalog.now() - interval '10 minutes';
+  end if;
 
   if (select pg_catalog.count(*)
       from public.crew_sign_in_tries t
@@ -857,11 +878,22 @@ revoke execute on function public.company_by_code(text) from anon;
 --                               index, as it always was.
 -- crew_keep_passcode refuses each the other way round.
 --
--- For a write that puts an account on a row, or writes a supervisor's row an
--- account holds, the account's lock is taken first, the one
--- crew_keep_passcode takes: two such writes for one account, or one and a
--- passcode for it, take turns, and the second sees what the first wrote. It
--- stays bound to roster as it was.
+-- For a write that puts an account on a row (an insert with one, or a claim),
+-- or makes a row an account holds a supervisor's, the account's lock is taken
+-- first, the one crew_keep_passcode takes: two such writes for one account, or
+-- one and a passcode for it, take turns, and the second sees what the first
+-- wrote. Those are the only writes that can give an account what keeping a
+-- passcode refuses (crew_keep_passcode reads whether the account holds a
+-- supervisor's row, and in how many companies it holds rows): a supervisor's
+-- row, or a row in a second company, since a row cannot move to another
+-- company. Every other write takes no account's lock. It keeps the row's
+-- account and role, makes a supervisor crew, or lets the account go, and so
+-- can only take away what keeping a passcode refuses: whichever of it and a
+-- passcode kept at the same moment commits first, neither rule is broken. A
+-- statement over many rows (a job title written over a whole roster) waits on
+-- no account; one that put accounts on many rows, or made many held rows
+-- supervisors', would still take their locks row by row, and the dashboard
+-- writes one row at a time. It stays bound to roster as it was.
 create or replace function public.roster_before_write()
 returns trigger
 language plpgsql
@@ -872,6 +904,7 @@ declare
   name_written boolean := true;
   title_written boolean := true;
   claim_written boolean := true;
+  made_supervisor boolean := true;
 begin
   if tg_op = 'UPDATE' then
     name_written := new.first_name is distinct from old.first_name or new.last_name is distinct from old.last_name;
@@ -911,8 +944,9 @@ begin
 
   if tg_op = 'UPDATE' then
     claim_written := new.user_id is distinct from old.user_id;
+    made_supervisor := old.role is distinct from 'supervisor';
   end if;
-  if new.user_id is not null and (claim_written or new.role = 'supervisor') then
+  if new.user_id is not null and (claim_written or (new.role = 'supervisor' and made_supervisor)) then
     perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_logins ' || new.user_id::text, 0));
     if exists (select 1 from public.crew_logins l where l.user_id = new.user_id) then
       if new.role = 'supervisor' then
@@ -1069,10 +1103,15 @@ $$;
 --                                   crew_sign_in_check gives.
 -- It works while the account is locked: that is what it is for. It reads the
 -- account's row for update before its code, as crew_check_passcode does, so
--- codes sent at once are counted one by one. Nothing after a wrong code
--- raises: it is counted in this transaction and must stay counted. Nor does
--- keeping the new passcode after the right one: the rule was asked above, and
--- a passcode account holds no supervisor's row.
+-- codes sent at once are counted one by one. Before the row it takes the
+-- account's lock, the one crew_keep_passcode takes before it writes the row:
+-- a reset and a passcode kept for the account at the same moment take the two
+-- in the same order, and take turns. Keeping the new passcode takes the lock
+-- again, which it holds already. Nothing after a wrong code raises: it is
+-- counted in this transaction and must stay counted. Nor does keeping the new
+-- passcode after the right one: the rule was asked above, and a passcode
+-- account holds no supervisor's row and rows in one company only, which are
+-- the two accounts crew_keep_passcode refuses.
 create function public.crew_reset_check(p_code text, p_first text, p_last text, p_reset_code text, p_new_passcode text, p_address text)
 returns jsonb
 language plpgsql
@@ -1109,6 +1148,7 @@ begin
     return pg_catalog.jsonb_build_object('status', 'easy_passcode', 'problem', problem);
   end if;
 
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('crew_logins ' || account::text, 0));
   select l.salt, l.reset_digest, l.reset_until, l.reset_tries into kept
   from public.crew_logins l
   where l.user_id = account

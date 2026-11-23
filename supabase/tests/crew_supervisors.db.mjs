@@ -265,27 +265,35 @@ describe('supervisors sign in with email', () => {
     assert.ok(keeping.search(/\bfrom\s+public\.roster\b/i) < keeping.search(/\binsert\s+into\s+public\.crew_logins\b/i), 'it looks before it keeps the passcode');
   });
 
-  it("every write that puts an account on a row, or writes a supervisor's row it holds, takes the lock keeping a passcode takes", async () => {
-    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }] });
+  it("a write that puts an account on a row, or makes a row an account holds a supervisor's, takes the lock keeping a passcode takes, and no other write does", async () => {
+    const company = await startCompany(db, { roster: [{ first: 'Kit', last: 'Marlow' }, { first: 'Lee', last: 'Park' }] });
     const jo = await secondSupervisor(db, company, 'Jo', 'Vale');
+    const lee = await newMember(db, company, 'Lee', 'Park');
     const visitor = await db.newAccount('visitor');
-    for (const id of [company.id, company.rows['Kit Marlow'], company.rows['Jo Vale']]) assert.match(id, UUID);
+    for (const id of [company.id, company.rows['Kit Marlow'], company.rows['Jo Vale'], company.rows['Lee Park']]) assert.match(id, UUID);
     // The probe itself: a statement that takes no lock is told apart.
     assert.equal(await takesTheLock('perform 1', visitor), false);
-    // Keeping a passcode takes the account's lock, and so does every write the trigger looks at for it: a
-    // claim of a row, a row written with an account on it, and a change to a supervisor's row an account
-    // holds. Two such writes for one account take turns.
+    // Keeping a passcode takes the account's lock, and so does every write that changes what keeping one looks
+    // at: a claim of a row, a row written with an account on it, and a row an account holds made a supervisor's.
+    // Two such writes for one account take turns.
     assert.equal(await takesTheLock(`perform public.crew_keep_passcode('${visitor}', '${OTHER}')`, visitor), true);
     assert.equal(await takesTheLock(`update public.roster set user_id = '${visitor}' where id = '${company.rows['Kit Marlow']}'`, visitor), true);
     assert.equal(
-      await takesTheLock(`insert into public.roster (company_id, first_name, last_name, user_id) values ('${company.id}', 'Lee', 'Park', '${visitor}')`, visitor),
+      await takesTheLock(`insert into public.roster (company_id, first_name, last_name, user_id) values ('${company.id}', 'Pat', 'Cole', '${visitor}')`, visitor),
       true,
     );
-    assert.equal(await takesTheLock(`update public.roster set title = 'Loader' where id = '${company.rows['Jo Vale']}'`, jo), true);
+    assert.equal(await takesTheLock(`update public.roster set role = 'supervisor' where id = '${company.rows['Lee Park']}'`, lee), true);
+    // A write that keeps the row's account and does not make the row a supervisor's changes nothing keeping a
+    // passcode looks at, so it takes no account's lock: a supervisor's job title, a supervisor made crew, a crew
+    // member's job title. A statement over many such rows never waits on their accounts.
+    assert.equal(await takesTheLock(`update public.roster set title = 'Loader' where id = '${company.rows['Jo Vale']}'`, jo), false);
+    assert.equal(await takesTheLock(`update public.roster set role = 'employee' where id = '${company.rows['Jo Vale']}'`, jo), false);
+    assert.equal(await takesTheLock(`update public.roster set title = 'Loader' where id = '${company.rows['Lee Park']}'`, lee), false);
     // Each probe was rolled back.
     assert.deepEqual(await db.adminRows('select user_id from public.crew_logins where user_id = $1', [visitor]), []);
     assert.deepEqual(await db.adminRows('select id from public.roster where user_id = $1', [visitor]), []);
-    assert.equal((await rosterRow(db, company.rows['Jo Vale'])).title, null);
+    assert.deepEqual([(await rosterRow(db, company.rows['Jo Vale'])).title, (await rosterRow(db, company.rows['Jo Vale'])).role], [null, 'supervisor']);
+    assert.deepEqual([(await rosterRow(db, company.rows['Lee Park'])).title, (await rosterRow(db, company.rows['Lee Park'])).role], [null, 'employee']);
   });
 });
 
@@ -526,6 +534,23 @@ describe('crew_reset_check', () => {
     // No passcode was set: the old one still signs in, and the code keeps the tries it has left.
     assert.equal((await signInCheck(company.code, 'Riley', 'Quinn', PASSCODE)).status, 'ok');
     assert.equal((await loginOf(riley.account)).reset_tries, 3);
+  });
+
+  it("takes the account's lock before the account's row, in the order keeping a passcode takes them", async () => {
+    // PGlite is one session, so a reset and a passcode kept at once cannot be sent here: the order is read from the
+    // code, and crew_races.db.mjs acts the two out on a real server. Keeping a passcode takes the account's lock,
+    // then writes its row; a reset takes the same lock before it reads the row for update, so the two take turns
+    // and never wait for each other's second lock. Keeping the new passcode takes the lock again, which it holds.
+    const body = await definitionOf('crew_reset_check');
+    const lock = body.search(/\bpg_advisory_xact_lock\s*\(\s*pg_catalog\.hashtextextended\s*\(\s*'crew_logins '\s*\|\|\s*account\b/i);
+    const row = body.search(/\bfrom\s+public\.crew_logins\s+l\s+where\s+l\.user_id\s*=\s*account\s+for\s+update\b/i);
+    assert.ok(lock > 0, "the reset takes the account's lock");
+    assert.ok(row > lock, "before it reads the account's row for update");
+    const keeping = await definitionOf('crew_keep_passcode');
+    assert.ok(
+      keeping.search(/\bpg_advisory_xact_lock\b/i) < keeping.search(/\binsert\s+into\s+public\.crew_logins\b/i),
+      'as keeping a passcode takes the lock before it writes the row',
+    );
   });
 
   it('finds the person as the sign-in check does, once the request is counted against the limit', async () => {

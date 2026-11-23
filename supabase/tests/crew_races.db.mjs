@@ -9,7 +9,7 @@
 //    is lost. 5 wrong in a row lock the account for 15 minutes and 10 until a reset, the right
 //    passcode included, and a right passcode among them gets the answer its place in line gives;
 //  * many requests at once from one address: never more than 30 let through in 10 minutes;
-//  * requests from two addresses at once, each deleting the same old tries;
+//  * requests from two addresses at once, only one of which deletes the old tries;
 //  * two sign-ups for one name: two new passcode accounts claiming one roster row at once. One
 //    holds it and the other is told pending, already_claimed, which crew-auth answers
 //    already_signed_up; once crew-auth deletes that account nothing of it is left;
@@ -19,13 +19,14 @@
 //  * reset codes: wrong ones at once spend the code after 5 tries in all, and two right ones at
 //    once keep one new passcode;
 //  * a row made a supervisor's while a passcode account claims it or keeps a passcode, which take
-//    the account's lock, and roster writes over several supervisors' rows, which take several;
-//  * a reset, which takes the account's row and then its lock, against a sign-in, a confirm and
+//    the account's lock, and roster writes over several supervisors' rows, which take none;
+//  * a reset, which takes the account's lock and then its row, against a sign-in, a confirm and
 //    crew_keep_passcode.
 //
-// A test marked todo shows a deadlock (40P01) where the code means requests to take turns; its
-// todo says how it comes about. A third transaction that holds a lock for a moment (another write,
-// or the owner in the SQL editor) is used where it lines two requests up the same way every run.
+// Four of them once ended in a deadlock (40P01) where the code meant requests to take turns; each
+// says how it came about and what has them take turns now. A third transaction that holds a lock
+// for a moment (another write, or the owner in the SQL editor) is used where it lines two requests
+// up the same way every run.
 //
 // All names, passcodes and addresses are made up (the addresses are from the ranges kept for
 // documentation). No test message names a passcode, a code, an address or a login.
@@ -379,11 +380,12 @@ describe('many requests at once from one address', { skip: skipWithoutServer }, 
 // ---- Two addresses deleting the same old tries --------------------------------------------------------
 
 describe('requests from two addresses deleting the same old tries at once', { skip: skipWithoutServer }, () => {
-  // Each request deletes every try older than 10 minutes, whoever sent it, under its own address's
-  // lock alone, so two requests from two addresses delete the same rows at once. A delete that
-  // meets a row the other is deleting waits for it to commit, then passes the row by. When both
-  // delete in the same order, as the plan PostgreSQL makes here reads the table, the second only
-  // ever waits for the first.
+  // A request deletes every try older than 10 minutes, whoever sent it, only when it gets the prune's
+  // own lock, one for every address, which it tries for and never waits for. While one request is
+  // deleting, a request from another address passes the old tries by: it is counted and let through
+  // at once, and leaves them to the one at it. Its count reads only the last 10 minutes, so passing
+  // them by changes no answer. Two deletes never run at once, so they never meet, whatever order
+  // each would read the table in.
   const OLD = 200;
   const PRUNE = "explain delete from public.crew_sign_in_tries t where t.at <= now() - interval '10 minutes'";
 
@@ -414,7 +416,7 @@ describe('requests from two addresses deleting the same old tries at once', { sk
   }
   const oldLeft = async () => (await db.adminRows("select count(*)::int as n from public.crew_sign_in_tries where at <= now() - interval '10 minutes'"))[0].n;
 
-  it('take turns: the second waits for the rows the first deleted, then passes them by, and both are let through', async () => {
+  it('one deletes and the other passes the old tries by: the second is let through at once, and none are left once the first commits', async () => {
     const co = await company('Test Pit A');
     await oldTries('long ago, one after the other');
     const first = await asServer();
@@ -422,11 +424,11 @@ describe('requests from two addresses deleting the same old tries at once', { sk
     try {
       assert.equal((await first.query(LOOKUP, [co.code, anyAddress()])).rows[0].answer.status, 'company');
       const { settled } = await second.start(LOOKUP, [co.code, anyAddress()]);
-      assert.equal(await waiting(second), true, 'the second waits for the rows the first deleted');
-      await first.commit();
+      assert.equal(await waiting(second), false, 'the second waits for nothing: the first holds the prune, so the second passes it by');
       const outcome = await finish(second, await settled);
       assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
       assert.equal(outcome.rows[0].answer.status, 'company');
+      await first.commit();
       assert.equal(await oldLeft(), 0);
     } finally {
       await first.end();
@@ -434,12 +436,10 @@ describe('requests from two addresses deleting the same old tries at once', { sk
     }
   });
 
-  it('take turns when both are stopped part way through, on a row a third transaction holds', async () => {
+  it('the first stopped part way through, on a row a third transaction holds: the second passes the old tries by, and the first deletes them all once the row is let go', async () => {
     const co = await company('Test Pit A');
     const batch = 'long ago, both part way';
     await oldTries(batch);
-    // Both read the table in its own order, a page at a time.
-    assert.match(await planOfThePrune(), /Seq Scan on crew_sign_in_tries|Bitmap Heap Scan on crew_sign_in_tries/);
     const holder = await holdTheMiddle(batch);
     const first = await asServer();
     const second = await asServer();
@@ -447,14 +447,15 @@ describe('requests from two addresses deleting the same old tries at once', { sk
       const one = await first.start(LOOKUP, [co.code, anyAddress()]);
       assert.equal(await waiting(first), true, 'the first stops at the row held');
       const two = await second.start(LOOKUP, [co.code, anyAddress()]);
-      assert.equal(await waiting(second), true, 'the second stops at a row the first deleted');
+      assert.equal(await waiting(second), false, 'the second waits for nothing: it passes the prune by');
+      const passed = await finish(second, await two.settled);
+      assert.equal(passed.ok, true, `${passed.code} ${passed.message}`);
+      assert.equal(passed.rows[0].answer.status, 'company');
       await holder.rollback();
-      const { outcomes } = await throughInTurn([first, second], [one.settled, two.settled]);
-      noDeadlock({ 'the first request': outcomes[0], 'the second request': outcomes[1] });
-      for (const outcome of outcomes) {
-        assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
-        assert.equal(outcome.rows[0].answer.status, 'company');
-      }
+      const outcome = await finish(first, await one.settled);
+      noDeadlock({ 'the first request': outcome, 'the second request': passed });
+      assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+      assert.equal(outcome.rows[0].answer.status, 'company');
       assert.equal(await oldLeft(), 0);
     } finally {
       await holder.end();
@@ -463,48 +464,49 @@ describe('requests from two addresses deleting the same old tries at once', { sk
     }
   });
 
-  it(
-    'do not deadlock when the two deletes go through the old rows in opposite orders',
-    {
-      todo:
-        'two requests from two addresses each delete the old tries under their own address lock alone; deletes that meet from opposite ends ' +
-        'deadlock (40P01) and one request fails before any passcode is checked. Here the orders are set with planner settings; PostgreSQL ' +
-        "itself can scan a large table from another row (a synchronized scan of a table over a quarter of shared_buffers). One lock for the " +
-        'delete, the same for every address, as the contact form takes, would have them take turns',
-    },
-    async () => {
-      const co = await company('Test Pit A');
-      const batch = 'long ago, from both ends';
-      await oldTries(batch);
-      // The first reads the table from its start; the second goes by the index on at, oldest first,
-      // so from the other end, as the tries were written newest first.
-      const orders = {
-        fromTheStart: 'set local enable_indexscan = off; set local enable_bitmapscan = off',
-        oldestFirst: 'set local enable_seqscan = off; set local enable_bitmapscan = off',
-      };
-      assert.match(await planOfThePrune(orders.fromTheStart), /Seq Scan on crew_sign_in_tries/);
-      assert.match(await planOfThePrune(orders.oldestFirst), /Index Scan using crew_sign_in_tries_at_idx/);
-      const holder = await holdTheMiddle(batch);
-      const first = await asServer();
-      const second = await asServer();
-      try {
-        await first.query(orders.fromTheStart);
-        await second.query(orders.oldestFirst);
-        const one = await first.start(LOOKUP, [co.code, anyAddress()]);
-        assert.equal(await waiting(first), true, 'the first stops at the row held, having deleted the newer half');
-        const two = await second.start(LOOKUP, [co.code, anyAddress()]);
-        assert.equal(await waiting(second), true, 'the second stops at the row held, having deleted the older half');
-        await holder.rollback();
-        const { outcomes } = await throughInTurn([first, second], [one.settled, two.settled]);
-        noDeadlock({ 'the request reading from the start': outcomes[0], 'the request reading oldest first': outcomes[1] });
-        assert.equal(await oldLeft(), 0);
-      } finally {
-        await holder.end();
-        await first.end();
-        await second.end();
+  it('do not deadlock when the two would delete the old rows in opposite orders: only one deletes', async () => {
+    // Before the prune's lock, two requests from two addresses each deleted the old tries under their
+    // own address's lock alone, and two deletes that met from opposite ends deadlocked (40P01), one
+    // request failing before any passcode was checked. Here the orders are set with planner settings;
+    // PostgreSQL itself can scan a large table from another row (a synchronized scan of a table over
+    // a quarter of shared_buffers).
+    const co = await company('Test Pit A');
+    const batch = 'long ago, from both ends';
+    await oldTries(batch);
+    // The first reads the table from its start; the second would go by the index on at, oldest
+    // first, so from the other end, as the tries were written newest first.
+    const orders = {
+      fromTheStart: 'set local enable_indexscan = off; set local enable_bitmapscan = off',
+      oldestFirst: 'set local enable_seqscan = off; set local enable_bitmapscan = off',
+    };
+    assert.match(await planOfThePrune(orders.fromTheStart), /Seq Scan on crew_sign_in_tries/);
+    assert.match(await planOfThePrune(orders.oldestFirst), /Index Scan using crew_sign_in_tries_at_idx/);
+    const holder = await holdTheMiddle(batch);
+    const first = await asServer();
+    const second = await asServer();
+    try {
+      await first.query(orders.fromTheStart);
+      await second.query(orders.oldestFirst);
+      const one = await first.start(LOOKUP, [co.code, anyAddress()]);
+      assert.equal(await waiting(first), true, 'the first stops at the row held, having deleted the newer half');
+      const two = await second.start(LOOKUP, [co.code, anyAddress()]);
+      // Noted, and asked once both are through: a deadlock, if there is one, is the first thing said.
+      const secondWaited = await waiting(second);
+      await holder.rollback();
+      const { outcomes } = await throughInTurn([first, second], [one.settled, two.settled]);
+      noDeadlock({ 'the request reading from the start': outcomes[0], 'the request reading oldest first': outcomes[1] });
+      for (const outcome of outcomes) {
+        assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+        assert.equal(outcome.rows[0].answer.status, 'company');
       }
-    },
-  );
+      assert.equal(secondWaited, false, 'the second passed the prune by, so it never met the first');
+      assert.equal(await oldLeft(), 0);
+    } finally {
+      await holder.end();
+      await first.end();
+      await second.end();
+    }
+  });
 });
 
 // ---- Two sign-ups for one name ------------------------------------------------------------------------
@@ -628,10 +630,12 @@ async function secondWaitsForFirst([firstRequest, firstSql, firstParams], [secon
 }
 
 describe('an invitation accepted at the same moment as another change', { skip: skipWithoutServer }, () => {
-  // accept_supervisor_invitation takes join_company's lock for the caller, then locks the row, then
-  // the invitation, and checks everything under those locks. Inviting, sending again and deleting
-  // the row lock the row first too, so each of them and an acceptance take turns on the row, the
-  // second sees what the first did, and none waits for a row while it holds an invitation.
+  // accept_supervisor_invitation takes join_company's lock for the caller, then a share of the
+  // company's row, then locks the row, then the invitation, and checks everything under those locks.
+  // Inviting, sending again and deleting the row lock the row first too, so each of them and an
+  // acceptance take turns on the row, the second sees what the first did, and none waits for a row
+  // while it holds an invitation. close_company locks the company's row first, so it and an
+  // acceptance take turns on the company's row.
 
   it('twice by the invited account: the second waits, then is told it was accepted', async () => {
     const { row, invitee, invitation } = await invitedRow();
@@ -708,7 +712,7 @@ describe('an invitation accepted at the same moment as another change', { skip: 
     assert.deepEqual(await db.adminRows('select 1 from public.companies where id = $1', [co.id]), []);
   });
 
-  it('while the company is closed, the acceptance first: the closing waits for the row, then finds the invitee can take over', async () => {
+  it('while the company is closed, the acceptance first: the closing waits for the acceptance, then finds the invitee can take over', async () => {
     const { co, row, invitee, invitation } = await invitedRow();
     const outcome = await secondWaitsForFirst([await db.request(invitee), ACCEPT, [invitation]], [await withPasswordTyped(co.owner), CLOSE, [co.id, co.name]]);
     assert.equal(outcome.code, 'PT409', outcome.message);
@@ -716,40 +720,37 @@ describe('an invitation accepted at the same moment as another change', { skip: 
     assert.deepEqual(await rowOf(row), { user_id: invitee, role: 'supervisor' });
   });
 
-  it(
-    "onto a passcode account's row while the company is closed, both waiting for a supervisor sending the invitation again: no deadlock",
-    {
-      todo:
-        "accepting onto a passcode account's row writes a released hold for that account after it has locked the row, and the hold's " +
-        "foreign key takes a share lock on the company's row; close_company holds the company's row for update and waits for the " +
-        'roster rows. An acceptance that has the row while close_company has the company deadlocks with it (40P01). Here a supervisor ' +
-        'sending the invitation again holds the row, so the acceptance and the closing line up behind it',
-    },
-    async () => {
-      const { co, row, crew, invitee, invitation } = await invitedRow({ held: true });
-      const resending = await db.request(co.owner);
-      const accepting = await db.request(invitee);
-      const closing = await withPasswordTyped(co.owner);
-      try {
-        await resending.query(RESEND, [invitation]);
-        const accepted = await accepting.start(ACCEPT, [invitation]);
-        assert.equal(await waiting(accepting), true, 'the acceptance waits for the row');
-        const closed = await closing.start(CLOSE, [co.id, co.name]);
-        assert.equal(await waiting(closing), true, 'the closing holds the company and waits for the row');
-        await resending.commit();
-        const { outcomes } = await throughInTurn([accepting, closing], [accepted.settled, closed.settled]);
-        noDeadlock({ 'the acceptance': outcomes[0], 'the closing': outcomes[1] });
-        assert.equal(outcomes[0].ok, true, `${outcomes[0].code} ${outcomes[0].message}`);
-        assert.equal(outcomes[1].message, SOMEONE_CAN_TAKE_OVER);
-        assert.deepEqual(await rowOf(row), { user_id: invitee, role: 'supervisor' });
-        assert.deepEqual(await db.adminRows('select kind from public.join_holds where user_id = $1', [crew]), [{ kind: 'released' }]);
-      } finally {
-        await resending.end();
-        await accepting.end();
-        await closing.end();
-      }
-    },
-  );
+  it("onto a passcode account's row while the company is closed, both waiting for a supervisor sending the invitation again: no deadlock", async () => {
+    // Accepting onto a passcode account's row writes a released hold for that account, and the hold's
+    // foreign key takes a share lock on the company's row. close_company locks the company's row for
+    // update, then every roster row. Accepting takes its share of the company's row before the roster
+    // row, in close_company's order, so neither ever holds the row the other waits for: before that, an
+    // acceptance that had the roster row while close_company had the company deadlocked with it
+    // (40P01). Here a supervisor sending the invitation again holds the roster row, so the acceptance
+    // and the closing line up behind it.
+    const { co, row, crew, invitee, invitation } = await invitedRow({ held: true });
+    const resending = await db.request(co.owner);
+    const accepting = await db.request(invitee);
+    const closing = await withPasswordTyped(co.owner);
+    try {
+      await resending.query(RESEND, [invitation]);
+      const accepted = await accepting.start(ACCEPT, [invitation]);
+      assert.equal(await waiting(accepting), true, 'the acceptance waits for the row');
+      const closed = await closing.start(CLOSE, [co.id, co.name]);
+      assert.equal(await waiting(closing), true, 'the closing waits too');
+      await resending.commit();
+      const { outcomes } = await throughInTurn([accepting, closing], [accepted.settled, closed.settled]);
+      noDeadlock({ 'the acceptance': outcomes[0], 'the closing': outcomes[1] });
+      assert.equal(outcomes[0].ok, true, `${outcomes[0].code} ${outcomes[0].message}`);
+      assert.equal(outcomes[1].message, SOMEONE_CAN_TAKE_OVER);
+      assert.deepEqual(await rowOf(row), { user_id: invitee, role: 'supervisor' });
+      assert.deepEqual(await db.adminRows('select kind from public.join_holds where user_id = $1', [crew]), [{ kind: 'released' }]);
+    } finally {
+      await resending.end();
+      await accepting.end();
+      await closing.end();
+    }
+  });
 });
 
 // ---- Reset codes ------------------------------------------------------------------------------------
@@ -860,10 +861,10 @@ async function madeSupervisor(co, by, account, [first, last], id) {
 
 describe("a row made a supervisor's while a passcode account claims it or keeps a passcode", { skip: skipWithoutServer }, () => {
   // A passcode account never holds a supervisor's row. The roster's write trigger takes the
-  // account's lock for a write that puts an account on a row, or writes a supervisor's row an
-  // account holds, and crew_keep_passcode takes the same lock before it looks at the account's
+  // account's lock for a write that puts an account on a row, or makes a row an account holds a
+  // supervisor's, and crew_keep_passcode takes the same lock before it looks at the account's
   // rows: a row for the account and a passcode for it, written at once, take turns, and the second
-  // sees what the first wrote.
+  // sees what the first wrote. A write that changes neither takes no account's lock.
 
   it('the row made a supervisor\'s first: the claim waits for the row, then leaves a request (supervisor_row)', async () => {
     const co = await company('Test Pit A', [['Lee', 'Park']]);
@@ -972,47 +973,45 @@ describe("a row made a supervisor's while a passcode account claims it or keeps 
     }
   });
 
-  it(
-    'two writes over every row of two companies that share two supervisors do not deadlock',
-    {
-      todo:
-        "the roster's write trigger takes the lock of each supervisor's account whose row a statement writes, row by row, so two " +
-        'statements over several such rows take those locks in the order they come to the rows. Two statements over every row of two ' +
-        'companies that share two supervisors come to them in opposite orders, and deadlock (40P01). Here a supervisor writing their own row ' +
-        "holds one of them, so the two line up behind it. Only a hand-made API request writes many rows at once: the dashboard writes one",
-    },
-    async () => {
-      const { sam, riley, a, b, rileyInA } = await twoSupervisorsInTwoCompanies();
-      const own = await db.request(riley);
-      const inA = await db.request(sam);
-      const inB = await db.request(riley);
-      try {
-        await own.query(OWN_ROW, [rileyInA]);
-        const one = await inA.start(EVERY_ROW, [a.id]);
-        assert.equal(await waiting(inA), true, "Sam's write has Sam's lock and waits for Riley's row in Test Pit A");
-        const two = await inB.start(EVERY_ROW, [b.id]);
-        assert.equal(await waiting(inB), true, "Riley's write waits for Riley's lock");
-        await own.commit();
-        const { outcomes } = await throughInTurn([inA, inB], [one.settled, two.settled]);
-        noDeadlock({ "Sam's write in Test Pit A": outcomes[0], "Riley's write in Test Pit B": outcomes[1] });
-      } finally {
-        await own.end();
-        await inA.end();
-        await inB.end();
-      }
-    },
-  );
+  it('two writes over every row of two companies that share two supervisors do not deadlock', async () => {
+    // The roster's write trigger takes an account's lock only for a write that puts the account on a
+    // row or makes a row it holds a supervisor's: a job title written over every row takes none.
+    // Before that, it took the lock of each supervisor's account whose row a statement wrote, row by
+    // row, and two statements over every row of two companies that share two supervisors, coming to
+    // them in opposite orders, deadlocked (40P01). Here a supervisor writing their own row holds a row
+    // of Test Pit A, as it held one of the locks then. Only a hand-made API request writes many rows
+    // at once: the dashboard writes one.
+    const { sam, riley, a, b, rileyInA } = await twoSupervisorsInTwoCompanies();
+    const own = await db.request(riley);
+    const inA = await db.request(sam);
+    const inB = await db.request(riley);
+    try {
+      await own.query(OWN_ROW, [rileyInA]);
+      const one = await inA.start(EVERY_ROW, [a.id]);
+      assert.equal(await waiting(inA), true, "Sam's write waits for Riley's row in Test Pit A");
+      const two = await inB.start(EVERY_ROW, [b.id]);
+      // Noted, and asked once both are through: a deadlock, if there is one, is the first thing said.
+      const inBWaited = await waiting(inB);
+      await own.commit();
+      const { outcomes } = await throughInTurn([inA, inB], [one.settled, two.settled]);
+      noDeadlock({ "Sam's write in Test Pit A": outcomes[0], "Riley's write in Test Pit B": outcomes[1] });
+      for (const outcome of outcomes) assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+      assert.equal(inBWaited, false, "Riley's write in Test Pit B took no account's lock, so it waited for nothing");
+    } finally {
+      await own.end();
+      await inA.end();
+      await inB.end();
+    }
+  });
 });
 
 // ---- A reset against the other calls on the account ----------------------------------------------------
 
 describe("a reset at the same moment as another call on the account's row or its lock", { skip: skipWithoutServer }, () => {
-  // crew_reset_check locks the account's crew_logins row, then, keeping the new passcode, the
-  // account's lock. A sign-in and a confirm take the row alone, and a supervisor's roster write the
-  // lock alone (above: making the row a supervisor's), so with each of them a reset only takes turns.
-  // crew_keep_passcode takes the lock, then the row: the other way round. crew-auth calls it on its
-  // own only for the account a sign-up has just made, which no reset can find until that call has
-  // committed.
+  // crew_reset_check takes the account's lock, then its crew_logins row, and takes the lock again,
+  // which it holds, as it keeps the new passcode. crew_keep_passcode takes the lock, then the row: the
+  // same order. A sign-in and a confirm take the row alone, and a supervisor's roster write the lock
+  // alone (above: making the row a supervisor's), so with each of them a reset only takes turns.
 
   it('the reset first: a sign-in with the new passcode waits for the row, then is let in', async () => {
     const { co, code } = await leeWithACode();
@@ -1055,34 +1054,36 @@ describe("a reset at the same moment as another call on the account's row or its
     assert.equal(await passcodeIs(lee, PASSCODE), false);
   });
 
-  it(
-    'a reset and crew_keep_passcode for one account at once do not deadlock',
-    {
-      todo:
-        "crew_reset_check locks the account's row and then its lock; crew_keep_passcode called on its own takes the lock and then the row. " +
-        'At once they deadlock (40P01). crew-auth never calls crew_keep_passcode on its own for an account a reset can find, so only a ' +
-        "call with the server key by hand meets it today. Here the account's lock is held a moment (by the owner, as the roster's trigger " +
-        "takes it) so the two line up behind it. Taking the account's lock in crew_reset_check before its row would have them take turns",
-    },
-    async () => {
-      const { co, lee, code } = await leeWithACode();
-      const holder = await db.asOwner();
-      const keeping = await asServer();
-      const resetting = await asServer();
-      try {
-        await holder.query("select pg_advisory_xact_lock(hashtextextended('crew_logins ' || $1::text, 0))", [lee]);
-        const kept = await keeping.start(KEEP, [lee, NEW_B]);
-        assert.equal(await waiting(keeping), true, "crew_keep_passcode waits for the account's lock");
-        const reset = await resetting.start(RESET, [co.code, 'Lee', 'Park', code, NEW_A, anyAddress()]);
-        assert.equal(await waiting(resetting), true, "the reset has the account's row and waits for its lock");
-        await holder.commit();
-        const { outcomes } = await throughInTurn([keeping, resetting], [kept.settled, reset.settled]);
-        noDeadlock({ crew_keep_passcode: outcomes[0], 'the reset': outcomes[1] });
-      } finally {
-        await holder.end();
-        await keeping.end();
-        await resetting.end();
-      }
-    },
-  );
+  it('a reset and crew_keep_passcode for one account at once take turns on the account\'s lock, with no deadlock', async () => {
+    // crew_reset_check takes the account's lock before the account's row, as crew_keep_passcode
+    // called on its own does, so the two take turns on the lock. Before that, the reset took the row
+    // first and the lock second, and the two deadlocked (40P01). crew-auth never calls
+    // crew_keep_passcode on its own for an account a reset can find, so only a call with the server
+    // key by hand met it. Here the account's lock is held a moment (by the owner, as the roster's
+    // trigger takes it) so the two line up behind it.
+    const { co, lee, code } = await leeWithACode();
+    const holder = await db.asOwner();
+    const keeping = await asServer();
+    const resetting = await asServer();
+    try {
+      await holder.query("select pg_advisory_xact_lock(hashtextextended('crew_logins ' || $1::text, 0))", [lee]);
+      const kept = await keeping.start(KEEP, [lee, NEW_B]);
+      assert.equal(await waiting(keeping), true, "crew_keep_passcode waits for the account's lock");
+      const reset = await resetting.start(RESET, [co.code, 'Lee', 'Park', code, NEW_A, anyAddress()]);
+      assert.equal(await waiting(resetting), true, 'the reset waits too');
+      await holder.commit();
+      const { order, outcomes } = await throughInTurn([keeping, resetting], [kept.settled, reset.settled]);
+      noDeadlock({ crew_keep_passcode: outcomes[0], 'the reset': outcomes[1] });
+      for (const outcome of outcomes) assert.equal(outcome.ok, true, `${outcome.code} ${outcome.message}`);
+      // Keeping a passcode spends the reset code: a reset after it finds none to try. A reset before
+      // it keeps its new passcode, which the passcode kept after it replaces.
+      const keptFirst = order[0].at === 0;
+      assert.equal(outcomes[1].rows[0].answer.status, keptFirst ? 'expired' : 'ok');
+      assert.equal(await passcodeIs(lee, NEW_B), true, 'the passcode kept last is the one kept');
+    } finally {
+      await holder.end();
+      await keeping.end();
+      await resetting.end();
+    }
+  });
 });

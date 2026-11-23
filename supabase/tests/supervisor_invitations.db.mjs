@@ -144,9 +144,9 @@ const definitionOf = async (fn) =>
 
 /**
  * What a function does with the roster and the invitations, in the order its code does it: each statement of its
- * definition, comments taken out, that takes join_company's lock, locks a roster row, refuses for a state (PT409),
- * reads, locks or writes an invitation, or writes a roster row. PGlite is one session, so the order two calls take
- * turns in is read from the code, as the crew tests read their locks.
+ * definition, comments taken out, that takes join_company's lock, locks the company's row, locks a roster row,
+ * refuses for a state (PT409), reads, locks or writes an invitation, or writes a roster row. PGlite is one session,
+ * so the order two calls take turns in is read from the code, as the crew tests read their locks.
  */
 async function stepsOf(fn) {
   const steps = [];
@@ -154,6 +154,7 @@ async function stepsOf(fn) {
     const locks = /\bfor\s+update\b/i.test(statement);
     if (/\bpg_advisory_xact_lock\s*\(\s*pg_catalog\.hashtextextended\s*\(\s*'join_company '/i.test(statement)) steps.push('join lock');
     else if (/\berrcode\s*=\s*'PT409'/i.test(statement)) steps.push('check');
+    else if (/\bfrom\s+public\.companies\b/i.test(statement) && /\bfor\s+(key\s+share|share|no\s+key\s+update|update)\b/i.test(statement)) steps.push('company lock');
     else if (/\bfrom\s+public\.roster\b/i.test(statement) && locks) steps.push('row lock');
     else if (/\bfrom\s+public\.supervisor_invitations\b/i.test(statement)) steps.push(locks ? 'invitation lock' : 'invitation read');
     else if (/\b(update|insert\s+into)\s+public\.supervisor_invitations\b/i.test(statement)) steps.push('invitation write');
@@ -852,16 +853,20 @@ describe('the order rows and invitations are locked in', () => {
     // Deleting a roster row locks it, and then its invitations through the cascade, and deleting a company reaches its
     // invitations through its rows alone. Each function here takes a row before its invitation, then checks under
     // both locks, then writes, so none holds an invitation while it waits for that invitation's row. Those given an
-    // invitation find its row first with no lock. Accepting takes join_company's lock before the row, and the
-    // roster's write trigger takes the account's lock in the row writes, after both.
+    // invitation find its row first with no lock. Accepting takes join_company's lock, then the company's row, then
+    // the row, and the roster's write trigger takes the account's lock in the row writes, after all of them.
     assert.deepEqual(await stepsOf('invite_supervisor'), ['row lock', 'check', 'invitation write', 'invitation write']);
     assert.deepEqual(await stepsOf('resend_supervisor_invitation'), ['invitation read', 'row lock', 'invitation lock', 'check', 'check', 'invitation write']);
-    // Accepting checks the address, that the invitation is open, that its inviter is still a supervisor, that the
-    // caller is not on the roster and that the row is open to it, and, before it lets go of the account on the row,
-    // that this is a passcode account.
+    // Accepting locks the company's row before the roster row, in close_company's order (the company, then its
+    // rows): the released hold it may write points at the company, and its key takes a share lock on the company's
+    // row, which would otherwise come after the roster row and could wait for close_company while close_company
+    // waits for that row. Then it checks the address, that the invitation is open, that its inviter is still a
+    // supervisor, that the caller is not on the roster and that the row is open to it, and, before it lets go of
+    // the account on the row, that this is a passcode account.
     assert.deepEqual(await stepsOf('accept_supervisor_invitation'), [
       'invitation read',
       'join lock',
+      'company lock',
       'row lock',
       'invitation lock',
       'check',
@@ -875,6 +880,8 @@ describe('the order rows and invitations are locked in', () => {
       'row write',
       'invitation write',
     ]);
+    // close_company, whose order accepting follows: the company's row, then every row of its roster.
+    assert.deepEqual((await stepsOf('close_company')).slice(0, 2), ['company lock', 'row lock']);
     // Cancelling takes the invitation alone, and no row.
     assert.deepEqual(await stepsOf('cancel_supervisor_invitation'), ['invitation lock', 'check', 'invitation write']);
 

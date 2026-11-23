@@ -16,8 +16,22 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
-import { addToRoster, BAD_INPUT, join, newMember, NO_PRIVILEGE, nobody, refused, startCompany, startDatabase } from './harness.mjs';
+import {
+  addToRoster,
+  BAD_INPUT,
+  errorOf,
+  join,
+  migrationFiles,
+  MIGRATIONS,
+  newMember,
+  NO_PRIVILEGE,
+  nobody,
+  refused,
+  startCompany,
+  startDatabase,
+} from './harness.mjs';
 
 // Two that pass the passcode rule, and one that is wrong for both.
 const PASSCODE = '583920';
@@ -242,6 +256,54 @@ describe('the limit on tries from one address', () => {
     const count = body.search(/\bcount\(\*\)/i);
     const insert = body.search(/\binsert\s+into\s+public\.crew_sign_in_tries\b/i);
     assert.ok(lock < count && count < insert, 'taken before the count, which comes before the insert');
+  });
+
+  it('one request at a time deletes the old tries, under a lock that is no other lock of the migrations, and the rest pass them by', async () => {
+    // PGlite is one session, so two requests at once cannot be sent here: the code is read, and the lock looked for
+    // while a request holds it. crew_races.db.mjs acts two requests out on a real server.
+    const [{ def }] = await db.adminRows("select pg_get_functiondef('public.crew_try_counted'::regproc) as def");
+    const body = def.replace(/--[^\n]*/g, ' ');
+    // The delete runs only for the request that gets the lock, which no request ever waits for.
+    assert.match(
+      body,
+      /\bif\s+pg_catalog\.pg_try_advisory_xact_lock\s*\(\s*pg_catalog\.hashtext\s*\(\s*'crew_sign_in_tries'\s*\)\s*,\s*pg_catalog\.hashtext\s*\(\s*'prune'\s*\)\s*\)\s+then\s+delete\s+from\s+public\.crew_sign_in_tries\b[^;]*;\s*end\s+if\b/i,
+      'the delete runs only under a try of the lock',
+    );
+    assert.equal(body.match(/\bdelete\s+from\b/gi)?.length, 1, 'and there is no other delete');
+    assert.doesNotMatch(body, /\bpg_advisory_xact_lock\s*\(\s*pg_catalog\.hashtext\s*\(/i, 'no request waits for it');
+
+    // Its key is two integers. Every other advisory lock the migrations take has one key, a bigint, and PostgreSQL
+    // keeps the two kinds of key apart, so no other lock of the migrations can ever be this one.
+    let others = 0;
+    let prunes = 0;
+    for (const file of await migrationFiles()) {
+      const sql = (await readFile(new URL(file, MIGRATIONS), 'utf8')).replace(/--[^\n]*/g, ' ');
+      for (const [, args] of sql.matchAll(/\bpg_(?:try_)?advisory_(?:xact_)?lock(?:_shared)?\s*\(\s*([^;]*)/gi)) {
+        if (/^pg_catalog\.hashtext\s*\(\s*'crew_sign_in_tries'\s*\)\s*,\s*pg_catalog\.hashtext\s*\(\s*'prune'\s*\)\s*\)/i.test(args)) prunes += 1;
+        else {
+          assert.match(args, /^pg_catalog\.hashtextextended\s*\(/i, `${file}: an advisory lock keyed by one bigint`);
+          others += 1;
+        }
+      }
+    }
+    assert.equal(prunes, 1, "the prune's lock is taken in one place");
+    assert.ok(others >= 15, `the other locks were all read (${others})`);
+
+    // While a request is under way it holds the lock, a key of two integers (objsubid 2 in pg_locks).
+    const error = await errorOf(
+      db.admin(`do $probe$
+        begin
+          perform public.crew_lookup('ZZZZZZZZ', '2001:db8:5::1');
+          raise exception using errcode = 'P0001', message = (
+            select pg_catalog.count(*)::text from pg_catalog.pg_locks l
+            where l.locktype = 'advisory' and l.objsubid = 2 and l.granted and l.pid = pg_catalog.pg_backend_pid()
+              and l.classid::bigint = (pg_catalog.hashtext('crew_sign_in_tries')::bigint & 4294967295)
+              and l.objid::bigint = (pg_catalog.hashtext('prune')::bigint & 4294967295));
+        end
+      $probe$`),
+    );
+    assert.equal(error.code, 'P0001', error.message);
+    assert.equal(error.message, '1', 'the request holds the lock until it commits');
   });
 });
 
