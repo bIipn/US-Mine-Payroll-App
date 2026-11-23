@@ -63,7 +63,7 @@
       <p class="eyebrow">Privacy</p>
       <h1 id="page-title">Privacy</h1>
       <p class="lede">What MineMuster collects, why, where it is kept and who else handles it, for this website, the office dashboard, the crew app, billing and the contact form.</p>
-      <p class="updated">Last updated November 21, 2026</p>
+      <p class="updated">Last updated November 23, 2026</p>
     </div>
   </section>
 
@@ -94,6 +94,7 @@
             <li>MineMuster keeps a company&rsquo;s records for that company, and uses them only to run MineMuster for it. We do not sell them or use them for advertising.</li>
             <li>Location is read only at the moment of a punch, and when a supervisor sets the mine boundary, never in the background. A punch&rsquo;s location goes to the server with it, and the company&rsquo;s supervisors can see it. With location off, approximate only, or no fix, a clock-in still goes through, with no location, marked for a supervisor to review.</li>
             <li>An hourly rate a person enters stays on their phone.</li>
+            <li>A crew member signs in with the company code, their name and a passcode, and has no email with MineMuster. The passcode is kept only as a scrambled form, never as typed.</li>
             <li>Stripe takes the card. MineMuster never sees the card number.</li>
           </ul>
           <p>In this policy &ldquo;MineMuster&rdquo;, &ldquo;we&rdquo; and &ldquo;us&rdquo; mean MineMuster, which runs minemuster.com, the office dashboard at app.minemuster.com and the MineMuster app.</p>
@@ -113,7 +114,8 @@
 
         <section aria-labelledby="dashboard">
           <h2 id="dashboard">The office dashboard</h2>
-          <p>Signing in to app.minemuster.com takes an email and a password. Sign-in is handled by Supabase: the password goes to Supabase and nowhere else, and the emails to confirm an account or reset a password are sent through it.</p>
+          <p>Signing in to app.minemuster.com takes an email and a password. Sign-in is handled by Supabase: the password goes to Supabase and nowhere else, and the emails to confirm an account, reset a password or invite a supervisor are sent through it.</p>
+          <p>A supervisor can invite another supervisor by email from the Roster page. We keep the invited address with the invitation, and when it was sent and when it was accepted or cancelled, as a record on the company&rsquo;s roster. The invitation is good for 7 days, and nobody is put on the roster until the person accepts. The record, and the address in it, goes when the company deletes that roster row or closes the company.</p>
           <p>The dashboard keeps the person signed in with the browser&rsquo;s own storage, not cookies. The browser also keeps which company was open last, and, for a week at most, that the person came from this website to start a free trial. Nothing else is stored on the computer. Signing out signs out that browser.</p>
           <p>Everything the dashboard shows is read from the company&rsquo;s records on MineMuster&rsquo;s server (see below). It shows no one&rsquo;s hourly rate or pay.</p>
         </section>
@@ -130,7 +132,9 @@
             <li>the company&rsquo;s settings: its name, state, place, MSHA mine ID, logo, pay periods, the day the workweek starts, clock-in site, earning codes, whether it keeps time, and whether a whole section of an area sheet can be marked OK at once.</li>
           </ul>
           <p>These never leave the phone: the hourly rate a person enters for their own pay estimate, the accounts and passwords on the phone, the phone&rsquo;s own settings (such as its lunch reminders) and anything of the made-up sample crew. The lunch reminders and the notice that lunch is over are set on the phone itself; no notification service is involved.</p>
-          <p>Signing in to the company&rsquo;s server takes an email and a password, as on the dashboard. The phone keeps that session so it stays signed in.</p>
+          <p>A crew member signs in to the company&rsquo;s server with the company code, their name and a passcode. MineMuster makes each crew member&rsquo;s account on the server itself, under an address made up for it that receives no mail and that nobody sees or types, so a crew member&rsquo;s account holds no email. It holds a scrambled form of the passcode (a salted, keyed digest: the passcode itself is never kept), how many wrong tries there have been in a row, and until when the account is locked. The name is the one on the company&rsquo;s roster, or on the person&rsquo;s request to join until a supervisor lets them in. If someone forgets their passcode, a supervisor makes a reset code on the dashboard and shows it to them; it is kept only as the same kind of scrambled form, and is good for 30 minutes.</p>
+          <p>To slow down anyone trying many names or codes, the server counts each sign-in request by the network address it came from. It keeps only a scrambled form of that address, never the address itself, for 10 minutes, and the next sign-in request after that deletes it. Supervisors sign in with an email and a password, as on the dashboard.</p>
+          <p>The phone keeps the session so it stays signed in. The app never signs anyone out by itself: the session ends when the person signs out of the phone, deletes their account, or has the passcode reset, which signs the account out of other phones.</p>
         </section>
 
         <section aria-labelledby="location">
@@ -164,18 +168,18 @@
           <h2 id="export-delete">Exporting and deleting</h2>
           <p>While the subscription is open, a supervisor can export the company&rsquo;s records from the dashboard: the PDF for an inspector, the Excel safety log, the payroll workbook and the payroll hours file. After it ends, the dashboard opens only its Billing page, and a supervisor&rsquo;s phone can still make the inspector PDF and the safety log from the records on that phone. Export what you need to keep before you cancel.</p>
           <p>A company can ask through the <a href="/contact">contact form</a> to have its records deleted from the server.</p>
-          <p>Records on a phone stay on it until the app is removed, a supervisor clears the phone from the More screen, or the person whose own company sign-in the phone sends with deletes their account once everything on it has reached the company.</p>
+          <p>Records on a phone stay on it until the app is removed, a supervisor clears the phone from the More screen, or the person whose own company sign-in the phone sends with signs out of the phone or deletes their account, each only once everything on it has reached the company.</p>
           <p>A person deletes their own account as <a href="#delete-account">Deleting your account</a> says, below.</p>
         </section>
 
         <section aria-labelledby="delete-account">
           <h2 id="delete-account">Deleting your account</h2>
-          <p>Anyone can delete their own MineMuster account: in the app, under More, then Delete my account, or on the office dashboard, under Your account. Someone who cannot sign in asks through the contact form. <a href="/delete-account">Delete your account</a> has the steps.</p>
+          <p>Anyone can delete their own MineMuster account: in the app, under More, then Delete my account (a crew member types their passcode again), or on the office dashboard, under Your account. A crew member who cannot sign in asks a supervisor to delete the sign-in from the dashboard, and anyone else who cannot sign in asks through the contact form. <a href="/delete-account">Delete your account</a> has the steps.</p>
           <ul>
-            <li><b>What is deleted:</b> the person&rsquo;s company sign-in, their email and password, for good, and their requests to join a company. On the phone they delete it from, the app&rsquo;s sign-in and the hourly rate they entered are deleted too. An account they made in the app on another phone stays on that phone until it is deleted there, under More, or the app is deleted.</li>
+            <li><b>What is deleted:</b> the person&rsquo;s company sign-in, their email and password (or, for a crew member, their passcode and the address made up for the account), for good, and their requests to join a company. On the phone they delete it from, the app&rsquo;s sign-in and the hourly rate they entered are deleted too. An account they made in the app on another phone stays on that phone until it is deleted there, under More, or the app is deleted.</li>
             <li><b>What the company keeps:</b> the person&rsquo;s name on its roster, and the punches, paid leave, equipment checklists, pre shift exams and maintenance requests they made, with their name on them. Only the link to the deleted account is removed. They are the company&rsquo;s records: the company keeps pre shift exam records for at least a year, as 30&nbsp;CFR&nbsp;56.18002 has it, and the time and pay records the law has the company keep. MineMuster keeps them for the company while it uses MineMuster, and deletes them when the company asks.</li>
             <li><b>A company&rsquo;s last supervisor</b> makes someone else a supervisor before deleting their account, or, when nobody else at the company can take over, closes the company on the dashboard, which deletes the company and its records. Closing waits until 30 days after the last person taken off the roster was taken off, since they could still be put back.</li>
-            <li><b>How long:</b> in the app and on the dashboard, at once; through the contact form, within 30 days of the person&rsquo;s reply to our email. Copies in the server&rsquo;s backups are deleted when those backups expire.</li>
+            <li><b>How long:</b> in the app and on the dashboard, and when a supervisor deletes a crew sign-in, at once; through the contact form, within 30 days of the person&rsquo;s reply to our email. Copies in the server&rsquo;s backups are deleted when those backups expire.</li>
           </ul>
           <p>An account made on a phone that never joined a company is kept on that phone alone, and MineMuster never has it. Deleting it in the app, or deleting the app, removes it.</p>
         </section>
