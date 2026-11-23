@@ -3,7 +3,7 @@
 // that the security scan attacks. See README.md beside this file.
 //
 //   MINEMUSTER_SCAN_STACK_DIR=<private folder> node stack.mjs start
-//   ... status | reset [--hard] | stop [--purge] | token <account> | describe | smoke
+//   ... status | reset [--hard] | stop [--purge] | token <account> | describe | smoke | crew-e2e
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -74,7 +74,9 @@ function writeContainerSettings(files, secrets) {
     auth: {
       GOTRUE_API_HOST: HOST, GOTRUE_API_PORT: PORTS.auth, API_EXTERNAL_URL: external, GOTRUE_DB_DRIVER: 'postgres',
       GOTRUE_DB_DATABASE_URL: `postgres://supabase_auth_admin:${secrets.dbPassword}@${HOST}:${PORTS.db}/postgres`,
-      GOTRUE_SITE_URL: GATEWAY_URL, GOTRUE_URI_ALLOW_LIST: '', GOTRUE_DISABLE_SIGNUP: 'false', GOTRUE_JWT_ADMIN_ROLES: 'service_role',
+      // The invite email's link (INVITE_LINK in supervisor-tools), which supabase/README.md has the owner add
+      // to the live project's redirect URLs: without it Auth sends the link to the Site URL instead.
+      GOTRUE_SITE_URL: GATEWAY_URL, GOTRUE_URI_ALLOW_LIST: 'https://app.minemuster.com/?invited=1', GOTRUE_DISABLE_SIGNUP: 'false', GOTRUE_JWT_ADMIN_ROLES: 'service_role',
       GOTRUE_JWT_AUD: 'authenticated', GOTRUE_JWT_DEFAULT_GROUP_NAME: 'authenticated', GOTRUE_JWT_EXP: 3600,
       GOTRUE_JWT_SECRET: secrets.jwtSecret, GOTRUE_JWT_KEYS: JSON.stringify(authSigningKeys(secrets)), GOTRUE_JWT_ISSUER: external,
       GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true', GOTRUE_MAILER_AUTOCONFIRM: 'true', GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: 'false',
@@ -320,8 +322,9 @@ try {
   else if (command === 'token') await token(argument);
   else if (command === 'describe') await (await import('./describe.mjs')).describe(loadSecrets(), paths());
   else if (command === 'smoke') await (await import('./smoke.mjs')).smoke(loadSecrets(), paths());
+  else if (command === 'crew-e2e') await (await import('./crew-e2e.mjs')).crewE2e(loadSecrets(), paths());
   else {
-    say('Usage: stack.mjs start | status | reset [--hard] | stop [--purge] | token <account> | describe | smoke');
+    say('Usage: stack.mjs start | status | reset [--hard] | stop [--purge] | token <account> | describe | smoke | crew-e2e');
     process.exitCode = 2;
   }
 } catch (error) {

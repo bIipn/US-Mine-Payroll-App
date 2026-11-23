@@ -154,6 +154,6 @@ Do not run `hawk scan` on these configs by hand. Without `up.mjs`, the guard and
 
 ```bash
 cd scripts/security-scan
-node --test "test/*.node.mjs"          # the guard, the scan inputs, the configs, the moving of live links, what is read after a scan, and the stand-in gateway's headers
+node --test "test/*.node.mjs"          # the guard, the scan inputs, the configs, the moving of live links, what is read after a scan, the stand-in gateway's headers, and what the stack notes of a call to Supabase Auth
 node --test "sites/test/*.node.mjs"    # the rules the site server follows
 ```

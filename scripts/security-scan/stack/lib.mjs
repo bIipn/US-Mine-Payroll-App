@@ -175,6 +175,48 @@ export function sql(text, { role = 'supabase_admin', single = false, allowFail =
 /** A value as an SQL literal. */
 export const lit = (value) => (value === null || value === undefined ? 'null' : `'${String(value).replaceAll("'", "''")}'`);
 
+/**
+ * The shape of a JSON value, never the value: each key of an object with the shape of its value, an array
+ * as the shape of its first element, and anything else as its type ('string', 'number', 'boolean',
+ * 'null'). Below four levels, a value is its type alone ('object', 'array').
+ */
+export function shapeOf(value, depth = 0) {
+  if (depth > 3) return Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
+  if (Array.isArray(value)) return value.length ? [shapeOf(value[0], depth + 1)] : [];
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, shapeOf(value[key], depth + 1)]));
+  return value === null ? 'null' : typeof value;
+}
+
+/** Supabase Auth's error_code, when the body has one that looks like a code. */
+export const errorCodeOf = (body) =>
+  (body && typeof body === 'object' && typeof body.error_code === 'string' && /^[a-z0-9_]{1,64}$/.test(body.error_code) ? body.error_code : null);
+
+/** Query parameters whose value says which call it was (the grant, the sign-out's scope, the link's type). */
+const NAMED_VALUES = new Set(['grant_type', 'scope', 'type']);
+const AN_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * A call made to Supabase Auth, as the stack notes it (functions-server.mjs, crew-e2e.mjs): the method, the path
+ * with any id taken out, the names of the query's parameters, with the value of grant_type, scope and type when it
+ * is a plain word, and what Auth answered: its status, the shape of its body (shapeOf) and its error_code. `text` is
+ * the body as it came. Never a token, a key, a password, an address or an id.
+ */
+export function authCallNote(method, url, status, text) {
+  const where = new URL(url);
+  let body = null;
+  let json = true;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    json = false;
+  }
+  const query = [...where.searchParams.keys()].map((name) => {
+    const value = where.searchParams.get(name);
+    return NAMED_VALUES.has(name) && /^[a-z_]{1,32}$/.test(value) ? `${name}=${value}` : name;
+  });
+  return { method, path: where.pathname.replace(AN_ID, ':id'), query, status, shape: json ? shapeOf(body) : '(not JSON)', error_code: json ? errorCodeOf(body) : null };
+}
+
 // ---- Requests to the gateway ----------------------------------------------------------------------
 
 /**
