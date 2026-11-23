@@ -64,6 +64,13 @@ function sent(n = 0) {
   return { url, method: init.method, headers: new Headers(init.headers), body: JSON.parse(String(init.body)) as unknown, signal: init.signal };
 }
 
+// This project has no Node types, so the file system is asked for by name with the calls used here.
+type Entry = { name: string; isDirectory(): boolean };
+const fs = jest.requireActual<{ readdirSync(dir: string, o: { withFileTypes: true }): Entry[]; readFileSync(file: string, encoding: 'utf8'): string }>('fs');
+const here = expect.getState().testPath ?? '';
+const root = here.slice(0, here.search(/[\\/]src[\\/]/));
+const src = `${root}/src`;
+
 const change = (key: string, rev: string, record: unknown = { id: key }): Change => {
   const [kind, id] = key.split(':');
   return { key, kind: kind as Change['kind'], id, rev, record };
@@ -264,18 +271,52 @@ describe('crew sign-in by passcode', () => {
     expect(await server.crewAuth('lookup', { code: 'ABCD2345' })).toEqual({ kind: 'unreachable' });
   });
 
-  it('useCrewSession hands the tokens to the client and reads the account kind', async () => {
+  it('crewAuth takes each action’s own fields, under the server’s names, and no other', () => {
+    // Each ask below is a compile error, which `npm run typecheck` holds: it fails on any of these lines
+    // that is not one. None is ever sent, since nothing calls the function that holds them.
+    const neverSent = () => [
+      // @ts-expect-error A camelCase name: crew-auth takes first_name and last_name.
+      server.crewAuth('sign_in', { code: 'ABCD2345', firstName: 'Sam', lastName: 'Ortiz', passcode: '582039' }),
+      // @ts-expect-error A field left out: signing in takes the passcode too.
+      server.crewAuth('sign_in', { code: 'ABCD2345', first_name: 'Sam', last_name: 'Ortiz' }),
+      // @ts-expect-error A field too many: a lookup takes the code alone.
+      server.crewAuth('lookup', { code: 'ABCD2345', passcode: '582039' }),
+      // @ts-expect-error Another action's fields: a confirm takes the passcode alone.
+      server.crewAuth('confirm', { code: 'ABCD2345' }),
+      // @ts-expect-error A reset's names are reset_code and new_passcode.
+      server.crewAuth('reset', { code: 'ABCD2345', first_name: 'Sam', last_name: 'Ortiz', resetCode: '204913', newPasscode: '582039' }),
+    ];
+    expect(typeof neverSent).toBe('function');
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // The fields, action by action, are the ones crew-auth takes (FIELDS in its handler).
+    const fieldsIn = (block: string, field: RegExp) =>
+      Object.fromEntries(
+        block
+          .split('\n')
+          .map((line) => /^\s*(\w+): (.*)$/.exec(line))
+          .filter((m): m is RegExpExecArray => m !== null)
+          .map(([, action, rest]) => [action, [...rest.matchAll(field)].map((m) => m[1]).sort()]),
+      );
+    const app = /export interface CrewFields \{\n([\s\S]*?)\n\}/.exec(fs.readFileSync(`${src}/domain/serverAnswers.ts`, 'utf8'));
+    const handler = /const FIELDS: [^=]+= \{\n([\s\S]*?)\n\};/.exec(fs.readFileSync(`${root}/supabase/functions/crew-auth/handler.ts`, 'utf8'));
+    const theirs = fieldsIn(handler?.[1] ?? '', /'(\w+)'/g);
+    expect(Object.keys(theirs)).toEqual(['lookup', 'sign_up', 'sign_in', 'reset', 'confirm']);
+    expect(fieldsIn(app?.[1] ?? '', /(\w+): string/g)).toEqual(theirs);
+  });
+
+  it('startCrewSession hands the tokens to the client and reads the account kind', async () => {
     const crewSession = { accessToken: 'a-sam', refreshToken: 'r-sam', expiresAt: 1_795_000_000, userId: 'u-sam' };
     mockAuth.setSession.mockResolvedValueOnce({ data: { user: SAM_USER, session: { access_token: 'a-sam', refresh_token: 'r-sam', user: SAM_USER } }, error: null });
-    expect(await server.useCrewSession(crewSession)).toEqual({ ok: true, account: SAM });
+    expect(await server.startCrewSession(crewSession)).toEqual({ ok: true, account: SAM });
     expect(mockAuth.setSession).toHaveBeenCalledWith({ access_token: 'a-sam', refresh_token: 'r-sam' });
     // An account that signs in with email is one whatever else its app_metadata holds.
     const avery = { ...AVERY, app_metadata: { provider: 'email', providers: ['email'] } };
     mockAuth.setSession.mockResolvedValueOnce({ data: { user: avery, session: { access_token: 'a', refresh_token: 'r', user: avery } }, error: null });
-    expect(await server.useCrewSession({ ...crewSession, userId: AVERY.id })).toEqual({ ok: true, account: AVERY_ACCOUNT });
+    expect(await server.startCrewSession({ ...crewSession, userId: AVERY.id })).toEqual({ ok: true, account: AVERY_ACCOUNT });
     // With no signal nothing is kept, and the person is told why.
     mockAuth.setSession.mockResolvedValueOnce({ data: { user: null, session: null }, error: offline });
-    expect(await server.useCrewSession(crewSession)).toEqual({ ok: false, error: 'The company server could not be reached. Check your signal and try again.' });
+    expect(await server.startCrewSession(crewSession)).toEqual({ ok: false, error: 'The company server could not be reached. Check your signal and try again.' });
 
     // Whoever listens hears the kind too: from the session the phone holds, and from supabase-js.
     mockAuth.getSession.mockResolvedValue({ data: { session: { access_token: 'a-sam', refresh_token: 'r-sam', user: SAM_USER } }, error: null });
@@ -662,16 +703,24 @@ describe('deleting the company sign-in', () => {
       });
 
       // With no session the phone can use, crew-auth is not asked at all.
+      const noSignal = { ok: false, answer: { kind: 'unreachable' }, error: 'Could not reach MineMuster’s server. Nothing was deleted. Try again when you have signal.' };
       mockFetch.mockClear();
       mockAuth.getSession.mockResolvedValueOnce({ data: { session: null }, error: offline });
-      expect(await server.deleteAccountWithPasscode('582039')).toMatchObject({ ok: false, answer: { kind: 'unreachable' } });
+      expect(await server.deleteAccountWithPasscode('582039')).toEqual(noSignal);
       mockAuth.getSession.mockResolvedValueOnce({ data: { session: null }, error: null });
       expect(await server.deleteAccountWithPasscode('582039')).toMatchObject({ ok: false, answer: { kind: 'signed_out' } });
+      // supabase-js failing outright while it reads the session is no different from no signal.
+      mockAuth.getSession.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      expect(await server.deleteAccountWithPasscode('582039')).toEqual(noSignal);
       expect(mockFetch).not.toHaveBeenCalled();
       // A fresh session supabase-js could not take, or one it finds is another account's: nothing is asked of delete-account.
       confirmed();
       mockAuth.setSession.mockResolvedValueOnce({ data: { user: null, session: null }, error: offline });
-      expect(await server.deleteAccountWithPasscode('582039')).toMatchObject({ ok: false, answer: { kind: 'unreachable' } });
+      expect(await server.deleteAccountWithPasscode('582039')).toEqual(noSignal);
+      // Turned down, rather than unanswered: try again.
+      confirmed();
+      mockAuth.setSession.mockResolvedValueOnce({ data: { user: null, session: null }, error: { name: 'AuthApiError', code: 'bad_jwt', status: 403, message: 'invalid JWT' } });
+      expect(await server.deleteAccountWithPasscode('582039')).toEqual(tryAgain);
       const lee = { ...SAM_USER, id: 'u-lee' };
       confirmed();
       mockAuth.setSession.mockResolvedValueOnce({ data: { user: lee, session: { access_token: 'a-fresh', refresh_token: 'r-fresh', user: lee } }, error: null });
@@ -684,11 +733,6 @@ describe('deleting the company sign-in', () => {
 describe('staying signed in', () => {
   // supabase-js itself, not the stand-in: what it does with a session it keeps is what keeps a person signed in.
   const actual = jest.requireActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js');
-  // This project has no Node types, so the file system is asked for by name with the calls used here.
-  type Entry = { name: string; isDirectory(): boolean };
-  const fs = jest.requireActual<{ readdirSync(dir: string, o: { withFileTypes: true }): Entry[]; readFileSync(file: string, encoding: 'utf8'): string }>('fs');
-  const here = expect.getState().testPath ?? '';
-  const src = here.slice(0, here.search(/[\\/]services[\\/]/));
   /** Every file the app is built from, tests aside. */
   const appFiles = (dir: string): string[] =>
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === '__tests__' ? [] : appFiles(`${dir}/${e.name}`)) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
@@ -761,7 +805,7 @@ describe('staying signed in', () => {
       // Day one, with signal: Sam signs in with his passcode, and the session goes into the app's own storage.
       const first = restartedApp();
       const t0 = Math.floor(Date.now() / 1000);
-      expect(await first.useCrewSession({ accessToken: token('u-sam', t0 + 3600), refreshToken: 'r-1', expiresAt: t0 + 3600, userId: 'u-sam' })).toEqual({ ok: true, account: SAM });
+      expect(await first.startCrewSession({ accessToken: token('u-sam', t0 + 3600), refreshToken: 'r-1', expiresAt: t0 + 3600, userId: 'u-sam' })).toEqual({ ok: true, account: SAM });
       const [url, key, options] = mockCreateClient.mock.calls[mockCreateClient.mock.calls.length - 1] as [string, string, { auth: Record<string, unknown> }];
       expect([url, key]).toEqual(['https://example.supabase.co', 'sb_publishable_test']);
       expect(options.auth).toMatchObject({ persistSession: true, autoRefreshToken: true, storageKey: KEY });

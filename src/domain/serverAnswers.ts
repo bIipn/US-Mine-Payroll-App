@@ -505,7 +505,20 @@ export function deletionAnswerWords(answer: DeletionAnswer, { email }: { email: 
 
 // ---- The crew-auth function: company code, name and passcode ----------------------------------------
 
-export type CrewAction = 'lookup' | 'sign_up' | 'sign_in' | 'reset' | 'confirm';
+/**
+ * The fields each crew-auth action takes, under the server's own names, every one text and no other
+ * (FIELDS in supabase/functions/crew-auth/handler.ts, which turns down a body with any other). A
+ * camelCase, missing or extra field is a type error.
+ */
+export interface CrewFields {
+  lookup: { code: string };
+  sign_up: { code: string; first_name: string; last_name: string; passcode: string };
+  sign_in: { code: string; first_name: string; last_name: string; passcode: string };
+  reset: { code: string; first_name: string; last_name: string; reset_code: string; new_passcode: string };
+  confirm: { passcode: string };
+}
+
+export type CrewAction = keyof CrewFields;
 
 /** The session a sign-in hands the phone. `expiresAt` is Supabase's own: seconds since the epoch. */
 export interface CrewSession {

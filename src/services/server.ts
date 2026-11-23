@@ -24,6 +24,7 @@ import {
   settleDeletion,
   type CrewAction,
   type CrewAnswer,
+  type CrewFields,
   type CrewSession,
   type JoinAnswer,
   type ServerCompany,
@@ -284,12 +285,13 @@ async function forgetSession(): Promise<void> {
  * Ask the crew-auth edge function (supabase/functions/crew-auth): look up a company code; sign up or
  * sign in with the code, a name and a passcode; set a new passcode with a supervisor's reset code; or
  * confirm the passcode of the account signed in here, whose access token is then the `bearer`. The
- * body is the action and exactly the fields given, under the server's own names (code, first_name,
- * last_name, passcode, reset_code, new_passcode), as crew-auth takes no other. It goes as everything
- * from the app goes, with no Origin, which crew-auth turns down as a web page's. With no answer in
- * 30 seconds the request is aborted and, as with no signal, the server could not be reached.
+ * body is the action and exactly the fields given: each action's own, under the server's names
+ * (`CrewFields`), as crew-auth takes no other. Nothing here sets an Origin, and on iOS and Android
+ * the request goes with none. A browser adds one, which crew-auth turns down as a web page's, so
+ * passcode sign-in is offered on iOS and Android only. With no answer in 30 seconds the request is
+ * aborted and, as with no signal, the server could not be reached.
  */
-export async function crewAuth(action: CrewAction, body: Record<string, string>, bearer?: string): Promise<CrewAnswer> {
+export async function crewAuth<A extends CrewAction>(action: A, body: CrewFields[A], bearer?: string): Promise<CrewAnswer> {
   if (!SERVER) throw new Error('This build names no company server.');
   const { url, key } = SERVER;
   let answered: { status: number; text: string };
@@ -320,7 +322,7 @@ export async function crewAuth(action: CrewAction, body: Record<string, string>,
  * and refreshes it from then on, as it does one from signing in with email, so the person stays
  * signed in. The account comes back as the server has it, with its kind.
  */
-export async function useCrewSession(session: CrewSession): Promise<Done<{ account: ServerAccount }>> {
+export async function startCrewSession(session: CrewSession): Promise<Done<{ account: ServerAccount }>> {
   const kept = await keepSession(session);
   return 'account' in kept ? { ok: true, account: kept.account } : { ok: false, error: authWords(kept.problem) };
 }
