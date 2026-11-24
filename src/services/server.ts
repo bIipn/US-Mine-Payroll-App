@@ -205,16 +205,6 @@ export async function signIn(email: string, password: string): Promise<Done<{ ac
   }
 }
 
-/** Send a link to set a new password. It opens in the browser, where the new password is set. */
-export async function resetPassword(email: string): Promise<Done> {
-  try {
-    const { error } = await api().auth.resetPasswordForEmail(email.trim().toLowerCase());
-    return error ? { ok: false, error: authWords(problemOf(error)) } : { ok: true };
-  } catch (error) {
-    return { ok: false, error: authWords(problemOf(error)) };
-  }
-}
-
 /**
  * Sign this phone out of the server. Only this phone: the person stays signed
  * in anywhere else. With no signal and an expired session, supabase-js keeps

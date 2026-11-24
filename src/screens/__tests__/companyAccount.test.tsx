@@ -68,7 +68,6 @@ jest.mock('../../services/server', () => {
     },
     signOut: jest.fn(async () => mockTell(null)),
     signIn: jest.fn(),
-    resetPassword: jest.fn(),
     crewAuth: jest.fn(),
     startCrewSession: jest.fn(),
     signOutOtherSessions: jest.fn(async () => ({ ok: true })),

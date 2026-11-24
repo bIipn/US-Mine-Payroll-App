@@ -16,7 +16,6 @@ const mockAuth = {
   startAutoRefresh: jest.fn(),
   stopAutoRefresh: jest.fn(),
   resend: jest.fn(),
-  resetPasswordForEmail: jest.fn(),
   getUser: jest.fn(),
 };
 /** supabase-js's edge function client: invoke(name, options). */
@@ -137,14 +136,6 @@ describe('the account', () => {
     expect(await server.signIn('avery@example.com', 'wrong')).toEqual({ ok: false, error: 'That email and password do not match an account. Check the spelling, or tap Forgot password.' });
     mockAuth.signInWithPassword.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     expect(await server.signIn('avery@example.com', 'haulroad88')).toMatchObject({ ok: false, error: expect.stringMatching(/could not be reached/) });
-  });
-
-  it('sends the link to set a new password', async () => {
-    mockAuth.resetPasswordForEmail.mockResolvedValueOnce({ data: {}, error: null });
-    expect(await server.resetPassword(' Avery@Example.com ')).toEqual({ ok: true });
-    expect(mockAuth.resetPasswordForEmail).toHaveBeenCalledWith('avery@example.com');
-    mockAuth.resetPasswordForEmail.mockResolvedValueOnce({ data: null, error: { status: 429, message: 'slow down' } });
-    expect(await server.resetPassword('avery@example.com')).toMatchObject({ ok: false, error: expect.stringMatching(/Too many tries/) });
   });
 
   it('signs out of this phone only, and takes the session off the phone even with no signal', async () => {

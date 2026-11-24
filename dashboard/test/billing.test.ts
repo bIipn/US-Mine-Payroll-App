@@ -23,7 +23,7 @@ import {
   type BillingView,
 } from '../src/lib/billing';
 import { BILLING_PORTAL, EARLY_ACCESS, RESTART_LINK, TRIAL_LINK } from '../src/lib/config';
-import { asksForTrial, freshIntent, INTENT_FOR_MS } from '../src/lib/intent';
+import { asksForReset, asksForTrial, freshIntent, INTENT_FOR_MS } from '../src/lib/intent';
 
 const COMPANY = '7f1c2a9e-3b4d-4c5e-8f60-112233445566';
 const DEC_1 = Date.parse('2026-12-01T17:00:00Z');
@@ -427,6 +427,15 @@ describe('a trial asked for on the website', () => {
     expect(asksForTrial('?code=abc&start=trial')).toBe(true);
     expect(asksForTrial('?start=trials')).toBe(false);
     expect(asksForTrial('')).toBe(false);
+  });
+
+  it('a new password asked for from the app is read from ?start=reset and nothing else', () => {
+    expect(asksForReset('?start=reset')).toBe(true);
+    expect(asksForReset('?code=abc&start=reset')).toBe(true);
+    expect(asksForReset('?start=trial')).toBe(false);
+    expect(asksForReset('?start=resets')).toBe(false);
+    expect(asksForReset('')).toBe(false);
+    expect(asksForTrial('?start=reset')).toBe(false);
   });
 
   it('is kept for a week at most', () => {

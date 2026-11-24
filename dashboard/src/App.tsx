@@ -7,7 +7,7 @@ import { BillingProvider } from './lib/billingState';
 import type { OpenWhich } from './lib/companies';
 import { CompanyProvider } from './lib/company';
 import { messageOf } from './lib/errors';
-import { wantsTrial } from './lib/intent';
+import { wantsReset, wantsTrial } from './lib/intent';
 import { remember, remembered } from './lib/picked';
 import { useLocation } from './lib/router';
 import type { CompanyChoice } from './lib/server';
@@ -53,7 +53,7 @@ export function App() {
   }, []);
 
   if (auth.state === 'checking') return <Loading>Opening MineMuster</Loading>;
-  if (auth.state === 'out') return <AuthScreen said={linkSaid} done={farewell} trial={wantsTrial()} />;
+  if (auth.state === 'out') return <AuthScreen said={linkSaid} done={farewell} trial={wantsTrial()} reset={wantsReset()} />;
   if (auth.state === 'recovery') return <NewPasswordScreen onDone={() => setAuth({ state: 'in', session: auth.session })} />;
   if (auth.state === 'invited') {
     // Signed in by an invite email's link: its first screen names the address, with a way out (ruling R31).

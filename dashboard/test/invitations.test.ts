@@ -86,7 +86,7 @@ const consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((l
 // The client module is the first to read the address, as in the browser.
 const link = await import('../src/lib/supabase');
 const { acceptAndOpen, afterAuthEvent, companiesView, loadCompanies, openingAuth, readInvitations, setInvitedSession, troubleKept } = await import('../src/lib/arrival');
-const { LinkTroubleScreen, NewPasswordScreen } = await import('../src/screens/AuthScreen');
+const { AuthScreen, LinkTroubleScreen, NewPasswordScreen } = await import('../src/screens/AuthScreen');
 const { InvitationsNotice, InvitationsScreen } = await import('../src/screens/InvitationsScreen');
 const { EmployeeScreen } = await import('../src/screens/EmployeeScreen');
 const { OverviewPage } = await import('../src/screens/OverviewPage');
@@ -521,5 +521,23 @@ describe('how the crew get into the app', () => {
       'Each person then opens the MineMuster app, taps Sign up on its first screen, and types the company code, their name as it is on the roster, and a passcode they choose.',
     );
     expect(said).not.toContain('More → Company account');
+  });
+});
+
+describe('Forgot password? in the app', () => {
+  // The app opens https://app.minemuster.com/?start=reset in the phone's browser, so the link in the email comes back
+  // to the browser that asked for it: the page opens on Set a new password, with nothing else to tap first.
+  it('opens the sign-in on Set a new password', () => {
+    const html = renderToStaticMarkup(createElement(AuthScreen, { reset: true }));
+    expect(html).toMatch(/<h2 class="h2"[^>]*>Set a new password<\/h2>/);
+    expect(text(html)).toContain('Email me a link');
+    expect(text(html)).toContain('Back to sign in');
+    expect(text(html)).not.toContain('Show the password');
+  });
+
+  it('opens on Sign in without it', () => {
+    const html = renderToStaticMarkup(createElement(AuthScreen, {}));
+    expect(html).toMatch(/<h2 class="sr-only"[^>]*>Sign in<\/h2>/);
+    expect(text(html)).toContain('Forgot your password?');
   });
 });

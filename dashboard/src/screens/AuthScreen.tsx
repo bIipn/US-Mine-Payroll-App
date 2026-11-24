@@ -31,10 +31,16 @@ type Tab = 'in' | 'up' | 'reset';
 
 /**
  * `trial`: sent from the website to start a free trial, so the page opens on making an account and says what comes next.
+ * `reset`: sent from the app's Forgot password?, so the page opens on Set a new password.
  * `done`: what was just done before this browser was signed out, such as deleting the account.
  */
-export function AuthScreen({ said: arrived = null, done = null, trial = false }: { said?: string | null; done?: string | null; trial?: boolean } = {}) {
-  const [tab, setTab] = useState<Tab>(trial ? 'up' : 'in');
+export function AuthScreen({
+  said: arrived = null,
+  done = null,
+  trial = false,
+  reset = false,
+}: { said?: string | null; done?: string | null; trial?: boolean; reset?: boolean }) {
+  const [tab, setTab] = useState<Tab>(reset ? 'reset' : trial ? 'up' : 'in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);

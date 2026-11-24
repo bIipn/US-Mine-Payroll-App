@@ -135,3 +135,11 @@ export const WEB_PAGES = {
   privacy: 'https://minemuster.com/privacy',
   help: 'https://minemuster.com/contact',
 } as const;
+
+/**
+ * The office dashboard's Set a new password, which Forgot password? opens in the phone's own browser. The
+ * link in the email it sends works only in the browser that asked for it: the dashboard takes no sign-in
+ * from an address but an invitation's (dashboard/src/lib/supabase.ts, readArrival). So the phone opens this
+ * page rather than asking for the email itself, which would send a link the dashboard turns down.
+ */
+export const PASSWORD_RESET_PAGE = 'https://app.minemuster.com/?start=reset';

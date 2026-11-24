@@ -55,6 +55,8 @@ The rules are in `src/lib/billing.ts`, with tests: which states open the dashboa
 
 A new company opens on Billing once it is made. "Start free trial" on minemuster.com opens `https://app.minemuster.com/?start=trial`: the dashboard opens on Create an account, keeps the wish in this browser for a week at most (through confirming the email, which may open another tab), and opens on Billing when a company opens for a supervisor. The crew never see billing, and their screen never asks for it.
 
+Forgot password? in the app opens `https://app.minemuster.com/?start=reset` in the phone's own browser, and the dashboard opens on Set a new password (`asksForReset` in `src/lib/intent.ts`), for that page load only. The person asks for the link there, so it comes back to the browser that asked for it: the dashboard takes a reset link's sign-in only as a code that this browser's half completes, never from the address.
+
 **Your account.** Anyone signed in deletes their own MineMuster account here, at `/account`: from Your account beside Sign out in the menu, and in the top band on the crew's page and the page of an account in no company. It opens whatever billing says (`gate` lets it through, as it does Billing), since anyone may delete their own account. It asks the server's `account_deletion_check` what deleting means in each company and says, before anything is deleted, what goes, what stays with each company and why. The plan is `src/lib/accountPlan.ts`, with tests; the page is `src/screens/AccountPage.tsx` (`AccountView` draws it, and is what the tests render). Where the person is a company's only supervisor:
 
 | The server says | The page |

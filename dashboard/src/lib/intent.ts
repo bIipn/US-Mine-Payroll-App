@@ -17,6 +17,17 @@ export const INTENT_FOR_MS = 7 * DAY;
 /** Whether an address's query asks to start a trial. */
 export const asksForTrial = (search: string): boolean => new URLSearchParams(search).get('start') === 'trial';
 
+/**
+ * Whether an address's query asks for a new password: Forgot password? in the app opens
+ * https://app.minemuster.com/?start=reset in the phone's browser, so the person asks for the link here and
+ * the link comes back to this browser, the only one that can take it. It is a wish for this page load
+ * only: nothing is kept.
+ */
+export const asksForReset = (search: string): boolean => new URLSearchParams(search).get('start') === 'reset';
+
+/** Whether the page opened from the app's Forgot password? (read by noteArrival). */
+let resetAsked = false;
+
 /** Whether what this browser keeps is a wish to start a trial made in the last week. */
 export function freshIntent(stored: string | null, now: number): boolean {
   if (!stored) return false;
@@ -28,13 +39,27 @@ export function freshIntent(stored: string | null, now: number): boolean {
   }
 }
 
-/** Read `?start=trial` off the address the page opened at, keep it, and take it off the address. */
+/**
+ * Read `?start=trial` or `?start=reset` off the address the page opened at, and take it off the address:
+ * a trial is kept in this browser for a week, a new password for this page load.
+ */
 export function noteArrival(): void {
+  let search = '';
   try {
-    if (!asksForTrial(window.location.search)) return;
-    window.localStorage.setItem(KEY, JSON.stringify({ trial: Date.now() }));
+    search = window.location.search;
   } catch {
-    // A browser that keeps nothing still opens the dashboard; the person finds Billing in the sidebar.
+    return;
+  }
+  if (asksForReset(search)) {
+    resetAsked = true;
+  } else if (asksForTrial(search)) {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify({ trial: Date.now() }));
+    } catch {
+      // A browser that keeps nothing still opens the dashboard; the person finds Billing in the sidebar.
+    }
+  } else {
+    return;
   }
   try {
     const url = new URL(window.location.href);
@@ -44,6 +69,9 @@ export function noteArrival(): void {
     // Nothing to tidy.
   }
 }
+
+/** Whether this page opened from the app's Forgot password?, so its sign-in opens on Set a new password. */
+export const wantsReset = (): boolean => resetAsked;
 
 export function wantsTrial(): boolean {
   try {

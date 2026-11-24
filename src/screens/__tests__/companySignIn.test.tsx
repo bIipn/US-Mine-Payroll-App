@@ -65,7 +65,6 @@ jest.mock('../../services/connection', () => {
       startCrewSession: fn(),
       signOutOtherSessions: fn(),
       signIn: fn(),
-      resetPassword: fn(),
       myCompanies: fn(),
       myJoinRequests: fn(),
       signOut: fn(),
@@ -623,12 +622,18 @@ describe('Supervisor? Sign in with email', () => {
   it('signs in, picks the company and connects', async () => {
     await freshPhone();
     await press('crew-use-email');
-    // Forgot password? sends the dashboard's link to set a new password.
-    server.resetPassword.mockResolvedValueOnce({ ok: true });
-    await type('server-email', 'avery@example.test');
+    // Forgot password? opens the office dashboard's own Set a new password in the phone's browser. The link in
+    // the email it sends then comes back to the browser that asked for it, the only place the dashboard takes it.
+    const { Linking } = require('react-native') as typeof import('react-native');
+    const open = jest.spyOn(Linking, 'openURL').mockResolvedValueOnce(undefined);
     await press('server-forgot');
-    expect(server.resetPassword).toHaveBeenCalledWith('avery@example.test');
-    expect(shown()).toContain('We sent a link to avery@example.test to set a new password.');
+    expect(open).toHaveBeenCalledWith('https://app.minemuster.com/?start=reset');
+    expect(shown()).toContain('The office dashboard opened in your browser. Type your email there and tap Email me a link. Open the link in that email on this phone, then come back here and sign in with your new password.');
+    open.mockRejectedValueOnce(new Error('no browser'));
+    await press('server-forgot');
+    expect(shown()).toContain('This phone could not open the browser. On a computer, go to app.minemuster.com and tap Forgot your password?');
+    open.mockRestore();
+    await type('server-email', 'avery@example.test');
 
     // A supervisor of two companies: the phone asks which one it is for.
     const PIT_B: ServerCompany = { id: 'c-test-b', name: 'Test Pit B', role: 'supervisor', joinCode: 'WXYZ2345' };
