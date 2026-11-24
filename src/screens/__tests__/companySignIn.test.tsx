@@ -101,7 +101,7 @@ const nav = require('@react-navigation/native') as typeof import('@react-navigat
 const { RootNavigator } = require('../../navigation/RootNavigator') as typeof import('../../navigation/RootNavigator');
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const { revOf } = require('../../domain/sync') as typeof import('../../domain/sync');
-const { fmtTime } = require('../../util/format') as typeof import('../../util/format');
+const { fmtDateTime, fmtTime } = require('../../util/format') as typeof import('../../util/format');
 const { useSyncStatus } = require('../../services/sync') as typeof import('../../services/sync');
 const connection = require('../../services/connection') as {
   server: Record<string, jest.Mock>;
@@ -344,11 +344,19 @@ describe('signing up and signing in with a passcode', () => {
     expect(shown()).toContain('That passcode is not right');
     expect(shown()).toContain('3 tries left. Check it and try again.');
 
-    const until = Date.now() + 15 * 60_000;
-    server.crewAuth.mockResolvedValueOnce({ kind: 'locked', until });
+    // A lock that ends later today gives the time alone, and one that ends on another day gives the day too.
+    // Both times are set from today's date, not from now, so the test reads the same at any hour.
+    const today = new Date();
+    const laterToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59).getTime();
+    server.crewAuth.mockResolvedValueOnce({ kind: 'locked', until: laterToday });
     await press('crew-submit');
     expect(shown()).toContain('Too many wrong passcodes');
-    expect(shown()).toContain(`Try again at ${fmtTime(until)}, or ask a supervisor for a reset code.`);
+    expect(shown()).toContain(`Try again at ${fmtTime(laterToday)}, or ask a supervisor for a reset code.`);
+
+    const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1, 12, 0).getTime();
+    server.crewAuth.mockResolvedValueOnce({ kind: 'locked', until: tomorrow });
+    await press('crew-submit');
+    expect(shown()).toContain(`Try again at ${fmtDateTime(tomorrow)}, or ask a supervisor for a reset code.`);
 
     server.crewAuth.mockResolvedValueOnce({ kind: 'locked', until: null });
     await press('crew-submit');
