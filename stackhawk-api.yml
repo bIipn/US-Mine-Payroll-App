@@ -1,0 +1,232 @@
+# HawkScan, surface 1 of 3: the company server.
+#
+# The target is the private local copy of the server that scripts/security-scan/stack runs, at
+# https://127.0.0.1:54321. Nothing live is ever scanned. Every id, account and key below is read
+# from the environment, where scripts/security-scan/scan-inputs.mjs writes it from the local
+# stack's own files, so this file holds nothing that could pass for a credential.
+# scripts/security-scan/README.md says how to start everything and run the scan.
+#
+# Scanned: PostgREST under /rest/v1 (the tables, and the functions under /rest/v1/rpc) and the
+# stripe-webhook function under /functions/v1.
+# Not scanned: Supabase Auth under /auth/v1. It is Supabase's code, not this repository's, and
+# junk sent there locks the scan's own accounts out (a changed password, or the limit on
+# sign-ins by caller address). The scanner still signs in there.
+#
+# Scan it with "node scripts/security-scan/up.mjs scan api". That sets the profile mode
+# (PROFILE_SCAN_MODE=primary-full and FULL_SCAN_PROFILE=A1, the variables the scanner reads for
+# --profile-scan-mode and --full-scan-profile), without which the four accounts get two rules and
+# nothing else, and it runs the scanner through the scan guard. The two tags at the end read the
+# same variables and have no default, so a run that does not set them stops before it starts, and
+# the scan's record says which mode it ran in.
+#
+# Assumed, with nobody to ask when this was written:
+# - Routes expected: 61 method and path pairs on 28 paths, counted from the description file.
+#   PostgREST lists every method on every table, so 19 of them are there only to be refused by
+#   the grants. A table read in the description asks only for the filters given values below; the
+#   reads with their columns and ordering are among the recorded requests.
+# - The first account, A1, is the supervisor of the first made-up company and gets every rule.
+#   Its own sign-in is in the part that is not attacked.
+# - The other company's ids under forbiddenVariables document the boundary. The preset rules
+#   that would use them are off on this account, so they are not counted as coverage.
+
+app:
+  applicationId: ${APP_ID}
+  env: ${APP_ENV:Development-api}
+  # The origin, with no path: sign-in, the tables and the function live under three prefixes,
+  # so every path in the description file carries its own.
+  host: ${APP_HOST:https://127.0.0.1:54321}
+
+  excludePaths:
+    - "/auth/v1"
+    - "/auth/v1/.*"
+
+  # The scanner asks this before it starts and when it suspects the server has stopped, with the key
+  # alone. Since migration 20261122000100 the only function the key alone may call is the website's
+  # contact form (company_by_code is for signed-in accounts), and with its hidden field filled in it
+  # answers 200 at once and keeps nothing, before any limit is counted: a bot's answer. up.mjs asks
+  # the same before a scan, and a test holds this to the migrations' grants.
+  waitForAppTarget:
+    path: /rest/v1/rpc/submit_contact_request
+    requestMethod: POST
+    requestBody: '{"p_name": "", "p_company": "", "p_email": "", "p_phone": "", "p_message": "", "p_website": "waiting for the target"}'
+    waitTimeoutMillis: 60000
+    pollDelay: 1000
+    requestHeaders:
+      apikey: ${SCAN_PUBLISHABLE_KEY}
+      Content-Type: application/json
+
+  openApiConf:
+    # One file: PostgREST's own description of what a signed-in account reaches, and the
+    # webhook's, with "/rest/v1" and "/functions/v1" written into each path. The gateway gives
+    # PostgREST's description to the secret key alone, so the scanner cannot fetch it itself.
+    filePath: ${OPENAPI_SCAN}
+    # A DELETE is sent, but never with one of the real ids below, so the scan does not delete
+    # the rows it is testing with.
+    includeAllMethods: false
+    # Real ids for the functions' inputs, so a request reaches the function and not just a "not
+    # found". The scanner leaves customVariables out of query parameters (seen 18 November 2026),
+    # so scan-inputs.mjs also writes every one of these, and each table filter's "eq.<id>", into
+    # the description as defaults; that is what the scan uses. Entries here are kept for the
+    # bodies of the functions, and a test holds them to the description. The only roster row
+    # named is one no account holds.
+    customVariables:
+      - field: company_id
+        path: ".*/rest/v1/rpc/(is_member|is_supervisor|push_records|rotate_join_code)$"
+        values:
+          - ${SCAN_COMPANY_A}
+      - field: p_company_id
+        path: ".*/rest/v1/rpc/company_billing$"
+        values:
+          - ${SCAN_COMPANY_A}
+      - field: request_id
+        path: ".*/rest/v1/rpc/(approve_join_request|deny_join_request|lift_join_bar)$"
+        values:
+          - ${SCAN_REQUEST_P1}
+      - field: roster_id
+        path: ".*/rest/v1/rpc/(approve_join_request|release_roster_claim)$"
+        values:
+          - ${SCAN_ROSTER_A3}
+      - field: code
+        path: ".*/rest/v1/rpc/(company_by_code|join_company)$"
+        values:
+          - ${SCAN_CODE_B}
+    # The other company's ids, which no account of the first company may reach.
+    forbiddenVariables:
+      - field: company_id
+        path: ".*/rest/v1/rpc/(is_member|is_supervisor|push_records|rotate_join_code)$"
+        values:
+          - ${SCAN_COMPANY_B}
+      - field: p_company_id
+        path: ".*/rest/v1/rpc/company_billing$"
+        values:
+          - ${SCAN_COMPANY_B}
+      - field: roster_id
+        path: ".*/rest/v1/rpc/(approve_join_request|release_roster_claim)$"
+        values:
+          - ${SCAN_ROSTER_B1}
+      - field: company_id
+        path: ".*/rest/v1/(roster|records|record_history|join_requests|notifications|billing_subscriptions|billing_overrides)$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_COMPANY_B_EQ}
+      - field: id
+        path: ".*/rest/v1/companies$"
+        requestMethods:
+          - GET
+        values:
+          - ${SCAN_COMPANY_B_EQ}
+
+  authentication:
+    # An account signs in with its email address and password as JSON, and the answer holds an
+    # access token that lasts an hour.
+    usernamePassword:
+      type: JSON
+      loginPath: /auth/v1/token?grant_type=password
+      usernameField: email
+      passwordField: password
+      scanUsername: ${SCAN_A1_EMAIL}
+      scanPassword: ${SCAN_A1_PASSWORD}
+    tokenExtraction:
+      type: TOKEN_PATH
+      value: "access_token"
+    tokenAuthorization:
+      type: HEADER
+      value: Authorization
+      tokenType: Bearer
+      isJWT: true
+    # Answers 401 to the key alone and 200 to every signed-in account, a member of a company or not.
+    testPath:
+      path: /rest/v1/rpc/my_companies
+      requestMethod: GET
+      success: ".*200.*"
+      requestHeaders:
+        apikey: ${SCAN_PUBLISHABLE_KEY}
+    # Said outright: left out, the scanner reports session verification as off, and a session lost
+    # in the middle of the scan would go unnoticed.
+    sessionVerification:
+      disabled: false
+    # A1 is the supervisor of the first company and gets every rule. The others get the two
+    # rules that look for one account reaching what belongs to another: an employee of the same
+    # company, the supervisor of another company, and an account that has joined nothing.
+    profiles:
+      - name: A1
+        isPrivileged: true
+        userNamePassword:
+          username: ${SCAN_A1_EMAIL}
+          password: ${SCAN_A1_PASSWORD}
+      - name: A2
+        isPrivileged: false
+        userNamePassword:
+          username: ${SCAN_A2_EMAIL}
+          password: ${SCAN_A2_PASSWORD}
+      - name: B1
+        isPrivileged: false
+        userNamePassword:
+          username: ${SCAN_B1_EMAIL}
+          password: ${SCAN_B1_PASSWORD}
+      - name: N1
+        isPrivileged: false
+        userNamePassword:
+          username: ${SCAN_N1_EMAIL}
+          password: ${SCAN_N1_PASSWORD}
+
+  # The key, and the made-up accounts' access tokens, are kept out of the evidence uploaded.
+  redact:
+    headers:
+      - apikey
+      - Authorization
+
+# Every request to the gateway carries the publishable key in "apikey".
+hawkAddOn:
+  replacer:
+    rules:
+      - matchString: apikey
+        replacement: ${SCAN_PUBLISHABLE_KEY}
+        replaceOnly: false
+        isRegex: false
+
+hawk:
+  # Any finding ends the scan with exit code 42.
+  failureThreshold: low
+  # The scan guard (scripts/security-scan/egress-guard.mjs), for both of the scanning engine's
+  # ways out. hawk.outboundProxy is what its sign-in and its calls to StackHawk use. The three
+  # network.connection.httpProxy lines are what its crawl, its attacks and what it fetches for its
+  # browser use. The guard passes StackHawk and the three scan targets on 127.0.0.1, and refuses
+  # everything else. Seen on this machine: the sign-in, the engine and its browser all reach
+  # 127.0.0.1 through the guard, and the guard refuses localhost, so name every target 127.0.0.1.
+  outboundProxy:
+    host: ${SCAN_OUTBOUND_PROXY}
+  config:
+    - network.connection.httpProxy.enabled=true
+    - network.connection.httpProxy.host=${SCAN_GUARD_HOST}
+    - network.connection.httpProxy.port=${SCAN_GUARD_PORT}
+  spider:
+    # No pages to crawl: the routes come from the description file and from the requests below.
+    base: false
+    ajax: false
+    # One well-formed request for each call the description cannot render: a table filter
+    # ("eq.<value>"), the list push_records takes, the contact form with its hidden field empty.
+    har:
+      file:
+        paths:
+          - ${SEED_HAR}
+  scan:
+    # The scanner shares four cores with the server it attacks. Fewer threads keep answers
+    # quick, which the rules that time an answer depend on.
+    concurrentRequests: 10
+
+tags:
+  - name: _STACKHAWK_AGENT
+    value: ${HAWK_AGENT:none}
+  - name: _STACKHAWK_GIT_COMMIT_SHA
+    value: ${COMMIT_SHA:none}
+  - name: _STACKHAWK_GIT_BRANCH
+    value: ${BRANCH_NAME:none}
+  - name: git_origin
+    value: biipn/us-mine-payroll-app
+  # No default: see the top of this file.
+  - name: profile_scan_mode
+    value: ${PROFILE_SCAN_MODE}
+  - name: full_scan_profile
+    value: ${FULL_SCAN_PROFILE}

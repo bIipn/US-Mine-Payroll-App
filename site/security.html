@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security and data: MineMuster</title>
+<meta name="description" content="Where a company’s MineMuster records are kept, what never leaves the phone, how location is read, and what MineMuster does not claim.">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://minemuster.com/security">
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="MineMuster">
+<meta property="og:url" content="https://minemuster.com/security">
+<meta property="og:title" content="Security and data: MineMuster">
+<meta property="og:description" content="Where a company’s MineMuster records are kept, what never leaves the phone, how location is read, and what MineMuster does not claim.">
+<meta property="og:image" content="https://minemuster.com/brand/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The MineMuster logo: a steel MM over the words Mine Muster, on black">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Security and data: MineMuster">
+<meta name="twitter:description" content="Where a company’s MineMuster records are kept, what never leaves the phone, how location is read, and what MineMuster does not claim.">
+<meta name="twitter:image" content="https://minemuster.com/brand/og-image.png">
+<meta name="twitter:image:alt" content="The MineMuster logo: a steel MM over the words Mine Muster, on black">
+<link rel="preload" href="/fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/site.css">
+<script>document.documentElement.classList.add('js')</script>
+<script type="module" src="/site.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+
+<header class="top dark">
+  <div class="wrap top-bar">
+    <a class="mark" href="/" aria-label="MineMuster home"><img src="/brand/minemuster-mark-header.webp" width="228" height="144" alt=""></a>
+    <nav class="nav" aria-label="Main">
+      <button class="menu-button" type="button" aria-expanded="false" aria-controls="menu"><span class="menu-icon" aria-hidden="true"></span>Menu</button>
+      <ul class="menu" id="menu">
+        <li><a href="/#what">What it does</a></li>
+        <li><a href="/#features">Features</a></li>
+        <li><a href="/pricing">Pricing</a></li>
+        <li><a href="/security" aria-current="page">Security</a></li>
+        <li><a href="/#faq">FAQ</a></li>
+        <li><a href="/contact">Contact</a></li>
+        <li class="menu-cta"><a class="button button-line" href="https://app.minemuster.com">Sign in</a></li>
+        <li class="menu-cta"><a class="button button-primary" href="https://app.minemuster.com/?start=trial">Start free trial</a></li>
+      </ul>
+    </nav>
+    <div class="top-actions">
+      <a class="button button-line top-sign" href="https://app.minemuster.com">Sign in</a>
+      <a class="button button-primary top-cta" href="https://app.minemuster.com/?start=trial">Start free trial</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="page-head dark" aria-labelledby="page-title">
+    <div class="wrap">
+      <p class="eyebrow">Security and data</p>
+      <h1 id="page-title">Where the records are kept</h1>
+      <p class="lede">Where a company&rsquo;s records live, who can read them, what never leaves the phone, and what we do not claim.</p>
+    </div>
+  </section>
+
+  <div class="section">
+    <div class="wrap doc-layout">
+      <nav class="toc" aria-labelledby="toc-title">
+        <h2 class="toc-h" id="toc-title">On this page</h2>
+        <ol>
+          <li><a href="#where">Where records are kept</a></li>
+          <li><a href="#who-reads">Who can read them</a></li>
+          <li><a href="#signing-in">Signing in</a></li>
+          <li><a href="#phone">What never leaves the phone</a></li>
+          <li><a href="#location">Location</a></li>
+          <li><a href="#payments">Payments</a></li>
+          <li><a href="#website">This website</a></li>
+          <li><a href="#claims">What we do not claim</a></li>
+          <li><a href="#report">Reporting a problem</a></li>
+        </ol>
+      </nav>
+      <div class="doc">
+        <section aria-labelledby="where">
+          <h2 id="where">Where records are kept</h2>
+          <p>A record is saved on the phone the moment it is signed: every punch, equipment checklist, pre shift exam and maintenance request. Nothing waits on a network.</p>
+          <p>Once a phone has joined its company, it sends the company&rsquo;s records to MineMuster&rsquo;s server whenever it has signal. The server is a Supabase project, a PostgreSQL database with Supabase&rsquo;s sign-in, in Amazon Web Services&rsquo; us-west-1 region in Northern California. Every connection to it is HTTPS: Supabase&rsquo;s project APIs accept no other kind.</p>
+          <p>The website and the office dashboard at app.minemuster.com are served by Vercel. The dashboard reads the company&rsquo;s records from the server; it keeps none of them itself.</p>
+        </section>
+
+        <section aria-labelledby="who-reads">
+          <h2 id="who-reads">Who can read them</h2>
+          <ul class="lines">
+            <li>Row level security is on for every table on the server. A person signed in reads only the records of the company they belong to.</li>
+            <li>Only a company&rsquo;s supervisors change its roster, its area sheets, paid leave and the company&rsquo;s settings. Every record on the dashboard says which account sent it.</li>
+            <li>A name on the company&rsquo;s roster joins with the company code. Anyone else waits until a supervisor lets them in or turns them down.</li>
+            <li>A phone sends to one company only. Records that went to one company never go to another until a supervisor clears the phone.</li>
+            <li>The app and the dashboard carry only the project&rsquo;s publishable key, which row level security holds to these rules. Neither will take a secret key.</li>
+          </ul>
+        </section>
+
+        <section aria-labelledby="signing-in">
+          <h2 id="signing-in">Signing in</h2>
+          <p>Crew sign in to the app with the company code, their name and a passcode of 6 to 12 digits, and have no email. MineMuster&rsquo;s server makes each crew member&rsquo;s account under an address made up for it that receives no mail, and keeps the passcode only as a salted, keyed digest, never as typed. Five wrong tries in a row lock the account for 15 minutes, and ten lock it until a supervisor gives a reset code. The server also counts sign-in requests by network address, at most 30 in 10 minutes, so trying many names or codes is slowed down. These sign-ins are answered only to the phone apps, never to a web page.</p>
+          <p>Supervisors, and anyone who already signs in with email, use an email and a password, through Supabase&rsquo;s sign-in, on the dashboard and in the app under Supervisor? Sign in with email. The password goes to Supabase and nowhere else. The links in the emails to confirm an account or reset a password sign in only the browser that asked for them. A supervisor invites another supervisor by email from the Roster page, and the invited person takes the place only by accepting, signed in with that address.</p>
+          <p>The dashboard keeps the person signed in with the browser&rsquo;s own storage, and signing out signs out that browser only. Its pages may exchange data only with MineMuster&rsquo;s server, and they cannot be shown inside another site&rsquo;s page.</p>
+        </section>
+
+        <section aria-labelledby="phone">
+          <h2 id="phone">What never leaves the phone</h2>
+          <ul class="lines">
+            <li>The hourly rate a person enters for their own pay estimate. It is in no export, and no one else sees it.</li>
+            <li>The accounts and passwords on the phone.</li>
+            <li>The phone&rsquo;s own settings, such as its lunch reminders.</li>
+            <li>Anything of the made-up sample crew.</li>
+          </ul>
+          <p>The phone never sends them, and the server turns down any record that carries a rate or a password.</p>
+        </section>
+
+        <section aria-labelledby="location">
+          <h2 id="location">Location</h2>
+          <p>The phone&rsquo;s location is read only at the moment of a punch (clock in, start lunch, clock out) and kept with that punch. The point it was read at goes to the server with the punch, and the company&rsquo;s supervisors can see it. It is never read in the background, and none is read when lunch ends. A clock-in made with a location goes through only inside the mine boundary. With location off, approximate only, or no fix, it still goes through, with no location, marked for a supervisor to review; nothing is paid or docked for it. Clocking out and starting lunch are never blocked by location.</p>
+          <p>The one other time a location is read is when a supervisor sets the boundary: to put its pin where they stand, or to check where they stand against it, which is shown on their screen and not kept. A company that runs the safety forms alone, with no time clock, has no boundary and reads no location at all.</p>
+        </section>
+
+        <section aria-labelledby="payments">
+          <h2 id="payments">Payments</h2>
+          <p>Stripe takes the card on its own pages, for the trial and the monthly charge, and the card is changed in Stripe&rsquo;s billing portal. MineMuster never sees the card number. The server keeps only where each subscription stands (its status, when the trial ends, when the period paid for ends and whether it is cancelled), from messages Stripe signs; a message without Stripe&rsquo;s signature is refused.</p>
+        </section>
+
+        <section aria-labelledby="website">
+          <h2 id="website">This website</h2>
+          <p>minemuster.com has no analytics, no trackers and no cookies, and it loads nothing from any other site: its fonts and scripts are its own. Its pages may run only their own scripts. The one thing it sends anywhere is what you type into the contact form, which goes to MineMuster&rsquo;s server when you press Send.</p>
+        </section>
+
+        <section aria-labelledby="claims">
+          <h2 id="claims">What we do not claim</h2>
+          <p>MineMuster has not been through an outside security audit or certification, and it publishes no uptime figure. The standards text in the app is a plain-language summary, not legal advice, and the records it keeps do not stand in for a mine&rsquo;s own duty to keep them. While the subscription is open, a supervisor can export the company&rsquo;s records from the dashboard; export what you need to keep before you cancel. During early access, keep the paper equipment cards and pre shift exams as well, until your crew&rsquo;s records are reaching the dashboard.</p>
+        </section>
+
+        <section aria-labelledby="report">
+          <h2 id="report">Reporting a problem</h2>
+          <p>If you find a security problem, <a href="/contact">write to us through the contact form</a>: say what you found and how to see it. Please do not try to reach another company&rsquo;s records to show it.</p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <section class="closing dark" aria-labelledby="closing-title">
+    <div class="wrap">
+      <h2 id="closing-title">Start your free trial</h2>
+      <p class="closing-sub">14 days free, then $300 a month for the whole company, until it cancels. During early access we set up the crew&rsquo;s app with you.</p>
+      <div class="actions">
+        <a class="button button-primary" href="https://app.minemuster.com/?start=trial">Start free trial</a>
+        <a class="button button-line" href="/demo">Try the app in your browser</a>
+      </div>
+      <p class="closing-note">Already a customer? <a class="note-link" href="https://app.minemuster.com">Sign in</a> or <a class="note-link" href="https://billing.stripe.com/p/login/bJe3cw6zD4JnbbX5nA3ks00">manage billing</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot dark">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <img class="foot-logo" src="/brand/minemuster-logo-800.webp" width="800" height="371" loading="lazy" decoding="async" alt="MineMuster">
+        <p class="foot-tag">Shift software for mine crews.<br>Made in California.</p>
+        <a class="button button-primary" href="https://app.minemuster.com/?start=trial">Start free trial</a>
+      </div>
+      <div class="foot-links">
+        <nav class="foot-col" aria-labelledby="foot-product">
+          <h2 class="foot-h" id="foot-product">Product</h2>
+          <ul>
+            <li><a href="/#what">What it does</a></li>
+            <li><a href="/#features">Features</a></li>
+            <li><a href="/#loop">Bad Order to date fixed</a></li>
+            <li><a href="/#inspector">Inspector PDF</a></li>
+            <li><a href="/#payroll">Time clock and payroll</a></li>
+            <li><a href="/pricing">Pricing</a></li>
+            <li><a href="/demo">Try the app in your browser</a></li>
+          </ul>
+        </nav>
+        <nav class="foot-col" aria-labelledby="foot-company">
+          <h2 class="foot-h" id="foot-company">Company</h2>
+          <ul>
+            <li><a href="/#who">Who it is for</a></li>
+            <li><a href="/#about">About</a></li>
+            <li><a href="/#faq">FAQ</a></li>
+            <li><a href="/security" aria-current="page">Security and data</a></li>
+            <li><a href="/contact">Contact</a></li>
+          </ul>
+        </nav>
+        <nav class="foot-col" aria-labelledby="foot-legal">
+          <h2 class="foot-h" id="foot-legal">Legal</h2>
+          <ul>
+            <li><a href="/privacy">Privacy</a></li>
+            <li><a href="/terms">Terms</a></li>
+          </ul>
+        </nav>
+        <nav class="foot-col" aria-labelledby="foot-account">
+          <h2 class="foot-h" id="foot-account">Account</h2>
+          <ul>
+            <li><a href="https://app.minemuster.com">Sign in</a></li>
+            <li><a href="https://billing.stripe.com/p/login/bJe3cw6zD4JnbbX5nA3ks00">Manage billing</a></li>
+            <li><a href="/delete-account">Delete your account</a></li>
+          </ul>
+        </nav>
+      </div>
+    </div>
+    <div class="foot-base">
+      <p>&copy; 2026 MineMuster</p>
+      <p>Prices are in US dollars.</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

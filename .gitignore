@@ -1,0 +1,59 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+# What `eas env:pull` writes for a file setting (an Apple key, say). Never committed or sent in a build.
+.eas/.env/
+# Working copies Claude Code makes for parallel work. EAS packs what .gitignore does not name
+# (it does not read .git/info/exclude), so they are named here to stay out of build uploads.
+.claude/worktrees/
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
+
+# single-file preview build
+/preview
+
+# Python caches from running the scripts
+__pycache__/
+
+# HawkScan output, if a scan is ever run by hand from here
+*.sarif
+
+# Store credentials (kept on EAS only, never in this public repository)
+credentials.json
+*service-account*.json

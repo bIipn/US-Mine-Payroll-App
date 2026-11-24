@@ -1,0 +1,17 @@
+{
+  "name": "minemuster-database-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tests for the MineMuster database migrations, run against a local PGlite database.",
+  "scripts": {
+    "test": "node --test *.db.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "pg": "8.16.3"
+  }
+}

@@ -1,0 +1,61 @@
+# HawkScan, surface 3 of 3: the website.
+#
+# The target is a private copy of site/, served on this machine the way Vercel serves the real
+# one, at https://127.0.0.1:4443 (scripts/security-scan/sites). Its contact form posts to the
+# local copy of the server and to no other. Nothing live is ever scanned.
+# scripts/security-scan/README.md says how to start everything and run the scan.
+#
+# The pages are static, and /demo is one large page that runs the app in the browser and sends
+# nothing anywhere. So this scan covers how the site is served (its response headers and its
+# Content-Security-Policy, its files, what it gives for a path that is not there) and the pages
+# as a browser draws them. The contact form's own handling is on the server, and is tested
+# there (stackhawk-api.yml).
+#
+# Assumed, with nobody to ask when this was written:
+# - Routes expected: the 43 files the copy serves: six pages, /demo, the 404 page and their
+#   assets. A crawl can reach 40 of the 43 at most: not 404.html (the body of every 404, never a
+#   page of its own), not brand/og-image.png (named only in the pages' social card tags, which a
+#   browser does not load), and not fonts/OFL.txt (linked from nowhere).
+# - The crawl's browser stays on this machine. The copy's links to the live sites and to Stripe
+#   are moved onto the copies when it is made (scripts/security-scan/sites/stage.mjs), and the
+#   scanner and its browser are run through scripts/security-scan/egress-guard.mjs, which lets
+#   them reach StackHawk and the scan targets on 127.0.0.1 and nothing else.
+
+app:
+  applicationId: ${APP_ID}
+  env: ${APP_ENV:Development-site}
+  host: ${APP_HOST:https://127.0.0.1:4443}
+
+hawk:
+  # Any finding ends the scan with exit code 42.
+  failureThreshold: low
+  # The scan guard (scripts/security-scan/egress-guard.mjs), for both of the scanning engine's
+  # ways out. hawk.outboundProxy is what its sign-in and its calls to StackHawk use. The three
+  # network.connection.httpProxy lines are what its crawl, its attacks and what it fetches for its
+  # browser use. The guard passes StackHawk and the three scan targets on 127.0.0.1, and refuses
+  # everything else. Seen on this machine: the sign-in, the engine and its browser all reach
+  # 127.0.0.1 through the guard, and the guard refuses localhost, so name every target 127.0.0.1.
+  outboundProxy:
+    host: ${SCAN_OUTBOUND_PROXY}
+  config:
+    - network.connection.httpProxy.enabled=true
+    - network.connection.httpProxy.host=${SCAN_GUARD_HOST}
+    - network.connection.httpProxy.port=${SCAN_GUARD_PORT}
+  spider:
+    base: true
+    # /demo and the 3D logo are drawn by JavaScript, so the crawl needs a browser.
+    ajax: true
+    ajaxBrowser: CHROME_HEADLESS
+    # The pages take seconds. The rest of this is spent inside /demo, which has many screens
+    # and one address, so more time finds no more of the site.
+    maxDurationMinutes: 4
+
+tags:
+  - name: _STACKHAWK_AGENT
+    value: ${HAWK_AGENT:none}
+  - name: _STACKHAWK_GIT_COMMIT_SHA
+    value: ${COMMIT_SHA:none}
+  - name: _STACKHAWK_GIT_BRANCH
+    value: ${BRANCH_NAME:none}
+  - name: git_origin
+    value: biipn/us-mine-payroll-app

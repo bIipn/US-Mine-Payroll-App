@@ -1,0 +1,210 @@
+import { checkPaySchedule, type PaySchedule } from './payPeriod';
+import type { PayCodes } from './payrollCsv';
+import { cleanText } from './roster';
+import { DEFAULT_RADIUS_M, MAX_RADIUS_M, MIN_RADIUS_M } from './site';
+import type { LatLng, SiteConfig } from './types';
+
+/**
+ * The company a crew works for: its name, the state whose hours rules apply,
+ * its logo and its pay periods. A supervisor sets it in the app; a build can
+ * name it in EXPO_PUBLIC_COMPANY.
+ */
+
+/** The logo drawn at the top of the clock screen and on the sign-in screen. */
+export type CompanyLogo =
+  /** Artwork traced and built into the app. */
+  | { art: 'us-mine' }
+  /** An image: an https address, or a data URL from an upload. */
+  | { uri: string };
+
+export interface Company {
+  /** The legal name, the way it is printed on the pay stub. Empty until a supervisor gives it. */
+  name: string;
+  /** Two-letter postal code of the state the crew works in. Empty until given. */
+  state: string;
+  /** Where the crew works, for the sign-in screen: "Fallon, Nevada". */
+  place?: string;
+  /** The mine's MSHA mine ID, seven digits, printed on the records for an inspector. */
+  mineId?: string;
+  /** None: the top of the clock screen shows its plain colour. */
+  logo?: CompanyLogo;
+  /** None: hours are shown by the workweek and the month. */
+  pay: PaySchedule | null;
+  /**
+   * `false`: the crew uses the safety forms only, with no time clock, hours or
+   * payroll. Left out, the company keeps time as well.
+   */
+  timeClock?: false;
+  /** The earning code the company's payroll system uses for each kind of hours. None: REG, OT, DT, HOL, PTO, SICK. */
+  payCodes?: PayCodes;
+}
+
+/** Whether the company keeps time in the app, or uses it for the safety forms only. */
+export function keepsTime(company: Company): boolean {
+  return company.timeClock !== false;
+}
+
+/**
+ * What the sign-in screens say the app is for, under the logo: the time clock and pay only for a
+ * company that keeps time. `company` is null until the phone knows the company, and until then nothing
+ * is said of time or pay.
+ */
+export function signInWords(company: Company | null): { tagline: string; line: string } {
+  const at = company?.place ? ` at ${company.place}` : '';
+  return company && keepsTime(company)
+    ? { tagline: 'Clock in. Check your machine. Get paid right.', line: `Time, checklists and maintenance requests for the crew${at}.` }
+    : { tagline: 'Check your machine. Report what needs fixing.', line: `Equipment checklists, pre shift exams and maintenance requests for the crew${at}.` };
+}
+
+export const STATES: Record<string, string> = {
+  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado',
+  CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia',
+  HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky',
+  LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota',
+  MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire',
+  NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota',
+  OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island',
+  SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont',
+  VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
+};
+
+export function stateName(code: string): string {
+  return STATES[code] ?? '';
+}
+
+/** The made-up company the sample crew works for. Not modelled on any real one. */
+export const SAMPLE_COMPANY: Company = {
+  name: 'Sample Mining Co.',
+  state: 'CA',
+  pay: { frequency: 'semimonthly', payday: { dayOfMonth: [20, 5] }, ifBankClosed: 'before' },
+};
+
+const ART_KEYS = ['us-mine'] as const;
+
+function readLogo(value: unknown): CompanyLogo | undefined | 'bad' {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') return 'bad';
+  if ((ART_KEYS as readonly string[]).includes(value)) return { art: value as 'us-mine' };
+  if (/^https:\/\/\S+$/.test(value) || /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value)) return { uri: value };
+  return 'bad';
+}
+
+/** An MSHA mine ID as its seven digits, with any dash or spaces taken out. */
+export function normalMineId(text: string): string {
+  return text.replace(/[\s-]/g, '');
+}
+
+/** What is wrong with a company, or undefined when it is whole. */
+export function checkCompany(company: Company): string | undefined {
+  if (!company.name.trim()) return 'Give the company’s name.';
+  if (!STATES[company.state]) return 'Choose the state the crew works in.';
+  if (company.mineId && !/^\d{7}$/.test(normalMineId(company.mineId))) return 'An MSHA mine ID is seven digits, like 0400123.';
+  if (company.pay) {
+    const problem = checkPaySchedule(company.pay);
+    if (problem) return problem;
+  }
+  if (company.payCodes) {
+    const codes = Object.values(company.payCodes).map((c) => c.trim());
+    if (codes.some((c) => !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,11}$/.test(c))) {
+      return 'An earning code is up to 12 letters and numbers, the way the payroll system writes it.';
+    }
+    if (new Set(codes.map((c) => c.toUpperCase())).size !== codes.length) return 'Two kinds of hours have the same code. Give each its own.';
+  }
+  return undefined;
+}
+
+/**
+ * A company as it is saved, or what is wrong with it: the name and the place
+ * closed up, the mine ID as its seven digits, and nothing kept that says
+ * nothing (no place, no mine ID, a time clock that is on, no earning codes of
+ * its own). The app and the office dashboard save a company through here, so
+ * both write the same record.
+ */
+export function savedCompany(company: Company): { ok: true; company: Company } | { ok: false; error: string } {
+  const mineId = company.mineId ? normalMineId(company.mineId) : '';
+  const next: Company = { ...company, name: cleanText(company.name), place: company.place && cleanText(company.place) ? cleanText(company.place) : undefined, mineId };
+  if (!next.place) delete next.place;
+  if (!next.mineId) delete next.mineId;
+  if (next.timeClock !== false) delete next.timeClock;
+  if (!next.payCodes) delete next.payCodes;
+  const problem = checkCompany(next);
+  return problem ? { ok: false, error: problem } : { ok: true, company: next };
+}
+
+/** A point as the build writes it, or undefined when it is not a real latitude and longitude. */
+function readPoint(raw: unknown): LatLng | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const { lat, lng } = raw as Record<string, unknown>;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return undefined;
+  if (!(Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) return undefined;
+  return { lat, lng };
+}
+
+/** The clock-in site a build names with its company, or 'bad'. */
+function readSite(raw: unknown, companyName: string): SiteConfig | undefined | 'bad' {
+  if (raw === undefined || raw === null) return undefined;
+  const center = readPoint(raw);
+  if (!center) return 'bad';
+  const r = raw as Record<string, unknown>;
+  const radius = typeof r.radiusM === 'number' && Number.isFinite(r.radiusM) ? r.radiusM : DEFAULT_RADIUS_M;
+  const site: SiteConfig = {
+    name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : companyName,
+    center,
+    radiusM: Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, Math.round(radius / 50) * 50)),
+  };
+  if (r.town !== undefined && r.town !== null) {
+    const town = readPoint(r.town);
+    const name = (r.town as Record<string, unknown>).name;
+    if (!town || typeof name !== 'string' || !name.trim()) return 'bad';
+    site.town = { name: name.trim(), center: town };
+  }
+  return site;
+}
+
+/** The company named in a build setting (JSON), with its clock-in site if it names one, or what is wrong with it. */
+export function parseCompany(text: string | null | undefined): { company?: Company; site?: SiteConfig; error?: string } {
+  if (!text || !text.trim()) return {};
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { error: 'EXPO_PUBLIC_COMPANY is not JSON. Write it as {"name": "...", "state": "CA"}.' };
+  }
+  if (!raw || typeof raw !== 'object') return { error: 'EXPO_PUBLIC_COMPANY must be a JSON object.' };
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (!name) return { error: 'EXPO_PUBLIC_COMPANY has no name.' };
+  const state = typeof raw.state === 'string' ? raw.state.trim().toUpperCase() : '';
+  if (!STATES[state]) return { error: `EXPO_PUBLIC_COMPANY names no state we know: "${String(raw.state ?? '')}".` };
+  const logo = readLogo(raw.logo);
+  if (logo === 'bad') return { error: 'EXPO_PUBLIC_COMPANY has a logo that is not an https address, an image data URL or a built-in key.' };
+  const pay = (raw.pay ?? null) as PaySchedule | null;
+  if (pay !== null) {
+    const problem = typeof pay === 'object' && pay.payday && typeof pay.payday === 'object' ? checkPaySchedule(pay) : 'Say how often and when.';
+    if (problem) return { error: `EXPO_PUBLIC_COMPANY pay schedule: ${problem}` };
+  }
+  const company: Company = { name, state, pay };
+  if (typeof raw.place === 'string' && raw.place.trim()) company.place = raw.place.trim();
+  if (raw.mineId != null && raw.mineId !== '') {
+    const id = normalMineId(String(raw.mineId));
+    if (!/^\d{7}$/.test(id)) return { error: 'EXPO_PUBLIC_COMPANY has an MSHA mine ID that is not seven digits.' };
+    company.mineId = id;
+  }
+  if (logo) company.logo = logo;
+  if (raw.timeClock !== undefined && raw.timeClock !== null) {
+    if (typeof raw.timeClock !== 'boolean') return { error: 'EXPO_PUBLIC_COMPANY has a timeClock that is not true or false.' };
+    if (!raw.timeClock) company.timeClock = false;
+  }
+  const site = readSite(raw.site, name);
+  if (site === 'bad') return { error: 'EXPO_PUBLIC_COMPANY has a site without a real lat and lng (or a town without a name, lat and lng).' };
+  return site ? { company, site } : { company };
+}
+
+/**
+ * The company a fresh install starts with: the build's own, else the sample
+ * company for a preview with the sample crew, else nothing filled in.
+ */
+export function companyOrDefault(fromBuild: Company | undefined, samples: boolean): Company {
+  if (fromBuild) return fromBuild;
+  if (samples) return SAMPLE_COMPANY;
+  return { name: '', state: '', pay: null };
+}

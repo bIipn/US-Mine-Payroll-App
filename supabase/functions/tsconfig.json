@@ -1,0 +1,19 @@
+// Type checks the edge functions as Deno runs them: npx tsc -p supabase/functions.
+// Deno does not read this file. The app's own tsconfig leaves this folder out,
+// since these files import each other with their .ts extension, as Deno needs.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts"]
+}
