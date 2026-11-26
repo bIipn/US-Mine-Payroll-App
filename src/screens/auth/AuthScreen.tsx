@@ -1,6 +1,6 @@
 import { Eye, EyeOff, HardHat, ShieldCheck, UserX } from '../../components/icons';
 import React, { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ProviderMark } from '../../components/Brand';
@@ -124,7 +124,7 @@ export function AuthScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={signInStyles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={signInStyles.root} behavior="padding">
       <ScrollView
         testID="auth-screen"
         keyboardShouldPersistTaps="handled"

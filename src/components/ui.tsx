@@ -584,7 +584,7 @@ export function Page({ title, sub, onBack, right, children, footer, scroll = tru
     <View testID={testID} style={[styles.flex, pad && styles.pagePad]}>{children}</View>
   );
   return (
-    <KeyboardAvoidingView style={styles.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.page} behavior="padding">
       <TopBar title={title} sub={sub} onBack={onBack} right={right} />
       {body}
       {footer ? <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, space.md) }]}>{footer}</View> : null}
@@ -599,7 +599,7 @@ export function Sheet({ visible, onClose, title, children, testID }: {
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView style={styles.sheetWrap} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.sheetWrap} behavior="padding">
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
         <View testID={testID} style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
           <View style={styles.sheetHead}>

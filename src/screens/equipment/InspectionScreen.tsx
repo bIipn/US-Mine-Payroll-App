@@ -1,6 +1,6 @@
 import { OctagonAlert } from '../../components/icons';
 import React, { useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useLeaveGuard } from '../../components/LeaveGuard';
@@ -133,7 +133,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
   };
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.root} behavior="padding">
       <TopBar title={`${unit.unit} checklist`} sub={`${unit.make} ${unit.model}, ${CATEGORY_LABEL[unit.category].toLowerCase()}`} onBack={navigation.goBack} />
       <View style={styles.progress}>
         <ProgressBar value={items.length ? answered / items.length : 0} tone={counts.bo > 0 ? 'bo' : 'ok'} height={8} />

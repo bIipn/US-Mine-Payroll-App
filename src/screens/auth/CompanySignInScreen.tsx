@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Building2, Clock, HardHat, LogOut, RotateCcw, UserCog, UserX, WifiOff } from '../../components/icons';
@@ -83,7 +83,7 @@ export function CompanySignInScreen({ navigation }: ScreenProps<'CompanySignIn'>
   const signedOut = known && !account && !signingOut;
 
   return (
-    <KeyboardAvoidingView style={signInStyles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={signInStyles.root} behavior="padding">
       <ScrollView testID="company-sign-in" keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: insets.bottom + space.xxl }}>
         {/* A store build starts with no company: nothing is said of time or pay until the phone has the company's settings. */}
         <SignInHeader company={company.name.trim() ? company : null} />

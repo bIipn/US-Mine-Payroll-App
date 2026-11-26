@@ -1,6 +1,6 @@
 import { Plus, Siren, Trash } from '../../components/icons';
 import React, { useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useLeaveGuard } from '../../components/LeaveGuard';
@@ -242,7 +242,7 @@ export function AreaExamScreen({ navigation, route }: ScreenProps<'AreaExam'>) {
   const dangerOpen = stillOpen.some((f) => f.danger);
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.root} behavior="padding">
       <TopBar title={`${sheet.title} pre shift exam`} sub={`${fmtDate(startedAt)}, ${fmtTime(startedAt)}`} onBack={navigation.goBack} />
       <View style={styles.progress}>
         <ProgressBar value={total ? answered / total : 0} tone={counts.bo > 0 ? 'bo' : 'ok'} height={8} />
