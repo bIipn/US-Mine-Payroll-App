@@ -11,6 +11,8 @@ export interface LocalReminder {
   at: number;
   title: string;
   body: string;
+  /** Deliver at the minute even where the phone holds notices back to save battery (Android). */
+  alarm?: true;
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -28,6 +30,16 @@ export async function requestNotificationPermission(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** A browser has no battery hold on timers; the phone builds answer for Android. */
+export async function onTimeNotices(): Promise<boolean> {
+  return true;
+}
+
+/** Nothing to ask in a browser. */
+export async function allowOnTimeNotices(): Promise<boolean> {
+  return true;
 }
 
 export async function cancelLocal(ids: string[]): Promise<void> {

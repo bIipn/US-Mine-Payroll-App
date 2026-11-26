@@ -288,7 +288,13 @@ describe('lunchOverReminder', () => {
       at: at(11, 30),
       title: 'Lunch is over',
       body: 'You are back on the clock as of 11:30 AM.',
+      alarm: true,
     });
+  });
+
+  it('is the one notice that goes out as an alarm, so a phone saving battery cannot hold it back', () => {
+    expect(lunchOverReminder(at(11, 30)).alarm).toBe(true);
+    expect(lunchReminders(at(6)).every((r) => r.alarm === undefined)).toBe(true);
   });
 });
 

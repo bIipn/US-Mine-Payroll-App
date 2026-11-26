@@ -30,7 +30,10 @@
         "android.permission.ACCESS_WIFI_STATE",
         "com.google.android.gms.permission.AD_ID"
       ],
-      "allowBackup": false
+      "allowBackup": false,
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

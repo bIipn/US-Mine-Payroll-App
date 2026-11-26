@@ -88,4 +88,5 @@ advertising ID, diagnostics or analytics.
   punch goes through, marked for a supervisor to review.
 - **Government app, financial features, health, news, COVID-19:** No
 - **Permissions:** location while the app is in use only (no background location), notifications (kept across a
-  restart of the phone), vibration, internet and network state. No foreground service.
+  restart of the phone), alarms and reminders (`SCHEDULE_EXACT_ALARM`, which the person turns on, so the lunch-over
+  notice comes on time), vibration, internet and network state. No foreground service, and not `USE_EXACT_ALARM`.

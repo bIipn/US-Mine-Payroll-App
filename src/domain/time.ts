@@ -347,6 +347,11 @@ export interface LunchReminder {
   at: number;
   title: string;
   body: string;
+  /**
+   * Delivered as an alarm, at the minute, even where the phone holds notices back to save battery (Android's
+   * alarm-clock delivery). Only the notice that lunch is over: it is how the person learns they are back on the clock.
+   */
+  alarm?: true;
 }
 
 /**
@@ -394,6 +399,7 @@ export function lunchOverReminder(lunchEndsAt: number): LunchReminder {
     at: lunchEndsAt,
     title: 'Lunch is over',
     body: `You are back on the clock as of ${fmtTime(lunchEndsAt)}.`,
+    alarm: true,
   };
 }
 

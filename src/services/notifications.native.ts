@@ -44,6 +44,33 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
+/**
+ * Whether the phone delivers timed notices at the minute. Android 12 and later may hold them back to save battery
+ * unless MineMuster may set alarms (Android 14 and later start with that off); an iPhone always delivers on time.
+ * When the phone cannot say, the answer is yes, so nobody is asked for nothing.
+ */
+export async function onTimeNotices(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    return (await Notifications.getExactAlarmPermissionsAsync()).granted;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Opens the phone's Alarms & reminders setting for MineMuster and says whether it is on when the person comes back.
+ * Never asks on an iPhone.
+ */
+export async function allowOnTimeNotices(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    return (await Notifications.requestExactAlarmPermissionsAsync()).granted;
+  } catch {
+    return false;
+  }
+}
+
 export async function cancelLocal(ids: string[]): Promise<void> {
   await Promise.all(
     ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)),
@@ -63,6 +90,9 @@ export async function scheduleLocal(reminders: LocalReminder[]): Promise<void> {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
           date: new Date(reminder.at),
           channelId: CHANNEL,
+          // Android: an alarm is delivered at the minute even while the phone saves battery (it shows the alarm
+          // icon until then). Without the Alarms & reminders permission both fall back to a timed notice.
+          delivery: reminder.alarm ? 'alarmClock' : 'bestEffort',
         },
       });
     } catch {

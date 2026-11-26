@@ -18,7 +18,7 @@ import { deadlineWords, floorMin, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL
 import type { DemoLocation, GeoStamp, MealNote, NoLocation, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
-import { requestNotificationPermission, scheduleLocal } from '../../services/notifications';
+import { allowOnTimeNotices, onTimeNotices, requestNotificationPermission, scheduleLocal } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { openShiftOf, staleShiftOf, useMe, useRules, useStore, type ToastTone } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
@@ -40,6 +40,7 @@ import {
 } from '../../util/format';
 import { useNow } from '../../util/hooks';
 import { CheckedOutUnits } from '../equipment/CheckedOutUnits';
+import { OnTimeNotice } from './OnTimeNotice';
 
 type Status = 'off' | 'on' | 'lunch' | 'overdue';
 /**
@@ -92,6 +93,20 @@ export function ClockScreen() {
   const [mealNote, setMealNote] = useState<MealNote | null>(null);
   /** Whether the phone will let the lunch-is-over notice through. Unknown until a lunch is started. */
   const [notifyOk, setNotifyOk] = useState<boolean | null>(null);
+  /**
+   * Whether the phone delivers the lunch-over notice at the minute: on Android only with the Alarms & reminders
+   * permission. Assumed yes until the phone says otherwise, so nothing flashes up on an iPhone.
+   */
+  const [onTime, setOnTime] = useState(true);
+  useEffect(() => {
+    let live = true;
+    void onTimeNotices().then((ok) => {
+      if (live) setOnTime(ok);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   if (!me) return null;
 
@@ -169,9 +184,24 @@ export function ClockScreen() {
    * record, so answering the phone's question never changes a punch time.
    */
   const armNotices = async (current: Shift | undefined) => {
-    if (current) setNotifyOk(await requestNotificationPermission());
+    if (current) {
+      setNotifyOk(await requestNotificationPermission());
+      setOnTime(await onTimeNotices());
+    }
     await syncReminders(current, settings.lunchReminders, rules);
   };
+
+  /**
+   * Opens the phone's Alarms & reminders setting. Once it is on, the reminders waiting are scheduled again, so the
+   * ones already handed to the phone come at the minute too.
+   */
+  const allowOnTime = async () => {
+    const ok = await allowOnTimeNotices();
+    setOnTime(ok);
+    if (ok) await syncReminders(openShiftOf(useStore.getState().shifts, me.id, Date.now()), settings.lunchReminders, rules);
+  };
+  /** On a shift, with notifications allowed, while the phone may still hold the lunch-over notice back. */
+  const askOnTime = !onTime && notifyOk !== false && (status === 'on' || status === 'overdue' || status === 'lunch');
 
   const clockIn = async () => {
     const where = await readLocation('clock_in');
@@ -273,6 +303,7 @@ export function ClockScreen() {
               notifyOk={notifyOk !== false}
             />
           ) : null}
+          {status === 'lunch' && askOnTime ? <OnTimeNotice onAllow={allowOnTime} /> : null}
           <LunchOverWatcher atLunch={status === 'lunch'} shiftId={shift?.id} />
 
           {(status === 'on' || status === 'overdue') && shift && meal ? (
@@ -304,6 +335,7 @@ export function ClockScreen() {
                   <Button testID="another-lunch" style={{ flex: 1 }} label={shift.lunches.length === 1 ? '2nd lunch' : 'Lunch again'} icon={Utensils} size="md" kind="quiet" loading={busy === 'start_lunch'} onPress={startLunch} />
                 ) : null}
               </View>
+              {askOnTime ? <OnTimeNotice onAllow={allowOnTime} /> : null}
             </>
           ) : null}
 

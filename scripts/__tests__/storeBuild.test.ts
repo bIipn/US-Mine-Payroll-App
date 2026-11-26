@@ -148,6 +148,13 @@ describe('the store settings (app.json)', () => {
     expect(app.android.permissions ?? []).not.toContain('android.permission.ACCESS_BACKGROUND_LOCATION');
   });
 
+  it('may ask to deliver the lunch-over notice on time, with the alarm permission a person grants', () => {
+    // SCHEDULE_EXACT_ALARM is the Alarms & reminders switch the person turns on; USE_EXACT_ALARM is granted
+    // without asking and Google Play keeps it for alarm-clock and calendar apps.
+    expect(app.android.permissions ?? []).toContain('android.permission.SCHEDULE_EXACT_ALARM');
+    expect(app.android.permissions ?? []).not.toContain('android.permission.USE_EXACT_ALARM');
+  });
+
   it('asks for location while the app is in use only, and says who sees it', () => {
     const location = plugin('expo-location');
     expect(location).toMatchObject({
