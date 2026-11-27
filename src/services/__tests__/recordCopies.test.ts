@@ -19,6 +19,7 @@ import {
   markerOf,
   MINUTE_MS,
   MOST_COPIES,
+  NAP_MS,
   newestFirst,
   nextOrder,
   placeName,
@@ -183,6 +184,27 @@ describe('a sleep between two copies', () => {
   it('is taken for one when the steady clock cannot show the phone was awake: a time that cannot be set beside it, or no date', () => {
     expect(sleptBetween(at(1, 20_000, { clock: null }), at(2, 10_000, { own: true }), now(), START)).toBe(true);
     expect(sleptBetween(at(1, 20_000, { wall: null }), at(2, 10_000, { own: true }), now(), START)).toBe(true);
+    // Times that are there, and agree with the phone's clock, but cannot be set beside this session's: by a clock that may
+    // count from an app's start, the older copy's or the newer's; written after this session started by another, so in an
+    // earlier boot; or by any start, when this session's own clock may count from the app's start.
+    expect(sleptBetween(at(1, 20_000, { clock: 'app' }), at(2, 10_000, { own: true }), now(), START)).toBe(true);
+    expect(sleptBetween(at(1, 20_000, { own: true }), at(2, 10_000, { clock: 'app' }), now(), START)).toBe(true);
+    expect(sleptBetween(at(1, 500), at(2, 100, { own: true }), now(), START)).toBe(true);
+    expect(sleptBetween(at(1, 20_000), at(2, 10_000), now(), { startedAt: 2_000 })).toBe(true);
+  });
+
+  it('is taken for one when the steady clock went back between two copies it can set beside each other, whatever the phone’s clock says', () => {
+    // The newer copy by place was written 10 s before the older one by the steady clock, and 5 s after it by the phone's.
+    expect(sleptBetween(at(1, 10_000), at(2, 20_000, { own: true, wall: NOW - 5_000 }), now(), START)).toBe(true);
+  });
+
+  it('is a sleep of 45 s, and not one of 29 s, which is a nap; a nap is 5 s or more, and 4 s is none', () => {
+    const newer = at(2, 10_000, { own: true });
+    expect(sleptBetween(at(1, 20_000, { asleep: 45_000 }), newer, now(), START)).toBe(true);
+    expect(sleptBetween(at(1, 20_000, { asleep: 29_000 }), newer, now(), START)).toBe(false);
+    expect(sleptBetween(at(1, 20_000, { asleep: 29_000 }), newer, now(), START, NAP_MS)).toBe(true);
+    expect(sleptBetween(at(1, 20_000, { asleep: 5_000 }), newer, now(), START, NAP_MS)).toBe(true);
+    expect(sleptBetween(at(1, 20_000, { asleep: 4_000 }), newer, now(), START, NAP_MS)).toBe(false);
   });
 });
 
@@ -232,12 +254,24 @@ describe('the copies let go of', () => {
     expect(names(toLetGo(unnamed, letting(null)))).toEqual([]);
   });
 
+  it('the copy before each nap last, newest first, while there is room still: naps add up, so the newest of a minute can be a minute and a half after an older copy of it by the phone’s clock', () => {
+    // Three of this session's copies in one minute of steady time, the phone asleep 28 s before each of the last two.
+    const napped = [at(1, 18_000, { own: true, asleep: 56_000 }), at(2, 10_000, { own: true, asleep: 28_000 }), at(3, 2_000, { own: true })];
+    expect(names(toLetGo(napped, letting(null)))).toEqual([]);
+    // The newest of five minutes take the room first: the copy before the nap goes, and with one minute fewer it is kept.
+    const minutes = [250_000, 190_000, 130_000, 70_000].map((ago, i) => at(i + 1, ago, { own: true, asleep: 28_000 }));
+    const crowded = [...minutes, at(5, 10_000, { own: true, asleep: 28_000 }), at(6, 2_000, { own: true })];
+    expect(names(toLetGo(crowded, letting(null)))).toEqual([5]);
+    expect(names(toLetGo(crowded.slice(1), letting(null)))).toEqual([]);
+  });
+
   it('never, at a save, the copy it replaced when the phone’s clock says it was written a minute or more ago and not in the future', () => {
     const replaced = at(1, 15_000, { own: true, wall: NOW - MINUTE_MS });
     const copies = [replaced, at(2, 5_000, { own: true })];
     // Asleep or not by the steady clock, that one is the copy before the sleep anyway.
     expect(names(toLetGo(copies, letting(null, { replaced })))).toEqual([]);
-    const lately = at(1, 15_000, { own: true, wall: NOW - 20_000 });
+    // Written 15 s ago by both clocks: no nap between, either.
+    const lately = at(1, 15_000, { own: true, wall: NOW - 15_000 });
     expect(names(toLetGo([lately, at(2, 5_000, { own: true })], letting(null, { replaced: lately })))).toEqual([1]);
     const ahead = at(1, 15_000, { own: true, wall: NOW + MINUTE_MS });
     expect(names(toLetGo([ahead, at(2, 5_000, { own: true })], letting(null, { replaced: ahead })))).toEqual([1]);

@@ -535,13 +535,18 @@ interface Save extends Stamp {
  * phone's clock as well, so that an hour asleep never loses what was saved before it. With nothing torn, the last
  * save. Saves before `floor` (a clear) are never owed.
  *
- * The rules miss this in one case, which no test here meets and AGENTS.md names: a start of the phone that the next
- * start of the app cannot see on the steady clock (it first reads the records past the time of the last copy before
- * it), while the five copies are kept for other reasons. Then a power cut that tears the last two minutes of awake time
- * can open on a whole copy, with the notice, up to 4 saves older than owed: about 3.5 minutes of awake time at most, and
- * up to hours older in real time with the phone asleep between. Randomized runs of 200 short starts with sleeps,
- * reboots and jumps of an hour either way, a power cut tried after their saves, met it 2 times in 54, and 3 times in
- * 120 more (recordsLifetimes.test.ts, UNSEEN_REBOOT_SAVES, and its test (f) of I2).
+ * The rules miss this in two cases, which no test here meets and AGENTS.md names as known limits, each always on a
+ * whole copy and with the notice; the figures are what randomized runs measured, not bounds.
+ * - A start of the phone that the next start of the app cannot see on the steady clock (it first reads the records past
+ *   the time of the last copy before it), while the five copies are kept for other reasons: a power cut that tears the
+ *   last two minutes of awake time can open older than owed. Runs of 200 short starts with sleeps, reboots and jumps of
+ *   an hour either way, a power cut tried after their saves, met it in 14 of 374 (2 of round 5's judge's 54, 12 of 320
+ *   more), up to 4 saves, about 4.7 minutes of awake time and 6.4 hours of real time older, every miss traced after two
+ *   reboots close together (recordsLifetimes.test.ts, UNSEEN_REBOOT_SAVES, and its test (f) of I2).
+ * - Naps while the app is open, under SLEPT_MS: the copy before one is kept only with room to spare (NAP_MS), so while
+ *   the five copies are kept for other reasons a cut tearing what was written since the phone last woke can open one save
+ *   older than owed. Runs of 150 starts of up to eight saves, the phone napping 2 s to 45 s between some, met it in 2 of
+ *   60, 13.5 s of awake time older (29 times in 13 of the 60 before naps were counted).
  */
 function owed(saves: readonly Save[], torn: (stamp: Stamp) => boolean, cut: Cut, floor: number): number | null {
   const live = saves.filter((s) => s.n >= floor);
@@ -1263,17 +1268,29 @@ describe('D: a full disk when a mark is written', () => {
     if (after.read?.includes(CLEARED)) throw new Error(`I5: opened on save ${numberIn(after.read)}, from before the clear, after a power cut (the clear's mark could not be written)`);
   });
 
-  it('D3 I6: a drop whose mark cannot be written: the next saves go on, a start reads the last save, and within about 2 minutes awake the dropped rate is in no file', async () => {
+  it('D3 I6: a drop whose mark cannot be written: its save is not written but held, and said, as a save the phone has no room for is; the next save once there is room writes the mark and the copy, a start reads the last save, and within about 2 minutes awake the dropped rate is in no file', async () => {
     const phone = await usedPhone('boot', withRate);
     phone.idle(10 * MIN);
     await phone.start();
+    const held: boolean[] = [];
+    phone.api!.watchUnsaved((unsaved) => held.push(unsaved));
     await phone.pass(3_000);
     await phone.save(withRate);
     await phone.pass(10_000);
     failMarks(phone.dev);
     phone.forget('drop');
-    const dropping = await phone.save(value);
+    const before = [...phone.dev.disk.keys()];
+    await phone.save(value);
+    // Not written: a power cut could then bring back a copy from before the drop with nothing to say a drop was undone.
+    expect([...phone.dev.disk.keys()]).toEqual(before);
+    expect(held).toEqual([true]);
     phone.dev.before = undefined;
+    await phone.pass(5_000);
+    // The next save, with room, writes the drop's mark and then the copy.
+    const dropping = await phone.save(value);
+    expect(held).toEqual([true, false]);
+    expect(emptyFiles(phone.dev).filter((name) => /\.dropped-/.test(name))).toHaveLength(1);
+    expect(filesHolding(phone.dev, tagOf(dropping.n))).toHaveLength(1);
     await phone.pass(5_000);
     phone.close();
     for (let i = 0; i < 10; i++) {

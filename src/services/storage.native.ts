@@ -50,16 +50,19 @@ import { guardRecords } from './recordGuard';
  * On Android a save cannot make what it writes reach the disk before the app goes on (recordCopies.ts), so a
  * power cut can tear what was written in the last half a minute or so. Each save is a copy of its own, named by its
  * place, by when it was written on the steady clock and by the start of the app that wrote it, and older copies go by
- * rules that keep a whole copy that has had time to reach the disk always there, and five copies at most; whether one
- * has is judged by the steady clock, never by the phone's own, which can jump, and the rules count on that clock
- * counting from the phone's start, as React Native 0.88's does (recordCopies.ts, held by steadyClock.test.ts). A copy is
- * read only if it is whole JSON. When a newer copy was torn and an older one was read, the store is told
- * (`passedOverNewer`) and the app says so once. When the store empties the phone, or takes one person's account off
- * it, it says so first (`forgetCopies`): after a clear the copies from before go with its save, after a drop as soon as
- * a copy after it has settled; when a power cut undoes a drop, the store is told whose account it was (`undoneDrops`),
- * and makes it again, and the store's read, or failing that the first save after it, marks that drop undone, so that it
- * is said at every start until the store has made it again (an older version's row, read when no copy is whole, is
- * older than every drop).
+ * rules that keep a whole copy that has had time to reach the disk always there, and five copies at most, but for copies
+ * whose steady time cannot be set beside this start's, which are kept until they settle (under React Native 0.88, only
+ * when the app first reads the records within 10 s of the phone starting); whether a copy has had that time is judged
+ * by the steady clock, never by the phone's own, which can jump, and the rules count on that clock counting from the
+ * phone's start, as React Native 0.88's does (recordCopies.ts, held by steadyClock.test.ts). A copy is read only if it
+ * is whole JSON. When a newer copy was torn and an older one was read, the store is told (`passedOverNewer`) and the
+ * app says so once. When the store empties the phone, or takes one person's account off it, it says so first
+ * (`forgetCopies`): after a clear the copies from before go with its save, after a drop as soon as a copy after it has
+ * settled; a save whose clear or drop has no mark on the phone, for want of room, is not written but held in memory and
+ * said, as a save the phone has no room for is (a clear's mark can be made of a copy from before it, a drop's never);
+ * when a power cut undoes a drop, the store is told whose account it was (`undoneDrops`), and makes it again, and the
+ * store's read, or failing that the first save after it, marks that drop undone, so that it is said at every start
+ * until the store has made it again (an older version's row, read when no copy is whole, is older than every drop).
  *
  * Everything else, the company server's session among it, stays in AsyncStorage (`safeStorage`). A row there that
  * cannot be read or written falls back to memory for the rest of the session on its own, not every row with it.
@@ -409,11 +412,13 @@ async function writeFile(key: string, value: string): Promise<void> {
     // The mark of a clear or a drop the phone had no room for: it has room now, since what was just written fit.
     const made = await markFor(key, session, copies, markers, true);
     if (made) markers.push(made);
-    else if (session.forgetting.how === 'clear' && (copies.length > 0 || session.row)) {
-      // Saved with no mark, what this clears could be read again after a power cut. It is held in memory, and said, as
-      // any save the phone has no room for is (recordGuard.ts), and the next save tries again.
+    else if (copies.length > 0 || session.row) {
+      // Saved with no mark, what a clear empties could be read again after a power cut, and a drop a power cut undid
+      // would come back with nothing said of whose account it was. It is held in memory, and said, as any save the
+      // phone has no room for is (recordGuard.ts), and the next save tries again. A drop's mark is never made of a copy
+      // from before it, as a clear's can be (`markFor`): the rest of the records are in those.
       dropPart(key);
-      throw new Error('No room on the phone for the mark of a clear.');
+      throw new Error(`No room on the phone for the mark of a ${session.forgetting.how}.`);
     } else session.forgetting = undefined;
   }
   const start = startOf(session, now.steady);
@@ -492,7 +497,8 @@ async function markFor(key: string, session: Session, copies: Copy[], markers: M
  *   account and the hourly rate still in it: the phone says it shut off while saving, and which drop was undone
  *   (`undoneDrops`), and the store makes it again; the rest of what is on the phone is not lost for it.
  *
- * With no room for the mark now, the save that follows makes it (`markFor`); a clear's save that cannot is not written.
+ * With no room for the mark now, the save that follows makes it (`markFor`); a save that cannot, a drop's as a clear's,
+ * is not written, but held in memory and said, until a save can (`writeFile`).
  */
 async function forget(key: string, how: Forgetting, id?: string): Promise<void> {
   if (!IN_FILE) return;

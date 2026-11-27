@@ -89,6 +89,10 @@ interface Trouble {
   renameRefused?: (from: string, to: string) => boolean;
   /** AsyncStorage cannot write a row: the phone is full. */
   rowFull?: boolean;
+  /** A file of this name cannot be deleted: the delete fails and changes nothing. */
+  undeletable?: (name: string) => boolean;
+  /** AsyncStorage cannot remove a row: the removal fails and changes nothing. */
+  rowStuck?: boolean;
 }
 
 interface Device {
@@ -313,6 +317,7 @@ function onPhone<T>(os: Os, dev: Device, path: string): T {
     delete() {
       if (change()) throw new Error('killed');
       log.push(`delete ${name(this.uri)}`);
+      if (trouble.undeletable?.(name(this.uri))) throw new Error('EIO (I/O error)');
       if (!disk.delete(this.uri)) throw new Error('no such file');
       times.delete(this.uri);
       real.delete(this.uri);
@@ -390,6 +395,7 @@ function onPhone<T>(os: Os, dev: Device, path: string): T {
     }),
     removeItem: jest.fn(async (key: string) => {
       log.push(`remove row ${key}`);
+      if (trouble.rowStuck) throw new Error('database or disk is full (code 13 SQLITE_FULL)');
       if (os === 'ios') return iphone.removeItem(key);
       rows.delete(key);
     }),
@@ -1043,6 +1049,56 @@ describe('on Android, emptying the phone, or taking one person’s records off i
     expect(new Map(dev.disk)).toEqual(new Map([[copiesOn(dev)[0].uri, EMPTY]]));
   });
 
+  /** The phone's files as they are now, on a phone of their own, with the newest copy lost: what a read of them opens on. */
+  async function readWithNewestLost(dev: Device) {
+    const lost = device(new Map(dev.disk), new Map(dev.rows), {}, new Map(dev.times));
+    const newest = copiesOn(lost)[0].uri;
+    lost.disk.set(newest, half(lost.disk.get(newest)!));
+    return storageOn('android', lost).recordStorage.getItem(KEY);
+  }
+
+  it('a clear keeps its mark while a copy from before it is still there, its own save settled or not: a copy whose deletion fails is never read again, and the mark goes once that copy has gone (R4)', async () => {
+    const clock = clockAt();
+    const { dev, phone } = await savingPhone(clock);
+    const stuck = copiesOn(dev).at(-1)!.uri.slice(FILES.length);
+    dev.trouble.undeletable = (name) => name === stuck;
+    phone.forgetCopies(KEY, 'clear');
+    await phone.recordStorage.setItem(KEY, EMPTY);
+    await waitFor(clock, 3 * MIN);
+    // The save that clears has settled, and the copy from before it is still there: so is the mark.
+    expect(dev.disk.has(FILES + stuck)).toBe(true);
+    expect(marksOn(dev)).toHaveLength(1);
+    // Were the copy after it lost, the phone would open emptied, never on what was cleared.
+    expect(await readWithNewestLost(dev)).toBeNull();
+    // The copy can be deleted again: the next save takes it away, and then the mark.
+    dev.trouble.undeletable = undefined;
+    await phone.recordStorage.setItem(KEY, EMPTY);
+    expect(dev.disk.has(FILES + stuck)).toBe(false);
+    expect(marksOn(dev)).toEqual([]);
+  });
+
+  it('a clear on a phone whose older version’s row cannot be removed keeps its mark, so that the row is never read in place of what the clear saved (R4)', async () => {
+    const clock = clockAt();
+    const dev = device(new Map(), new Map([[KEY, withRate(1)]]));
+    const phone = storageOn('android', dev);
+    expect(await phone.recordStorage.getItem(KEY)).toBe(withRate(1));
+    phone.recordsRead(KEY);
+    await flush();
+    dev.trouble.rowStuck = true;
+    phone.forgetCopies(KEY, 'clear');
+    await phone.recordStorage.setItem(KEY, EMPTY);
+    await waitFor(clock, 3 * MIN);
+    // The save that clears has settled, and the row is still in AsyncStorage: so is the mark.
+    expect(dev.rows.get(KEY)).toBe(withRate(1));
+    expect(marksOn(dev)).toHaveLength(1);
+    // Were the copy after it lost, the phone would open emptied, never on the row.
+    expect(await readWithNewestLost(dev)).toBeNull();
+    dev.trouble.rowStuck = undefined;
+    await phone.recordStorage.setItem(KEY, EMPTY);
+    expect(dev.rows.has(KEY)).toBe(false);
+    expect(marksOn(dev)).toEqual([]);
+  });
+
   it('a clear, then a restart before it has settled: the phone opens on what was saved after it, and the next start lets go of the rest', async () => {
     const clock = clockAt();
     const { dev, phone } = await savingPhone(clock);
@@ -1078,6 +1134,28 @@ describe('on Android, emptying the phone, or taking one person’s records off i
     await again.recordStorage.setItem(KEY, EMPTY);
     await waitFor(clock, 2 * MIN);
     expect(new Map(dev.disk)).toEqual(new Map([[copiesOn(dev)[0].uri, EMPTY]]));
+  });
+
+  it('a drop, then a clear, then a power cut before either has settled: the phone opens emptied, and the drop is not marked undone, since nothing from before the clear is read (G1f)', async () => {
+    const clock = clockAt();
+    const { dev, phone } = await savingPhone(clock);
+    phone.forgetCopies(KEY, 'drop', 'acct_1');
+    await phone.recordStorage.setItem(KEY, value(1));
+    clock.pass(5_000);
+    phone.forgetCopies(KEY, 'clear');
+    await phone.recordStorage.setItem(KEY, EMPTY);
+    clock.pass(1_000);
+    tearSince(dev, clock.steady - 2 * MIN);
+    expect(marksOn(dev)).toEqual([expect.stringMatching(/\.dropped-\d+-acct_1\.json$/), expect.stringMatching(/\.cleared-\d+\.json$/)]);
+    const again = storageOn('android', restart(dev));
+    expect(await again.recordStorage.getItem(KEY)).toBeNull();
+    again.recordsRead(KEY);
+    await flush();
+    expect(again.undoneDrops(KEY)).toEqual([]);
+    expect(undoneOn(dev)).toEqual([]);
+    const later = storageOn('android', restart(dev));
+    expect(await later.recordStorage.getItem(KEY)).toBeNull();
+    expect(later.undoneDrops(KEY)).toEqual([]);
   });
 
   it('a clear, with the app killed at any step of it: the phone opens emptied, or, killed before the file it clears was taken away, as it was', async () => {
@@ -1225,19 +1303,27 @@ describe('on Android, emptying the phone, or taking one person’s records off i
     }
   });
 
-  it('a clear whose mark the phone is too full to write makes its mark of a copy from before it at its own save, so a power cut then never opens on what was cleared', async () => {
+  it('a clear whose mark the phone is too full to write makes its mark of the oldest copy from before it, and only at its own save, so a power cut then never opens on what was cleared', async () => {
     const clock = clockAt();
     const { dev, phone } = await savingPhone(clock);
     const told: boolean[] = [];
     phone.watchUnsaved((unsaved) => told.push(unsaved));
     dev.trouble.refused = (name) => /\.cleared-/.test(name);
+    const before = new Map(dev.disk);
+    const oldest = copiesOn(dev).at(-1)!.uri.slice(FILES.length);
     phone.forgetCopies(KEY, 'clear');
+    await flush();
+    // Only at the clear's own save, once what it saves has been written in full: nothing is made of a copy before then.
+    expect(new Map(dev.disk)).toEqual(before);
+    dev.log.length = 0;
     await phone.recordStorage.setItem(KEY, EMPTY);
     expect(told).toEqual([]);
     expect(copiesOn(dev).map((c) => c.text)).toEqual([EMPTY]);
     expect(holdingRate(dev)).toEqual([]);
     expect(marksOn(dev)).toHaveLength(1);
     expect(dev.disk.get(`${FILES}${marksOn(dev)[0]}`)).toBe('');
+    // Made of the oldest copy from before it.
+    expect(dev.log.filter((step) => /^rename .* \S+\.cleared-\d+\.json$/.test(step))).toEqual([`rename ${oldest} ${marksOn(dev)[0]}`]);
     clock.pass(30_000);
     tearSince(dev, clock.steady - 2 * MIN);
     const again = storageOn('android', restart(dev));
@@ -2211,6 +2297,41 @@ describe('the store on Android, emptying the phone or deleting an account', () =
     expect(holding(dev, 'acct_1').filter((name) => !name.includes('.dropped-'))).toEqual([]);
   });
 
+  it('deleting an account on a phone with no room for the mark of the drop, as it is deleted or at its save: nothing of the deletion is written, the app says the phone is full while it holds it in memory, and once there is room its save and its mark are written, so that a power cut then still deletes it again by itself (RR6-1)', async () => {
+    const clock = clockAt();
+    const { dev, store } = await inUse(clock);
+    store.setState({ accounts: [ACCOUNT], session: { accountId: 'acct_1', employeeId: 'emp-1' } });
+    await flush();
+    // Long enough that a copy with the account in it has reached the disk.
+    await waitFor(clock, 3 * MIN);
+    const before = new Map(dev.disk);
+    // No new file can be made but the copy itself, which still fits.
+    dev.trouble.refused = (name) => /\.dropped-/.test(name);
+    dev.log.length = 0;
+    expect(store.getState().deleteMyAccount({ clearPhone: false })).toEqual({ ok: true, cleared: false });
+    await flush();
+    expect(store.getState().recordsUnsaved).toBe(true);
+    expect(store.getState().accounts).toEqual([]);
+    // The save is not written: the half copy it made is taken away, and nothing is renamed into place.
+    expect(dev.log.filter((step) => step.startsWith(`rename ${KEY}.json.part`))).toEqual([]);
+    expect(dev.disk.has(`${FILES}${KEY}.json.part`)).toBe(false);
+    expect(new Map(dev.disk)).toEqual(before);
+    // Room again: the next save writes the drop's mark, naming the account, and the copy without it, and the notice goes.
+    dev.trouble.refused = undefined;
+    store.getState().saveRecordsAgain();
+    await flush();
+    expect(store.getState().recordsUnsaved).toBe(false);
+    expect(marksOn(dev)).toEqual([expect.stringMatching(/\.dropped-\d+-acct_1\.json$/)]);
+    expect(JSON.parse(newestOn(dev)!).state.accounts).toEqual([]);
+    // A power cut before that save has settled opens on a copy from before it, and the account is deleted again by itself.
+    clock.pass(1_000);
+    const again = await powerCut(clock, dev);
+    expect(again.getState().shutOffWhileSaving).toBe(true);
+    expect(again.getState().deletionNotFinished).toBe(false);
+    expect(again.getState().accounts).toEqual([]);
+    expect(again.getState().payRates).toEqual({});
+  });
+
   it('deleting an account a power cut brought back on the clock is not done again by itself: the phone says to delete it again, at every start until then (F5)', async () => {
     const clock = clockAt();
     const { dev, store } = await inUse(clock);
@@ -2271,7 +2392,7 @@ describe('the store on Android, emptying the phone or deleting an account', () =
     expect(later.getState().deletionNotFinished).toBe(true);
   });
 
-  it('a drop an earlier build marked, which names no account, that a power cut undid: said once over every screen, since it cannot be made again by itself (F5)', async () => {
+  it('a drop an earlier test build marked, which names no account, that a power cut undid: said once over every screen, since it cannot be made again by itself (F5)', async () => {
     const clock = clockAt();
     const { dev: used, store } = await inUse(clock);
     store.setState({ accounts: [ACCOUNT], session: { accountId: 'acct_1', employeeId: 'emp-1' } });

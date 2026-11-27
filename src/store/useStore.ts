@@ -681,7 +681,8 @@ export const useStore = create<Store>()(
           let notFinished = false;
           for (const id of ids) {
             if (id === null) {
-              // An earlier version's mark names nobody: said once, and its mark goes with the drop made here.
+              // A drop's mark that names nobody (only an earlier test build wrote one): said once, since whose it was cannot
+              // be told, and its mark goes with the drop made here.
               notFinished = true;
               forgetCopies(RECORDS_NAME, 'drop');
               continue;
