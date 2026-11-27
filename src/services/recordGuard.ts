@@ -20,7 +20,8 @@ import type { Forgetting } from './recordCopies';
  *   and once when a save works again, so the app can say so on every screen.
  * - A place that keeps older copies of the records (a phone: storage.native.ts) is told, in turn, before the store
  *   saves over them to empty the device or take one person's records off it (`forgetCopies`), so that those copies
- *   do not outlive what the store did. Only once the store has read the records.
+ *   do not outlive what the store did; and once the store has read them (`opened`), so that it can put what it has in
+ *   order then rather than at the first save. Only once the store has read the records.
  * - A place another tab of a browser saves to as well (storage.ts) says when that tab has the records (`letGo`):
  *   from then on nothing this one has in memory is written over them, a save asked for and not yet done among it,
  *   until the store has read them again. A save held in memory goes with it: what was saved is the other tab's.
@@ -31,14 +32,16 @@ export interface RecordPlace {
   read(key: string): Promise<string | null>;
   write(key: string, value: string): Promise<void>;
   remove(key: string): Promise<void>;
-  /** The next save empties the device, or takes one person's records off it: older copies are to go with them. */
-  forget?(key: string, how: Forgetting): Promise<void>;
+  /** The next save empties the device, or takes one person's records off it (`id`, their account's): older copies are to go with them. */
+  forget?(key: string, how: Forgetting, id?: string): Promise<void>;
+  /** The store has read the records, and makes sense of them: what was read is the phone's from now on. */
+  opened?(key: string): Promise<void>;
 }
 
 export interface GuardedRecords {
   /** The store's storage for its records. */
   recordStorage: StateStorage;
-  /** The store has read what was saved under `key`, and its saves from now on are written to the device. */
+  /** The store has read what was saved under `key`, and its saves from now on are written to the device. The place is told, in turn (`opened`). */
   recordsRead(key: string): void;
   /**
    * Told `true` when a save of the records could not be written to the device and is held in memory, and `false`
@@ -47,10 +50,10 @@ export interface GuardedRecords {
   watchUnsaved(listener: (unsaved: boolean) => void): () => void;
   /**
    * Called just before the store saves to empty the device (`clear`) or to take one person's account and hourly rate
-   * off it (`drop`): told to the place in turn, after every read and save asked before it and before that save.
-   * Nothing is done for records the store has not read.
+   * off it (`drop`, with the id of that account): told to the place in turn, after every read and save asked before
+   * it and before that save. Nothing is done for records the store has not read.
    */
-  forgetCopies(key: string, how: Forgetting): void;
+  forgetCopies(key: string, how: Forgetting, id?: string): void;
   /** Run a job on the records of `key` in its turn, after every read, save and removal asked before it. */
   queue<T>(key: string, job: () => Promise<T>): Promise<T>;
   /**
@@ -157,6 +160,8 @@ export function guardRecords(place: RecordPlace): GuardedRecords {
     recordStorage,
     recordsRead: (key) => {
       opened.add(key);
+      const told = place.opened;
+      if (told) inTurn(key, () => (opened.has(key) ? told(key) : Promise.resolve())).catch(() => undefined);
     },
     watchUnsaved: (listener) => {
       listeners.add(listener);
@@ -164,11 +169,11 @@ export function guardRecords(place: RecordPlace): GuardedRecords {
         listeners.delete(listener);
       };
     },
-    forgetCopies: (key, how) => {
+    forgetCopies: (key, how, id) => {
       const { forget } = place;
       if (!forget || !opened.has(key)) return;
-      // If it cannot be done, the save that follows is an ordinary one, and the older copies go by their own rule.
-      inTurn(key, () => forget(key, how)).catch(() => undefined);
+      // If it cannot be done now, the save that follows does it, or is turned down (storage.native.ts).
+      inTurn(key, () => forget(key, how, id)).catch(() => undefined);
     },
     queue: inTurn,
     letGo: (key) => {

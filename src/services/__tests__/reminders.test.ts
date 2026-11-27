@@ -144,6 +144,40 @@ it('a hand-over that answers after its turn makes no more calls, and is made onc
   expect(ids(phone.scheduleLocal.mock.calls[0])).toEqual(['lunch-end']);
 });
 
+it('a hand-over made again after a clock-out is planned from the clock-out, never from the lunch it was asked for during', async () => {
+  jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
+  const { reminders, useStore, phone } = load();
+  const now = Date.now();
+  onShift(useStore, [{ start: { at: now, noLocation: 'off' }, end: { at: now + 30 * 60_000, auto: true } }]);
+  const slow = later();
+  phone.scheduleLocal.mockImplementationOnce(() => slow.answered);
+
+  // At lunch, back in the app: the notice that lunch is over is handed over again, and the phone takes longer than a
+  // turn to answer.
+  void reminders.handOverWaiting();
+  await ticks();
+  expect(ids(phone.scheduleLocal.mock.calls[0])).toEqual(['lunch-end']);
+  await jest.advanceTimersByTimeAsync(reminders.TURN_MS);
+
+  // The person clocks out, and the clock-out's own hand-over takes everything off the phone.
+  clockedOut(useStore);
+  const punch = reminders.syncReminders();
+  await jest.advanceTimersByTimeAsync(0);
+  await punch;
+  expect(phone.cancelLocal.mock.calls).toEqual([[[...DEADLINE_IDS, 'lunch-end']]]);
+  const byTheClockOut = phone.scheduleLocal.mock.calls.length;
+
+  // Then the slow call answers, and the hand-over it was part of is made once more, in a turn of its own: planned
+  // then, from the closed shift, it hands nothing over. Planned when it was asked for, it would put the notice that
+  // lunch is over back on the phone after the person had left.
+  slow.answer();
+  await jest.advanceTimersByTimeAsync(reminders.TURN_MS);
+  await ticks();
+  const afterTheClockOut = phone.scheduleLocal.mock.calls.slice(byTheClockOut);
+  expect(afterTheClockOut.filter((call) => ids(call).includes('lunch-end'))).toEqual([]);
+  expect(phone.cancelLocal).toHaveBeenCalledTimes(1);
+});
+
 it('makes a hand-over again once at most, however late the phone answers', async () => {
   jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
   const { reminders, useStore, phone } = load();
@@ -170,4 +204,137 @@ it('with nobody signed in, hands nothing over and takes nothing off', async () =
   await reminders.handOverWaiting();
   expect(phone.cancelLocal).not.toHaveBeenCalled();
   expect(phone.scheduleLocal).not.toHaveBeenCalled();
+});
+
+/**
+ * In a browser, only the tab that saves the records hands reminders over (storage.ts, recordsTab.ts): another tab of
+ * MineMuster is hidden behind MineMuster is open in another tab (`recordsElsewhere`), and what its store has may be
+ * older than what the tab that saves them has saved since. The store says so in `recordsElsewhere`; a phone never
+ * has another tab, so there it is never true.
+ */
+describe('a browser tab that another tab has the records in', () => {
+  /** Let every hand-over asked for so far be made. */
+  const made = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+  };
+  /** The store has read what is saved (nothing, here), as it has before App.tsx starts the reminders. */
+  const read = async (useStore: Store) => {
+    for (let i = 0; i < 50 && !useStore.getState().hydrated; i += 1) await new Promise<void>((r) => setImmediate(() => r()));
+    expect(useStore.getState().hydrated).toBe(true);
+  };
+  /** Lunch starts at `at`, and ends by itself 30 minutes later. */
+  const atLunch = (useStore: Store, at = Date.now()) =>
+    useStore.setState({ shifts: useStore.getState().shifts.map((s) => ({ ...s, lunches: [{ start: { at, noLocation: 'off' as const }, end: { at: at + 30 * 60_000, auto: true as const } }] })) });
+
+  it('hands nothing over and takes nothing off, at start-up or on coming back to the front', async () => {
+    const { reminders, useStore, phone } = load();
+    await read(useStore);
+    onShift(useStore);
+    useStore.setState({ recordsElsewhere: true });
+    await reminders.syncReminders();
+    await reminders.handOverWaiting();
+    expect(phone.cancelLocal).not.toHaveBeenCalled();
+    expect(phone.scheduleLocal).not.toHaveBeenCalled();
+  });
+
+  it('takes its reminders off once another tab takes the records, and hands them over from what it reads once it has them back', async () => {
+    const { reminders, useStore, phone } = load();
+    await read(useStore);
+    onShift(useStore);
+    const stop = reminders.watchReminders();
+    await reminders.syncReminders();
+    expect(ids(phone.scheduleLocal.mock.calls[0])).toEqual(DEADLINE_IDS);
+    phone.cancelLocal.mockClear();
+    phone.scheduleLocal.mockClear();
+
+    // Use this tab, in another tab: this one saves nothing more (watchOtherTabs), and its reminders come off.
+    useStore.setState({ recordsElsewhere: true });
+    await made();
+    expect(phone.cancelLocal.mock.calls).toEqual([[[...DEADLINE_IDS, 'lunch-end']]]);
+    expect(phone.scheduleLocal).not.toHaveBeenCalled();
+
+    // Lunch starts in the other tab. This tab has the records back once that one closes: it reads them (the store
+    // merges what it read), and only then says it has them (onRehydrateStorage). What it read is what it goes by.
+    const lunchAt = Date.now();
+    atLunch(useStore, lunchAt);
+    await made();
+    expect(phone.scheduleLocal).not.toHaveBeenCalled();
+    useStore.setState({ recordsElsewhere: false });
+    await made();
+    expect(phone.scheduleLocal.mock.calls.map(ids)).toEqual([['lunch-end']]);
+    expect((phone.scheduleLocal.mock.calls[0][0] as LocalReminder[])[0].at).toBe(lunchAt + 30 * 60_000);
+    stop();
+  });
+
+  it('leaves the notice that lunch is over on the phone once its time has come, when another tab takes the records', async () => {
+    const { reminders, useStore, phone } = load();
+    await read(useStore);
+    onShift(useStore);
+    // Lunch ended a minute ago: the browser may still be holding its notice back on this tab, in the back.
+    atLunch(useStore, Date.now() - 31 * 60_000);
+    const stop = reminders.watchReminders();
+    useStore.setState({ recordsElsewhere: true });
+    await made();
+    expect(phone.cancelLocal.mock.calls).toEqual([[DEADLINE_IDS]]);
+    stop();
+  });
+
+  it('hands nothing over again when the records cannot be read once it has them back', async () => {
+    const { reminders, useStore, phone } = load();
+    await read(useStore);
+    onShift(useStore);
+    const stop = reminders.watchReminders();
+    useStore.setState({ recordsElsewhere: true });
+    await made();
+    phone.cancelLocal.mockClear();
+    // The read failed: Records not read is shown in place of the app, and what the store has is what it had before.
+    useStore.setState({ recordsElsewhere: false, recordsUnreadable: true });
+    await made();
+    await reminders.handOverWaiting();
+    expect(phone.cancelLocal).not.toHaveBeenCalled();
+    expect(phone.scheduleLocal).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('a slow taking-off, made again after the tab has the records back, takes nothing off', async () => {
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
+    const { reminders, useStore, phone } = load();
+    await read(useStore);
+    onShift(useStore);
+    atLunch(useStore);
+    const stop = reminders.watchReminders();
+    const slow = later();
+    phone.cancelLocal.mockImplementationOnce(() => slow.answered);
+
+    // Another tab takes the records, and the phone takes longer than a turn to take this tab's reminders off.
+    useStore.setState({ recordsElsewhere: true });
+    await jest.advanceTimersByTimeAsync(reminders.TURN_MS);
+    // This tab has them back, and the notice that lunch is over is handed over from what it read.
+    useStore.setState({ recordsElsewhere: false });
+    await jest.advanceTimersByTimeAsync(0);
+    await ticks();
+    expect(phone.scheduleLocal.mock.calls.map(ids)).toEqual([['lunch-end']]);
+    const byTheHandOver = phone.cancelLocal.mock.calls.length;
+
+    // Then the slow call answers, and the taking-off is made once more: the tab has the records, so it takes nothing off.
+    slow.answer();
+    await jest.advanceTimersByTimeAsync(reminders.TURN_MS);
+    await ticks();
+    expect(phone.cancelLocal.mock.calls.slice(byTheHandOver).filter(([taken]) => (taken as string[]).includes('lunch-end'))).toEqual([]);
+    stop();
+  });
+
+  it('on a phone, where the records are never in another tab, a change to the store hands nothing over by itself', async () => {
+    const { reminders, useStore, phone } = load();
+    await read(useStore);
+    onShift(useStore);
+    const stop = reminders.watchReminders();
+    atLunch(useStore);
+    clockedOut(useStore);
+    useStore.setState({ toast: { id: 1, message: 'Clocked out.', tone: 'ok' } });
+    await made();
+    expect(phone.cancelLocal).not.toHaveBeenCalled();
+    expect(phone.scheduleLocal).not.toHaveBeenCalled();
+    stop();
+  });
 });

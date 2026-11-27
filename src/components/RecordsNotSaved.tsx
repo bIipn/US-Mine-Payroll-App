@@ -48,6 +48,8 @@ function unsavedWords(): { title: string; body: string } {
  *   inside a frame, where that is to be expected.
  * - once the phone has opened on an older copy of the records because it shut off while saving the newest
  *   (`shutOffWhileSaving`: a power cut, a forced restart), a notice of what to check, until the person taps OK.
+ * - when that brought back an account deleted on the phone, which the store could not delete again by itself
+ *   (`deletionNotFinished`: its shift is open in the copy the phone opened on), a notice of what to do, until OK.
  *
  * And in a browser, while another tab of MineMuster saves the records (`recordsElsewhere`: storage.ts), this tab
  * saves nothing, and what it shows may be older than what that tab saved: the app is hidden, so nothing in it can be
@@ -66,6 +68,8 @@ export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }
   const time = useStore((s) => keepsTime(s.settings.company));
   const saveAgain = useStore((s) => s.saveRecordsAgain);
   const seen = useStore((s) => s.dismissShutOffNotice);
+  const deletionBack = useStore((s) => s.deletionNotFinished);
+  const seenDeletion = useStore((s) => s.dismissDeletionNotice);
   const elsewhere = useStore((s) => s.recordsElsewhere);
   const insets = useSafeAreaInsets();
   const [height, setHeight] = useState(0);
@@ -90,7 +94,7 @@ export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }
     return () => clearTimeout(timer);
   }, [unsaved, saveAgain]);
 
-  const shown = (unsaved || inMemory || shutOff) && !elsewhere;
+  const shown = (unsaved || inMemory || shutOff || deletionBack) && !elsewhere;
   const below = shown ? { ...insets, top: insets.top + height } : insets;
   const words = unsavedWords();
   return (
@@ -133,6 +137,17 @@ export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }
                 }
               />
               <Button label="OK" kind="ink" onPress={seen} testID="shut-off-ok" />
+            </View>
+          ) : null}
+          {deletionBack ? (
+            <View testID="deletion-not-finished" accessibilityRole="alert" style={styles.shutOff}>
+              <Notice
+                tone="warn"
+                icon={TriangleAlert}
+                title="A deleted account may be back on this phone"
+                body="The phone shut off before it finished deleting an account, so the account and its hourly rate may be on the phone again. Clock out if you are on the clock, then delete it again on More, Delete my account."
+              />
+              <Button label="OK" kind="ink" onPress={seenDeletion} testID="deletion-not-finished-ok" />
             </View>
           ) : null}
         </View>

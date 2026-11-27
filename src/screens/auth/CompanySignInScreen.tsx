@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Building2, Clock, HardHat, LogOut, RotateCcw, UserCog, UserX, WifiOff } from '../../components/icons';
-import { SignInHeader, signInStyles } from '../../components/SignInHeader';
+import { SignInHeader, SignInStatusStrip, signInStyles } from '../../components/SignInHeader';
 import { Button, Notice, Panel, Row, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { ownPersonHere, signInPerson } from '../../domain/access';
@@ -113,6 +113,8 @@ export function CompanySignInScreen({ navigation }: ScreenProps<'CompanySignIn'>
           <WebPageLinks testID="company-sign-in-pages" />
         </View>
       </ScrollView>
+      {/* Over the form, so the status bar's white icons stay on the band's colour however far it is scrolled. */}
+      <SignInStatusStrip />
     </KeyboardAvoidingView>
   );
 }

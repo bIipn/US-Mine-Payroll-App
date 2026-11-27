@@ -12,6 +12,7 @@ import {
   mealStatus,
   punchAt,
   reminderPlan,
+  remindersToLetGo,
   shiftFlags,
   shiftTotals,
   startedLunch,
@@ -339,5 +340,26 @@ describe('reminderPlan', () => {
   it('takes the lunch-over notice off the phone at clock-out, when it would only come too late', () => {
     const out = shift({ clockOut: { at: at(10, 31) }, lunches: [startedLunch({ at: at(10) })] });
     expect(reminderPlan(out, true, at(10, 31))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
+  });
+});
+
+// In a browser, a tab that another tab takes the records from takes its reminders off: the tab that has them now sets
+// those still ahead from what it read. Not the notice that lunch is over once its time has come: the browser may be
+// holding it back on a tab in the back, and no tab sets a notice whose time has passed.
+describe('remindersToLetGo', () => {
+  const DEADLINE_IDS = ['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0'];
+
+  it('takes everything off before lunch, during it and off the clock', () => {
+    expect(remindersToLetGo(undefined, at(9))).toEqual([...DEADLINE_IDS, 'lunch-end']);
+    expect(remindersToLetGo(shift(), at(7))).toEqual([...DEADLINE_IDS, 'lunch-end']);
+    expect(remindersToLetGo(shift({ lunches: [startedLunch({ at: at(10) })] }), at(10, 29))).toEqual([...DEADLINE_IDS, 'lunch-end']);
+    const out = shift({ clockOut: { at: at(11) }, lunches: [startedLunch({ at: at(10) })] });
+    expect(remindersToLetGo(out, at(11))).toEqual([...DEADLINE_IDS, 'lunch-end']);
+  });
+
+  it('leaves the notice that lunch is over once its time has come, while the shift is open', () => {
+    const back = shift({ lunches: [startedLunch({ at: at(10) })] });
+    expect(remindersToLetGo(back, at(10, 30))).toEqual(DEADLINE_IDS);
+    expect(remindersToLetGo(back, at(13))).toEqual(DEADLINE_IDS);
   });
 });

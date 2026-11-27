@@ -1,27 +1,32 @@
 /**
- * The rules for the records' checkpoints on Android (storage.native.ts keeps the files): pure, with both clocks
+ * The rules for the copies of the records on Android (storage.native.ts keeps the files): pure, with both clocks
  * passed in.
  *
  * expo-file-system cannot make a write reach the disk before the app goes on: File.write closes its stream with no
- * fsync, and a move over a file deletes that file before it renames, so the kernel is never told to put the new
- * copy on the disk before the rename. A copy written in the last half a minute or so can be torn by a power cut,
- * a forced restart or a kernel crash, and the file is saved several times within seconds of a punch. So the file
- * is kept aside now and then, by a rename (which keeps what it holds and when it was written), as a checkpoint: at
- * most once a minute, and an old one goes only once a newer one has had time to reach the disk. There is always a
- * whole copy on the disk at most about three minutes old, a few checkpoints at most, and nothing extra is written.
+ * fsync, so a copy written in the last half a minute or so can be torn by a power cut, a forced restart or a kernel
+ * crash, and the records are saved several times within seconds of a punch. So each save is a copy of its own: it
+ * is written whole beside the others and renamed to a name that says its place, when it was written by the steady
+ * clock and which start of the app wrote it, and older copies go only by the rules here. A whole copy that has had time
+ * to reach the disk is always there, and five copies at most.
  *
  * Two clocks. The phone's clock (Date.now, and a file's modificationTime) can jump either way: network time setting
- * right a clock that started from zero after the battery ran flat, or someone setting the date by hand. It names and
- * orders the checkpoints, and says when the next is due, but it never says a copy has reached the disk: a clock that
- * jumped forward an hour would make a copy written seconds ago look settled, and let go of every older one. That is
- * the steady clock's (performance.now, which on Android is std::chrono::steady_clock: CLOCK_MONOTONIC, counted from
- * when the phone started and never set). It stops while the phone sleeps, which only makes a copy take longer to
- * count as settled, never less: that errs on the side of keeping copies. It means nothing from one start of the app
- * to the next, so a copy that was there before this session counts as written when this session first saw it.
+ * right a clock that started from zero after the battery ran flat, or someone setting the date by hand. It gives the
+ * copies their places and shows when the phone slept, but it never says a copy has reached the disk. That is the
+ * steady clock's (performance.now: it never jumps, never runs faster than real time, and stops while the phone sleeps,
+ * as the kernel's writeback does). A copy whose steady time is at or below now and two minutes or more before it has
+ * had two minutes of awake time since, whatever that clock counts from.
+ *
+ * Some rules count on more: that the steady clock counts from the phone's start, as React Native 0.88 reads it
+ * (NativePerformance::now, std::chrono::steady_clock, CLOCK_MONOTONIC on Android). A copy whose steady time is above
+ * now was then written before the phone last started, so it is on the disk; and copies of earlier starts of the app in
+ * the same boot can be set beside this start's, so that starts a few seconds long still thin and settle them. React
+ * Native's own comment says its clock "should be carefully changed eventually": steadyClock.test.ts reads its source
+ * and fails once it no longer reads that clock, so an upgrade that made it count from the app's start is caught before
+ * it ships. A start whose clock reads less than BOOT_CLOCK_MS as it first reads the records is not trusted with it.
  */
 
-/** How often, at most, the file is kept aside as a checkpoint. */
-export const CHECKPOINT_EVERY_MS = 60_000;
+/** Copies kept in the same minute of steady time: only the newest. */
+export const MINUTE_MS = 60_000;
 
 /**
  * How long after it was written a copy is taken to be on the disk ("settled"), by the steady clock. Linux writes a
@@ -31,175 +36,317 @@ export const CHECKPOINT_EVERY_MS = 60_000;
  */
 export const SETTLED_MS = 120_000;
 
+/** Between two copies, the phone's clock moving on this much more than the steady one: the phone slept, or its clock jumped. */
+export const SLEPT_MS = 30_000;
+
+/**
+ * The most copies kept for the sleeps before the latest one: the copy before each is kept while no more than this many
+ * copies are, in all. The rules above keep no more than this many of their own (the file, the copy beside it and three
+ * more, as the earlier builds kept them).
+ */
+export const MOST_COPIES = 5;
+
+/**
+ * A steady clock that reads this much when the app first reads the records counts from the phone's start (a phone
+ * takes longer than this to start an app); one that reads less is taken to count from the app's, and its times are
+ * never set beside another start's.
+ */
+export const BOOT_CLOCK_MS = 10_000;
+
 /** The two clocks, read at the same moment. */
 export interface Clocks {
-  /** The phone's clock (Date.now): it can jump. For names, order and when a checkpoint is due; never for settling. */
+  /** The phone's clock (Date.now): it can jump. */
   wall: number;
-  /** The steady clock (performance.now): it cannot jump. For how long this session has held a copy. */
+  /** The steady clock (performance.now): it cannot jump. */
   steady: number;
 }
 
-export interface Checkpoint {
+/**
+ * How the steady time in a copy's name counts: `boot`, from the phone's start (the start that wrote it read
+ * BOOT_CLOCK_MS or more when it first read the records); `app`, from the app's start, or not known; `earlier`, from a
+ * start of the phone before the one now, as a later start found, so the copy is on the disk. Null with no time: an
+ * earlier build named none.
+ */
+export type CopyClock = 'boot' | 'app' | 'earlier' | null;
+
+/** What a copy's file name says. */
+export interface Named {
+  /** Its place among the copies: a newer one is higher. Not a clock, though it starts from one. */
+  order: number;
+  /** When it was written by the steady clock of the start that wrote it, or null: an earlier build named none. */
+  steady: number | null;
+  clock: CopyClock;
+  /**
+   * Which start of the app wrote it: the steady time that start first read the records at, or null when the name does
+   * not say. Two neighbouring copies of different starts may have the phone's own start between them.
+   */
+  session?: number | null;
+}
+
+const TAGS = { boot: 'b', app: 'a', earlier: 'e' } as const;
+const CLOCKS: Record<string, CopyClock> = { b: 'boot', a: 'app', e: 'earlier' };
+
+/** One copy of the records, as this session knows it. */
+export interface Copy extends Named {
   /** Its file's name, in the app's files. */
   name: string;
-  /** Its place among the checkpoints: a newer one is higher. Not a clock, though it starts from one. */
-  order: number;
-  /** When what it holds was written by the phone's clock (its file's modificationTime), or null when the phone cannot say. */
-  writtenAt: number | null;
-  /**
-   * By the steady clock, since when this session has held what it holds: when this session wrote it (the copy it
-   * was renamed from was written), or, for one that was there before, when this session first saw it. Null when
-   * this session has no time for it.
-   */
-  since: number | null;
-  /**
-   * Whether this session knows it to be whole: it read it whole, or made it from the file it had read or written.
-   * One that was there before is not known: a power cut may have torn it.
-   */
+  /** When it was written by the phone's clock (its file's modificationTime, which a rename keeps), or null. */
+  wall: number | null;
+  /** By this session's steady clock, when it wrote the copy, or first saw it. */
+  firstSeen: number;
+  /** Whether this session wrote it. */
+  own: boolean;
+  /** Whether this session knows it whole: it wrote it, or read it whole. One from before may have been torn. */
   known: boolean;
+}
+
+/** What this session knows of its own clock. */
+export interface Start {
+  /** The steady clock when this session first read the records. */
+  startedAt: number;
 }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** A whole number that is a place, read from a file name, or null. */
-const placeIn = (digits: string | undefined) => {
-  const order = Number(digits);
-  return digits !== undefined && Number.isSafeInteger(order) ? order : null;
+/** A whole number read from a file name, or null. */
+const wholeIn = (digits: string | undefined) => {
+  const found = Number(digits);
+  return digits !== undefined && Number.isSafeInteger(found) ? found : null;
 };
 
-/** A checkpoint's file name. */
-export function checkpointName(key: string, order: number): string {
+/** A copy's file name: its place, when it was written by the steady clock (and how that clock counts), and which start wrote it. */
+export function copyName(key: string, order: number, steady: number, clock: Exclude<CopyClock, null>, session?: number | null): string {
+  const by = session === undefined || session === null ? '' : `-s${Math.floor(session)}`;
+  return `${key}.cp-${order}-${TAGS[clock]}${Math.ceil(steady)}${by}.json`;
+}
+
+/** A copy named by its place alone, as earlier builds named their checkpoints: it has no steady time. */
+export function placeName(key: string, order: number): string {
   return `${key}.cp-${order}.json`;
 }
 
 /**
- * The place of the checkpoint a file name is, or null when it is no checkpoint of `key`. The copy before the last
- * that an earlier build of this version kept beside the file (`.prev`) is read as the oldest checkpoint.
+ * What a file name says of a copy of `key`, or null when it is none. Earlier builds named their checkpoints by place
+ * alone (`.cp-<place>.json`), and kept the copy before the last beside the file (`.prev`), read as the oldest. The
+ * file and the new copy beside it that those builds kept (`.json`, `.json.next`) have no place in their names:
+ * storage.native.ts gives them theirs.
  */
-export function checkpointOrder(key: string, name: string): number | null {
-  if (name === `${key}.json.prev`) return 0;
-  return placeIn(new RegExp(`^${escape(key)}\\.cp-(\\d+)\\.json$`).exec(name)?.[1]);
+export function copyOf(key: string, name: string): Named | null {
+  if (name === `${key}.json.prev`) return { order: 0, steady: null, clock: null };
+  const found = new RegExp(`^${escape(key)}\\.cp-(\\d+)(?:-([abe])(\\d+)(?:-s(\\d+))?)?\\.json$`).exec(name);
+  const order = wholeIn(found?.[1]);
+  if (!found || order === null) return null;
+  if (found[2] === undefined) return { order, steady: null, clock: null };
+  const steady = wholeIn(found[3]);
+  if (steady === null) return null;
+  if (found[4] === undefined) return { order, steady, clock: CLOCKS[found[2]] };
+  const session = wholeIn(found[4]);
+  return session === null ? null : { order, steady, clock: CLOCKS[found[2]], session };
 }
 
-/** The checkpoints, newest first, by their place. */
-export function newestFirst<T extends Pick<Checkpoint, 'order'>>(checkpoints: readonly T[]): T[] {
-  return [...checkpoints].sort((a, b) => b.order - a.order);
+/** Newest first, by place. */
+export function newestFirst<T extends Pick<Named, 'order'>>(copies: readonly T[]): T[] {
+  return [...copies].sort((a, b) => b.order - a.order);
 }
 
-/**
- * The place a new checkpoint takes: now by the phone's clock, or just after the newest if that clock has gone back,
- * and never before `floor`, the first place after a clear or a drop that a mark on the phone names.
- */
-export function nextOrder(checkpoints: readonly Checkpoint[], wall: number, floor = 0): number {
-  const newest = checkpoints.reduce((most, c) => Math.max(most, c.order), -1);
+/** The place a new copy takes: now by the phone's clock, or just past the newest if that clock has gone back, and never before `floor`. */
+export function nextOrder(copies: readonly Pick<Named, 'order'>[], wall: number, floor = 0): number {
+  const newest = copies.reduce((most, c) => Math.max(most, c.order), -1);
   return Math.max(Math.floor(wall), newest + 1, floor);
 }
 
+/** The first place past every one of these copies. */
+export function afterEvery(copies: readonly Pick<Named, 'order'>[]): number {
+  return copies.reduce((most, c) => Math.max(most, c.order + 1), 0);
+}
+
+/** Whether this session's steady clock counts from the phone's start, by what it read when it first read the records. */
+export const bootClock = (start: Start) => start.startedAt >= BOOT_CLOCK_MS;
+
 /**
- * Whether this save keeps the file aside as a checkpoint: when there is none, or what the newest holds is a minute
- * old or more by the phone's clock (or cannot be dated, or is dated more than a minute ahead: the clock has gone
- * back), and this session has not made one in the last minute by the steady clock (`madeAt`, when it last did). A
- * jump of the phone's clock can only make one more checkpoint than it would have, never one fewer than once a minute.
+ * Whether a copy's steady time can be set beside this session's: this session wrote it, or both clocks count from the
+ * phone's start and it was written before this session read the records: in this boot, or, which no clock can tell
+ * apart from a long sleep, in an earlier boot that had been on for less time than this one has. A copy whose time is
+ * above now is from an earlier boot for sure (`fromEarlierBoot`).
  */
-export function checkpointDue(checkpoints: readonly Checkpoint[], now: Clocks, madeAt: number | undefined): boolean {
-  if (madeAt !== undefined && now.steady >= madeAt && now.steady - madeAt < CHECKPOINT_EVERY_MS) return false;
-  const [newest] = newestFirst(checkpoints);
-  if (!newest || newest.writtenAt === null) return true;
-  const age = now.wall - newest.writtenAt;
-  return age >= CHECKPOINT_EVERY_MS || age < -CHECKPOINT_EVERY_MS;
+export function comparable(copy: Copy, start: Start): boolean {
+  if (copy.own) return true;
+  return copy.steady !== null && copy.clock === 'boot' && bootClock(start) && copy.steady < start.startedAt;
 }
 
 /**
- * Whether a copy has had time to reach the disk: this session has held it two minutes or more by the steady clock.
- * Never by the phone's clock, and never one this session has no time for.
+ * Whether a copy was written before the phone last started: a later start said so in its name (`earlier`), or both
+ * clocks count from the phone's start and its time is above now, since such a clock never goes back but at a start
+ * of the phone. Starting the phone puts everything on the disk. storage.native.ts renames such a copy to say so, so
+ * that a later start, whose clock has passed its time, does not take it for one of its own boot.
  */
-export function isSettled(copy: Pick<Checkpoint, 'since'>, steady: number): boolean {
-  return copy.since !== null && steady - copy.since >= SETTLED_MS;
+export function fromEarlierBoot(copy: Copy, now: Clocks, start: Start): boolean {
+  if (copy.clock === 'earlier') return true;
+  return !copy.own && copy.clock === 'boot' && bootClock(start) && copy.steady !== null && copy.steady > now.steady;
 }
 
 /**
- * The checkpoints that can go: those older than the newest one that is settled and known to be whole. Never one
- * newer than that, never that one itself, and nothing while none is both.
+ * Whether a copy has had time to reach the disk: its steady time is at or below now and two minutes or more before
+ * it; or this session has held it two minutes; or it was written before the phone last started. Never by the phone's
+ * clock. Not whether it is whole: a power cut may have torn it before then.
  */
-export function toLetGo(checkpoints: readonly Checkpoint[], steady: number): Checkpoint[] {
-  const sorted = newestFirst(checkpoints);
-  const keep = sorted.findIndex((c) => c.known && isSettled(c, steady));
-  return keep < 0 ? [] : sorted.slice(keep + 1);
+export function isSettled(copy: Copy, now: Clocks, start: Start): boolean {
+  if (now.steady - copy.firstSeen >= SETTLED_MS || fromEarlierBoot(copy, now, start)) return true;
+  return copy.steady !== null && copy.steady <= now.steady && now.steady - copy.steady >= SETTLED_MS;
+}
+
+/** The copies that have had time to reach the disk, newest first: the newest of these known whole is the anchor. */
+export function settledNewestFirst(copies: readonly Copy[], now: Clocks, start: Start): Copy[] {
+  return newestFirst(copies).filter((copy) => isSettled(copy, now, start));
+}
+
+/**
+ * Whether the phone may have slept between two neighbouring copies: the phone's clock moved on SLEPT_MS or more beyond
+ * the steady one (a sleep, or that clock jumping forward), or the steady clock cannot be set beside it (either copy's
+ * time cannot be set beside this session's, one is undated, or the steady clock went back). Not when the phone's clock
+ * went back: that hides a sleep only as far as it went back, so what that clock still says is a minute and a half old
+ * is a minute old by the steady one, and kept as the newest of its minute.
+ */
+export function sleptBetween(older: Copy, newer: Copy, now: Clocks, start: Start): boolean {
+  if (!comparable(older, start) || !comparable(newer, start) || older.wall === null || newer.wall === null) return true;
+  const steadyGap = newer.steady! - older.steady!;
+  return steadyGap < 0 || newer.wall - older.wall - steadyGap >= SLEPT_MS;
+}
+
+export interface Letting {
+  now: Clocks;
+  start: Start;
+  /** The newest copy that is settled and known whole, or null with none. */
+  anchor: Copy | null;
+  /** At a save, the copy that was the newest before it. */
+  replaced?: Copy;
+  /** Copies before this place are from before a clear: never read again. */
+  readable: number;
+}
+
+/**
+ * The copies that can go. Every one from before a clear, and every one older than the anchor. Of the copies newer
+ * than it, kept: the newest; every one whose steady time cannot be set beside this session's; the newest of each
+ * minute of steady time; the older of the newest neighbouring pair the phone may have slept between (the copy before
+ * the latest sleep); and the copy a save replaced, when the phone's clock says it was written a minute or more ago.
+ *
+ * So a copy that goes for being in a minute with a newer one has that newer one, or a settled one newer still, less
+ * than a minute after it by the steady clock, whatever goes later: the minute does not move.
+ */
+export function toLetGo(copies: readonly Copy[], letting: Letting): Copy[] {
+  const { anchor, now, start, replaced, readable } = letting;
+  const sorted = newestFirst(copies);
+  const go: Copy[] = [];
+  const newer: Copy[] = [];
+  for (const copy of sorted) {
+    if (copy.order < readable || (anchor && copy.order < anchor.order)) go.push(copy);
+    else if (copy !== anchor) newer.push(copy);
+  }
+  if (newer.length === 0) return go;
+  const keep = new Set<Copy>([newer[0]]);
+  const minutes = new Set<number>();
+  for (const copy of newer) {
+    if (!comparable(copy, start)) keep.add(copy);
+    else {
+      const minute = Math.floor(copy.steady! / MINUTE_MS);
+      if (!minutes.has(minute)) keep.add(copy);
+      minutes.add(minute);
+    }
+  }
+  // The older copy of the newest pair the phone may have slept between: the copy before the latest sleep.
+  const chain = anchor ? [...newer, anchor] : newer;
+  const slept = (i: number) => sleptBetween(chain[i + 1], chain[i], now, start);
+  // The phone may have started between two copies of different starts of the app, and the steady clock does not show
+  // it once the later start has read it past the older copy's time.
+  const restarted = (i: number) => chain[i].session == null || chain[i].session !== chain[i + 1].session;
+  let pinned = 0;
+  while (pinned + 1 < chain.length && !slept(pinned)) pinned++;
+  if (pinned + 1 < chain.length) keep.add(chain[pinned + 1]);
+  if (replaced && replaced.wall !== null && replaced.wall <= now.wall && now.wall - replaced.wall >= MINUTE_MS) keep.add(replaced);
+  // While no more than MOST_COPIES are kept, the anchor among them, the copies the steady clock may be wrong about are
+  // kept too, newest first: the copy before each pair older than the one above that the phone may have slept between
+  // (the phone's clock jumping forward looks like a sleep, so that one may not be the latest), and the last copy of each
+  // start of the app before the next (the phone may have started between them, and once the next start has read the
+  // steady clock past that copy's time the steady time between them says nothing of the awake time between them).
+  let kept = keep.size + (anchor ? 1 : 0);
+  for (let i = 0; i + 1 < chain.length && kept < MOST_COPIES; i++) {
+    const copy = chain[i + 1];
+    if (keep.has(copy) || copy === anchor || !(restarted(i) || (i > pinned && slept(i)))) continue;
+    keep.add(copy);
+    kept++;
+  }
+  for (const copy of newer) if (!keep.has(copy)) go.push(copy);
+  return go;
+}
+
+/**
+ * How long until the first copy that has not settled yet does, by the steady clock, or null with none that will: for
+ * the timer that tidies with the app idle.
+ */
+export function settlesIn(copies: readonly Copy[], now: Clocks, start: Start): number | null {
+  let soonest: number | null = null;
+  for (const copy of copies) {
+    if (isSettled(copy, now, start)) continue;
+    let wait = copy.firstSeen + SETTLED_MS - now.steady;
+    if (copy.steady !== null && copy.steady <= now.steady) wait = Math.min(wait, copy.steady + SETTLED_MS - now.steady);
+    soonest = soonest === null ? wait : Math.min(soonest, wait);
+  }
+  return soonest === null ? null : Math.max(0, soonest);
 }
 
 // ---- Emptying the phone, and taking one person's records off it ------------------------------
 
 /**
- * Why the copies from before a save are let go of as soon as it has settled, whatever the checkpoints' own rule:
- * `clear` empties the phone (signing out of it, clearing it, deleting an account with it), and nothing of what was
- * on it may come back; `drop` takes one person's account and hourly rate off it, and the rest of what is on it must
- * not be lost meanwhile.
+ * Why the copies from before a save are let go of as soon as it has settled, whatever the rules above: `clear`
+ * empties the phone (signing out of it, clearing it, deleting an account with it), and nothing of what was on it may
+ * come back; `drop` takes one person's account and hourly rate off it, and the rest of what is on it must not be lost
+ * meanwhile.
  */
 export type Forgetting = 'clear' | 'drop';
 
 /**
- * A mark beside the records that a clear or a drop was made: written before the save that clears, so that a
- * restart or a power cut before that save has settled still knows. Its name says it all: what it holds is nothing.
+ * A mark beside the records, empty, whose name says it all: a clear or a drop was made, and a copy at `after` or later
+ * is from after it; or (`undone`) a drop was made and a power cut undid it, until the store makes it again. A drop's
+ * mark names whose account it took off (`id`), so that the store can make one a power cut undid again by itself.
  */
 export interface Marker {
   name: string;
-  how: Forgetting;
-  /** The first place a checkpoint made after it takes: every one before this is from before it. */
+  how: Forgetting | 'undone';
+  /** The first place a copy made after it takes. */
   after: number;
+  /** A drop's, or an undone drop's: the id of the account it took off, as the store named it. */
+  id?: string;
 }
 
-const MARKS: Record<Forgetting, string> = { clear: 'cleared', drop: 'dropped' };
+const MARKS: Record<Marker['how'], string> = { clear: 'cleared', drop: 'dropped', undone: 'undone' };
 
-/** A mark's file name. */
-export function markerName(key: string, how: Forgetting, after: number): string {
-  return `${key}.${MARKS[how]}-${after}.json`;
+/** An id a mark's name can hold: the store's own ids (`uid`), letters, digits and underscores. Any other is left out. */
+const ID = /^[A-Za-z0-9_]{1,80}$/;
+
+/** A mark's file name: what it is, the first place after it, and, for a drop, whose account it took off. */
+export function markerName(key: string, how: Marker['how'], after: number, id?: string): string {
+  const whose = how !== 'clear' && id !== undefined && ID.test(id) ? `-${id}` : '';
+  return `${key}.${MARKS[how]}-${after}${whose}.json`;
 }
 
 /** The mark a file name is, or null when it is no mark of `key`. */
 export function markerOf(key: string, name: string): Marker | null {
-  const found = new RegExp(`^${escape(key)}\\.(cleared|dropped)-(\\d+)\\.json$`).exec(name);
-  const after = placeIn(found?.[2]);
+  const found = new RegExp(`^${escape(key)}\\.(cleared|dropped|undone)-(\\d+)(?:-([A-Za-z0-9_]{1,80}))?\\.json$`).exec(name);
+  const after = wholeIn(found?.[2]);
   if (!found || after === null) return null;
-  return { name, how: found[1] === 'cleared' ? 'clear' : 'drop', after };
-}
-
-/** The first place past every one of these checkpoints: where the checkpoints made after a clear or a drop start. */
-export function afterEvery(checkpoints: readonly Pick<Checkpoint, 'order'>[]): number {
-  return checkpoints.reduce((most, c) => Math.max(most, c.order + 1), 0);
+  const how = found[1] === 'cleared' ? 'clear' : found[1] === 'dropped' ? 'drop' : 'undone';
+  return found[3] !== undefined && how !== 'clear' ? { name, how, after, id: found[3] } : { name, how, after };
 }
 
 /**
- * The first place a read may take a checkpoint from: past every one from before a clear, which is never read again.
- * A checkpoint from before a drop is still read when nothing newer is whole, since the rest of the records are in it.
+ * The first place a read may take a copy from: past every one from before a clear, which is never read again. A copy
+ * from before a drop is still read when nothing newer is whole, since the rest of the records are in it.
  */
 export function readableAfter(markers: readonly Marker[]): number {
   return markers.reduce((most, m) => (m.how === 'clear' ? Math.max(most, m.after) : most), 0);
 }
 
-/** The first place past every checkpoint from before the latest clear or drop: those go once a copy after it has settled. */
+/** The first place past every copy from before the latest clear or drop: a new copy takes no place before it. */
 export function forgottenBefore(markers: readonly Marker[]): number {
-  return markers.reduce((most, m) => Math.max(most, m.after), 0);
-}
-
-/**
- * Whether a copy made after a clear or a drop has settled: one at `after` or later (the file written since counts as
- * newer than every checkpoint), known to be whole, held two minutes by the steady clock. From then on the copies
- * from before it can go: the phone has a whole copy without what was cleared, on the disk.
- */
-export function heldAfter(copies: readonly Pick<Checkpoint, 'order' | 'since' | 'known'>[], after: number, steady: number): boolean {
-  return copies.some((c) => c.order >= after && c.known && isSettled(c, steady));
-}
-
-/**
- * How long until the first of these copies settles, by the steady clock: 0 when one already has, null when none
- * has a time. For the timer that lets go of what came before once it has.
- */
-export function settlesIn(copies: readonly Pick<Checkpoint, 'since'>[], steady: number): number | null {
-  let soonest: number | null = null;
-  for (const { since } of copies) {
-    if (since === null) continue;
-    const wait = Math.max(0, since + SETTLED_MS - steady);
-    soonest = soonest === null ? wait : Math.min(soonest, wait);
-  }
-  return soonest;
+  return markers.reduce((most, m) => (m.how === 'undone' ? most : Math.max(most, m.after)), 0);
 }

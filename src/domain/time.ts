@@ -439,3 +439,14 @@ export function reminderPlan(
   // from before the company's state changed: scheduling never replaces what is not scheduled again.
   return { schedule, cancel: schedule.length ? [LUNCH_OVER_ID] : [LUNCH_OVER_ID, ...DEADLINE_IDS] };
 }
+
+/**
+ * In a browser, the reminders a tab of MineMuster takes off once another tab has taken the records: all of them, as
+ * the tab that has the records now sets those still ahead from what it read. Not the notice that lunch is over once
+ * its lunch's end has come while the shift is open: the browser may still be holding it back on a tab in the back,
+ * and no tab sets a notice whose time has passed, so it must come from this one (as in `reminderPlan`).
+ */
+export function remindersToLetGo(shift: Shift | undefined, now: number): string[] {
+  const current = shift && !shift.clockOut ? shift.lunches[shift.lunches.length - 1] : undefined;
+  return current && now >= lunchEndAt(current) ? [...DEADLINE_IDS] : [...DEADLINE_IDS, LUNCH_OVER_ID];
+}

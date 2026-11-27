@@ -199,9 +199,22 @@ export function passedOverNewer(_key: string): boolean {
 }
 
 /**
+ * Whether the copy the last read took is older than a drop the store made, which a power cut undid (storage.native.ts).
+ * Never in a browser: it keeps one copy, which the save that drops replaces.
+ */
+export function dropUndone(_key: string): boolean {
+  return false;
+}
+
+/** The drops a power cut undid, by the id of the account each took off (storage.native.ts). None in a browser. */
+export function undoneDrops(_key: string): (string | null)[] {
+  return [];
+}
+
+/**
  * Before the store saves to empty the device, or to take one person's records off it, older copies of the records
  * are let go of (storage.native.ts). Nothing to do in a browser: it keeps one copy, and that save replaces it.
  */
-export function forgetCopies(_key: string, _how: Forgetting): void {
+export function forgetCopies(_key: string, _how: Forgetting, _id?: string): void {
   // One copy, which the save that follows replaces.
 }

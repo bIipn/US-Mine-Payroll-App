@@ -2,7 +2,7 @@ import { AppState } from 'react-native';
 
 import { keepsTime } from '../domain/company';
 import { rulesFor } from '../domain/stateRules';
-import { lunchEndAt, lunchOverReminder, reminderPlan } from '../domain/time';
+import { lunchEndAt, lunchOverReminder, reminderPlan, remindersToLetGo } from '../domain/time';
 import { openShiftOf, useStore } from '../store/useStore';
 import { cancelLocal, scheduleLocal } from './notifications';
 
@@ -49,11 +49,22 @@ function inTurnOf(job: (inTurn: () => boolean) => Promise<void>, again = true): 
 }
 
 /**
- * As the store has it now: the shift the person signed in on this phone has open (none where the company keeps no
- * time), their Lunch reminders setting and the company's state's rules. Null with nobody signed in.
+ * Whether this copy of the app holds the records it would plan from: it has read them, and saves them. A phone always
+ * does once they are read. In a browser, a tab that another tab of MineMuster has the records in (`recordsElsewhere`,
+ * storage.ts) has what was saved when it read them, which that tab changes from then on; and a tab that has them back
+ * but could not read them again (`recordsUnreadable`) has what it had before. Neither hands reminders over.
  */
-function standing(now: number) {
-  const { session, shifts, settings } = useStore.getState();
+function holdsRecords(state: { recordsElsewhere: boolean; recordsUnreadable: boolean }): boolean {
+  return !state.recordsElsewhere && !state.recordsUnreadable;
+}
+
+type Records = ReturnType<typeof useStore.getState>;
+
+/**
+ * As `state` has it: the shift the person signed in on this phone has open (none where the company keeps no time),
+ * their Lunch reminders setting and the company's state's rules. Null with nobody signed in.
+ */
+function shiftIn({ session, shifts, settings }: Records, now: number) {
   if (!session) return null;
   return {
     shift: keepsTime(settings.company) ? openShiftOf(shifts, session.employeeId, now) : undefined,
@@ -62,12 +73,19 @@ function standing(now: number) {
   };
 }
 
+/** As the store has it now (`shiftIn`); null too in a browser tab that does not hold the records (`holdsRecords`). */
+function standing(now: number) {
+  const state = useStore.getState();
+  return holdsRecords(state) ? shiftIn(state, now) : null;
+}
+
 /**
  * Bring the scheduled notifications in line with where the shift stands, as the store has it when this hand-over's
  * turn comes. Safe to call after every punch, at app start, and after the Lunch reminders setting or the company's
  * state changes. What gets scheduled is decided by `reminderPlan`; this only hands the plan to the phone. The Lunch
  * reminders setting covers the reminders before the lunch deadline, where the state's rules set one; the notice that
- * lunch is over is sent either way. With nobody signed in it does nothing.
+ * lunch is over is sent either way. With nobody signed in it does nothing, and so it does in a browser tab that does
+ * not hold the records.
  */
 export function syncReminders(): Promise<void> {
   return inTurnOf(async (inTurn) => {
@@ -88,7 +106,8 @@ export function syncReminders(): Promise<void> {
  * they are on, and one handed over without Alarms & reminders comes at the minute once that is on. It takes nothing
  * off the phone (only those still ahead are handed over, and a reminder whose time has passed is not one of them),
  * so a notice the phone is holding back past its time to save battery still comes, and it never asks the phone for
- * anything. Off the clock, or where the company keeps no time, it does nothing.
+ * anything. Off the clock, where the company keeps no time, or in a browser tab that does not hold the records, it
+ * does nothing.
  */
 export function handOverWaiting(): Promise<void> {
   return inTurnOf(async (inTurn) => {
@@ -114,14 +133,42 @@ export function previewLunchOver(): Promise<void> {
 }
 
 /**
+ * In a browser, once another tab of MineMuster has taken the records: this tab's reminders come off, in turn with
+ * every other hand-over. The tab that has the records now sets those still ahead from what it read, and this one's
+ * would be planned from a shift that tab goes on changing. The notice that lunch is over stays once its time has come
+ * (`remindersToLetGo`): the browser may still be holding it back here, and no tab sets it again. Decided when its turn
+ * comes, from the shift as this tab had it when it last held the records: should this tab have them back by then, and
+ * have read them, it takes nothing off, since the hand-over made from what it read is after it in the queue.
+ */
+function letGoOfReminders(): Promise<void> {
+  return inTurnOf(async () => {
+    const state = useStore.getState();
+    if (holdsRecords(state)) return;
+    const now = Date.now();
+    await cancelLocal(remindersToLetGo(shiftIn(state, now)?.shift, now));
+  });
+}
+
+/**
  * While the app runs: every time it comes back to the front, on whatever screen is in front, the reminders still
  * ahead on a shift are handed to the phone again (`handOverWaiting`). A person may have turned notifications or
  * Alarms & reminders on in the phone's settings meanwhile, from any tab, and the notice that lunch is over must
- * still come. Started once the records are read; returns the way to stop.
+ * still come. And in a browser, the reminders go with the records (`holdsRecords`): a tab that another tab takes them
+ * from takes its own off (`letGoOfReminders`), and a tab that has them again hands them over once it has read them
+ * (`syncReminders`), from what it read. A phone always holds its records, so there only the first happens. Started
+ * once the records are read; returns the way to stop.
  */
 export function watchReminders(): () => void {
   const listening = AppState.addEventListener('change', (state) => {
     if (state === 'active') void handOverWaiting();
   });
-  return () => listening.remove();
+  const unwatchRecords = useStore.subscribe((state, was) => {
+    const holds = holdsRecords(state);
+    if (holds === holdsRecords(was)) return;
+    void (holds ? syncReminders() : letGoOfReminders());
+  });
+  return () => {
+    listening.remove();
+    unwatchRecords();
+  };
 }

@@ -131,16 +131,54 @@ function inBrowser<T>(b: Browser, load: () => T, tab = 'tab'): T {
 
 const webStorage = (b: Browser) => inBrowser(b, () => require('../storage.ts') as Storage);
 
-/** A store build's store, in this tab of this browser: it holds nobody made up and names nobody. */
-function webStore(b: Browser, tab = 'tab'): UseStore {
+/** Loads as a store build does: it holds nobody made up and names nobody. */
+function storeBuild<T>(load: () => T): T {
   const saved = { ...process.env };
   for (const key of ['EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY', 'EXPO_PUBLIC_ROSTER', 'EXPO_PUBLIC_ROSTER_OWNER', 'EXPO_PUBLIC_AREA_SHEETS', 'EXPO_PUBLIC_COMPANY']) delete process.env[key];
   Object.assign(process.env, { EXPO_PUBLIC_DEMO: '0', EXPO_PUBLIC_SAMPLE_CREW: '0' });
   try {
-    return inBrowser(b, () => (require('../../store/useStore') as { useStore: UseStore }).useStore, tab);
+    return load();
   } finally {
     process.env = saved;
   }
+}
+
+/** A store build's store, in this tab of this browser. */
+function webStore(b: Browser, tab = 'tab'): UseStore {
+  return storeBuild(() => inBrowser(b, () => (require('../../store/useStore') as { useStore: UseStore }).useStore, tab));
+}
+
+/** A reminder this tab of the browser is holding, to show while it is open (notifications.ts, the web's). */
+type Waiting = Map<string, number>;
+
+/**
+ * A store build in this tab of this browser, as App.tsx starts it, with the tab's own reminders: the web's
+ * notifications are timers of the tab's own, a stand-in here that holds what it is handed until it is taken off.
+ */
+function webApp(b: Browser, tab: string) {
+  const waiting: Waiting = new Map();
+  const timers = {
+    cancelLocal: jest.fn(async (ids: string[]) => ids.forEach((id) => waiting.delete(id))),
+    scheduleLocal: jest.fn(async (reminders: { id: string; at: number }[]) => reminders.forEach((r) => r.at > Date.now() && waiting.set(r.id, r.at))),
+  };
+  const { useStore, reminders } = storeBuild(() =>
+    inBrowser(
+      b,
+      () => {
+        jest.doMock('../notifications', () => timers);
+        return { useStore: (require('../../store/useStore') as { useStore: UseStore }).useStore, reminders: require('../reminders') as typeof import('../reminders') };
+      },
+      tab,
+    ),
+  );
+  /** What App.tsx does once the records are read: the reminders as they have them, and watching from then on. */
+  const opened = () => {
+    expect(useStore.getState().hydrated).toBe(true);
+    useStore.getState().ensureSeeded();
+    void reminders.syncReminders();
+    return reminders.watchReminders();
+  };
+  return { useStore, reminders, waiting, opened };
 }
 
 /** What the browser has saved of the records. */
@@ -460,5 +498,96 @@ describe('two tabs of one browser', () => {
       await flush();
       expect(saved(b).mrfSeq).toBe(43);
     });
+  });
+});
+
+/**
+ * The reminders go with the records: only the tab that saves them sets reminders. Another tab's store has what was
+ * saved when it read them, which the tab that saves them changes from then on, so reminders set from it would be wrong
+ * as soon as anything is punched there: Start lunch now while the person is at lunch, and no Lunch is over once it
+ * has the records. Played with each tab's reminders (reminders.ts) as App.tsx starts them, and its notifications a
+ * stand-in for the web's timers.
+ */
+describe('the reminders, in two tabs of one browser', () => {
+  const HOUR = 3_600_000;
+  const DEADLINE_IDS = ['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0'];
+  /** Lee, signed in, clocked in an hour ago on a California shift: what the tab that saves the records has. */
+  const clockedIn = (useStore: UseStore) => {
+    const now = Date.now();
+    const { settings } = useStore.getState();
+    useStore.setState({
+      employees: [{ id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true }],
+      accounts: [{ id: 'acct-lee', employeeId: 'emp-lee', email: '', provider: 'company', createdAt: 1 }],
+      session: { accountId: 'acct-lee', employeeId: 'emp-lee' },
+      shifts: [{ id: 'sh-lee', employeeId: 'emp-lee', clockIn: { at: now - HOUR, noLocation: 'off' }, lunches: [], breaks: [] }],
+      settings: { ...settings, lunchReminders: true, company: { ...settings.company, name: 'Test Pit A', state: 'CA', pay: null, timeClock: undefined } },
+    });
+  };
+  /** Lunch starts at `at`, and ends by itself 30 minutes later. */
+  const atLunch = (useStore: UseStore, at: number) =>
+    useStore.setState({ shifts: useStore.getState().shifts.map((s) => ({ ...s, lunches: [{ start: { at, noLocation: 'off' as const }, end: { at: at + 30 * 60_000, auto: true as const } }] })) });
+
+  it('a tab opened beside the one that saves them sets none, and Use this tab sets them from what it reads', async () => {
+    const b = browser(new Map(), new FakeLocks());
+    const first = webApp(b, 'first');
+    await flush();
+    const stops = [first.opened()];
+    clockedIn(first.useStore);
+    await first.reminders.syncReminders();
+    await flush();
+    expect([...first.waiting.keys()]).toEqual(DEADLINE_IDS);
+
+    // A second tab: it reads what the first saved, and saves nothing. It sets no reminders, opening or coming back to
+    // the front.
+    const second = webApp(b, 'second');
+    await flush();
+    stops.push(second.opened());
+    await flush();
+    expect(second.useStore.getState().recordsElsewhere).toBe(true);
+    expect(second.useStore.getState().session).toEqual({ accountId: 'acct-lee', employeeId: 'emp-lee' });
+    await second.reminders.handOverWaiting();
+    expect([...second.waiting.keys()]).toEqual([]);
+
+    // Lunch starts in the first tab: its deadline reminders come off, and the notice that lunch is over is set.
+    const lunchAt = Date.now();
+    atLunch(first.useStore, lunchAt);
+    await first.reminders.syncReminders();
+    await flush();
+    expect([...first.waiting.keys()]).toEqual(['lunch-end']);
+    expect([...second.waiting.keys()]).toEqual([]);
+
+    // Use this tab, in the second: it reads the records again and sets the notice from them. The first, which saves
+    // nothing more, takes its own off. Then the first closes, and the notice is still set.
+    await second.useStore.getState().takeRecordsHere();
+    await flush();
+    expect(first.useStore.getState().recordsElsewhere).toBe(true);
+    expect([...first.waiting]).toEqual([]);
+    expect([...second.waiting]).toEqual([['lunch-end', lunchAt + 30 * 60_000]]);
+    close(b, 'first');
+    await flush();
+    expect([...second.waiting]).toEqual([['lunch-end', lunchAt + 30 * 60_000]]);
+    stops.forEach((stop) => stop());
+  });
+
+  it('the tab left when the one that saves them closes sets them from what it reads', async () => {
+    const b = browser(new Map(), new FakeLocks());
+    const first = webApp(b, 'first');
+    await flush();
+    const stops = [first.opened()];
+    clockedIn(first.useStore);
+    const second = webApp(b, 'second');
+    await flush();
+    stops.push(second.opened());
+    const lunchAt = Date.now();
+    atLunch(first.useStore, lunchAt);
+    await first.reminders.syncReminders();
+    await flush();
+    expect([...second.waiting]).toEqual([]);
+
+    close(b, 'first');
+    await flush();
+    expect(second.useStore.getState().recordsElsewhere).toBe(false);
+    expect([...second.waiting]).toEqual([['lunch-end', lunchAt + 30 * 60_000]]);
+    stops.forEach((stop) => stop());
   });
 });

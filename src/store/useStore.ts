@@ -48,7 +48,7 @@ import type {
   SiteConfig,
 } from '../domain/types';
 import { decimalMark } from '../services/decimalMark';
-import { forgetCopies, inAnotherTab, keptInMemory, passedOverNewer, recordsRead, recordStorage, takeRecords, watchOtherTabs, watchUnsaved } from '../services/storage';
+import { forgetCopies, inAnotherTab, keptInMemory, passedOverNewer, recordsRead, recordStorage, takeRecords, undoneDrops, watchOtherTabs, watchUnsaved } from '../services/storage';
 import { fmtDate, fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
@@ -230,6 +230,13 @@ interface Actions {
    * reads them again. Only on the web; never saved itself.
    */
   recordsElsewhere: boolean;
+  /**
+   * The phone shut off before an account deleted on it was off it for good (a power cut, a forced restart), and it
+   * could not be deleted again by itself: the copy the phone opened on has that account's shift still open, or names
+   * no account (an earlier version's). Said until the person taps OK, and again at each start until it is deleted
+   * again (`finishUndoneDrops`); never saved itself.
+   */
+  deletionNotFinished: boolean;
   toast: Toast | null;
   setHydrated: () => void;
   /** Read the records saved on this phone again, after they could not be read. */
@@ -238,6 +245,15 @@ interface Actions {
   saveRecordsAgain: () => void;
   /** The person has seen that the phone shut off while saving. */
   dismissShutOffNotice: () => void;
+  /** The person has seen that an account deleted here is back on the phone. */
+  dismissDeletionNotice: () => void;
+  /**
+   * A power cut undid deleting these accounts from the phone (`undoneDrops`, on Android): what the person confirmed is
+   * done again, here only, as deleteMyAccount and deleteAccountWithPassword did it (the account, its session and its
+   * hourly rate off the phone). Nothing is asked of the server: what it deleted stays deleted. One whose shift is open
+   * in the copy the phone opened on, or that the mark does not name, is left and said (`deletionNotFinished`).
+   */
+  finishUndoneDrops: (ids: readonly (string | null)[]) => void;
   /**
    * Use this tab: take the records from the other tab of the browser that saves them, read them again, and save
    * them from here on. The other tab then saves nothing, and says so. Resolves once they have been read again.
@@ -645,6 +661,7 @@ export const useStore = create<Store>()(
         shutOffWhileSaving: false,
         recordsInMemory: false,
         recordsElsewhere: false,
+        deletionNotFinished: false,
         toast: null,
         setHydrated: () => set({ hydrated: true, recordsUnreadable: false }),
         readRecordsAgain: async () => {
@@ -653,6 +670,34 @@ export const useStore = create<Store>()(
         // Any change to the store saves all of it; this one changes nothing else.
         saveRecordsAgain: () => set({}),
         dismissShutOffNotice: () => set({ shutOffWhileSaving: false }),
+        dismissDeletionNotice: () => set({ deletionNotFinished: false }),
+        finishUndoneDrops: (ids) => {
+          const { accounts, payRates, session } = get();
+          let left = accounts;
+          const rates = { ...payRates };
+          let signedIn = session;
+          let notFinished = false;
+          for (const id of ids) {
+            if (id === null) {
+              // An earlier version's mark names nobody: said once, and its mark goes with the drop made here.
+              notFinished = true;
+              forgetCopies(RECORDS_NAME, 'drop');
+              continue;
+            }
+            const account = left.find((a) => a.id === id);
+            // Nobody on the clock is deleted: left until they have clocked out and deleted it again.
+            if (account && keepsAccount(account.employeeId, 'mine')) {
+              notFinished = true;
+              continue;
+            }
+            forgetCopies(RECORDS_NAME, 'drop', id);
+            if (!account) continue;
+            left = left.filter((a) => a.id !== id);
+            delete rates[account.employeeId];
+            if (signedIn?.accountId === id) signedIn = null;
+          }
+          set({ accounts: left, payRates: rates, session: signedIn, ...(notFinished ? { deletionNotFinished: true } : null) });
+        },
         // The records are read again once this tab has them (watchOtherTabs, below), and that is waited for.
         takeRecordsHere: () => takeRecords(RECORDS_NAME),
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
@@ -758,8 +803,9 @@ export const useStore = create<Store>()(
           const rates = { ...payRates };
           delete rates[session.employeeId];
           // The account and the hourly rate are said to be deleted: the older copies of the records that hold them go
-          // once this save has settled (storage.native.ts).
-          forgetCopies(RECORDS_NAME, 'drop');
+          // once this save has settled, and a power cut before then that brings them back says whose they were, so
+          // that the store deletes them again (storage.native.ts, finishUndoneDrops).
+          forgetCopies(RECORDS_NAME, 'drop', session.accountId);
           set({ accounts: others, session: null, payRates: rates });
           return { ok: true, cleared: false };
         },
@@ -777,7 +823,7 @@ export const useStore = create<Store>()(
           if (employee && !offTheRosterHere(employee, !!get().connectedCompany, get().receiving)) return { ok: false, error: 'Sign in, then delete your account on More.' };
           const rates = { ...payRates };
           delete rates[account.employeeId];
-          forgetCopies(RECORDS_NAME, 'drop');
+          forgetCopies(RECORDS_NAME, 'drop', account.id);
           set({ accounts: accounts.filter((a) => a.id !== account.id), payRates: rates, ...(session?.accountId === account.id ? { session: null } : null) });
           return { ok: true };
         },
@@ -1753,7 +1799,11 @@ export const useStore = create<Store>()(
           shutOffWhileSaving: passedOverNewer(RECORDS_NAME),
           recordsInMemory: keptInMemory(RECORDS_NAME),
           recordsElsewhere: inAnotherTab(RECORDS_NAME),
+          deletionNotFinished: false,
         });
+        // An account deleted here that a power cut brought back: deleted again, here only (Android keeps older copies).
+        const undone = undoneDrops(RECORDS_NAME);
+        if (undone.length > 0) state.finishUndoneDrops(undone);
         state.readUnreadableAgain();
         state.setHydrated();
       },

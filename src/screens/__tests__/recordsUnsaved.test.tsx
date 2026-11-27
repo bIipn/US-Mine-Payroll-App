@@ -86,7 +86,7 @@ afterEach(async () => {
   if (r) await act(async () => r.unmount());
   jest.useRealTimers();
   mockBuild = {};
-  useStore.setState({ recordsUnsaved: false, shutOffWhileSaving: false, recordsInMemory: false, recordsElsewhere: false, saveRecordsAgain, settings, takeRecordsHere });
+  useStore.setState({ recordsUnsaved: false, shutOffWhileSaving: false, deletionNotFinished: false, recordsInMemory: false, recordsElsewhere: false, saveRecordsAgain, settings, takeRecordsHere });
 });
 
 async function opened() {
@@ -331,6 +331,28 @@ describe('when the phone shut off while saving', () => {
     await act(async () => tap('shut-off-ok')());
     expect(shown()).toContain(TITLE);
     expect(shown()).not.toContain(SHUT_OFF);
+  });
+});
+
+describe('when the phone shut off before an account deleted on it was off it for good, and it could not be deleted again by itself', () => {
+  const BACK = 'A deleted account may be back on this phone';
+  it('says so over the app, with what to do, until the person taps OK, beside the shut-off notice', async () => {
+    useStore.setState({ deletionNotFinished: true, shutOffWhileSaving: true });
+    await opened();
+    expect(shown()).toContain(BACK);
+    expect(shown()).toContain('The phone shut off before it finished deleting an account, so the account and its hourly rate may be on the phone again.');
+    expect(shown()).toContain('Clock out if you are on the clock, then delete it again on More, Delete my account.');
+    expect(shown()).toContain(SHUT_OFF);
+    await act(async () => tap('deletion-not-finished-ok')());
+    expect(useStore.getState().deletionNotFinished).toBe(false);
+    expect(shown()).not.toContain(BACK);
+    expect(shown()).toContain(SHUT_OFF);
+    expect(shown()).toContain('The app');
+  });
+
+  it('says nothing when there is none', async () => {
+    await opened();
+    expect(shown()).not.toContain(BACK);
   });
 });
 

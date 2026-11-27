@@ -44,12 +44,15 @@ export default function App() {
   useEffect(() => {
     if (!hydrated) return;
     ensureSeeded();
-    // Re-arm any lunch reminders for a shift that was already running, as the records read have it.
+    // Re-arm any lunch reminders for a shift that was already running, as the records read have it. Not in a browser
+    // tab that another tab has the records in (storage.ts): it sets none until it has them and has read them again.
     void syncReminders();
   }, [hydrated, ensureSeeded]);
 
   // Back in the app, on whatever screen is in front, the reminders for a shift are handed to the phone again:
-  // notifications or Alarms & reminders may have been turned on in the phone's settings meanwhile.
+  // notifications or Alarms & reminders may have been turned on in the phone's settings meanwhile. And in a browser
+  // the reminders go with the records: a tab another tab takes them from takes its own off, and a tab that has them
+  // again sets them from what it read (watchReminders).
   useEffect(() => {
     if (!hydrated) return undefined;
     return watchReminders();

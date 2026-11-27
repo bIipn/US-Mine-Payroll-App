@@ -21,7 +21,7 @@ export function SignInHeader({ company }: { company: Company | null }) {
   const words = signInWords(company);
   const logo = company?.logo && (!('art' in company.logo) || HAS_LOGO_ART) ? company.logo : null;
   return (
-    <View style={[signInStyles.band, { paddingTop: insets.top + space.xxl }]}>
+    <View testID="sign-in-band" style={[signInStyles.band, { paddingTop: insets.top + space.xxl }]}>
       <ScreenStatusBar style="light" />
       {company && logo ? <CompanyLogoPlate logo={logo} name={company.name} width={264} radius={10} /> : <MineMusterLogo width={280} />}
       <Txt v="h1" c={color.white} style={{ marginTop: space.xl }}>
@@ -34,10 +34,27 @@ export function SignInHeader({ company }: { company: Company | null }) {
   );
 }
 
+/**
+ * What stays under the status bar while a sign-in screen's form scrolls: the band is the top of the form, and goes
+ * up with it when the form is scrolled or the keyboard pushes it up, but its white status bar icons stay. A strip of
+ * the band's own colour, as tall as the status bar, keeps them on dark. Drawn over the form, outside it, so it never
+ * moves: at rest it lies on the band's own top, so the screen looks as it would without it. It takes no taps. Where
+ * nothing is over the top of the screen (a browser, as a rule) it is not drawn.
+ */
+export function SignInStatusStrip() {
+  const { top } = useSafeAreaInsets();
+  if (top <= 0) return null;
+  return <View testID="sign-in-status-strip" pointerEvents="none" style={[signInStyles.strip, { height: top }]} />;
+}
+
+/** The colour of the band, and of the strip that stands in for its top under the status bar. */
+const BAND = color.ink;
+
 /** The page behind a sign-in screen, the band, and the card its form sits on, over the foot of the band. */
 export const signInStyles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.kaolin },
-  band: { backgroundColor: color.ink, paddingHorizontal: space.xl, paddingBottom: 64 },
+  band: { backgroundColor: BAND, paddingHorizontal: space.xl, paddingBottom: 64 },
+  strip: { position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: BAND },
   card: {
     marginTop: -40,
     marginHorizontal: space.lg,

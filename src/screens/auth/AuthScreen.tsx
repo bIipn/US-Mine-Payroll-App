@@ -4,7 +4,7 @@ import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, View } f
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ProviderMark } from '../../components/Brand';
-import { SignInHeader, signInStyles } from '../../components/SignInHeader';
+import { SignInHeader, SignInStatusStrip, signInStyles } from '../../components/SignInHeader';
 import { Button, Divider, Field, IconButton, Row, Segmented, Sheet, Txt } from '../../components/ui';
 import { WebPageLinks } from '../../components/WebPageLinks';
 import { AREA_SHEETS, DEMO_MODE, ROSTER, ROSTER_OWNER, SAMPLE_CREW, SERVER } from '../../config';
@@ -291,6 +291,8 @@ export function AuthScreen() {
           <WebPageLinks testID="auth-pages" />
         </View>
       </ScrollView>
+      {/* Over the form, so the status bar's white icons stay on the band's colour however far it is scrolled. */}
+      <SignInStatusStrip />
 
       <Sheet
         testID="provider-sheet"

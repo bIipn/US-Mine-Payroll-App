@@ -120,3 +120,47 @@ describe('once another tab of the browser saves the records (letGo)', () => {
     expect(written).toEqual(['three']);
   });
 });
+
+describe('a place that keeps older copies of the records', () => {
+  /** A place that notes, in order, what it is asked to do. */
+  function noting() {
+    const asked: string[] = [];
+    const at: RecordPlace = {
+      async read() {
+        asked.push('read');
+        return 'saved';
+      },
+      async write(_key, value) {
+        asked.push(`write ${value}`);
+      },
+      async remove() {
+        asked.push('remove');
+      },
+      async forget(_key, how, id) {
+        asked.push(`forget ${how}${id ? ` ${id}` : ''}`);
+      },
+      async opened() {
+        asked.push('opened');
+      },
+    };
+    return { at, asked };
+  }
+
+  it('is told once the store has read the records, after the read and before any save, and told of a drop with whose account it is', async () => {
+    const { at, asked } = noting();
+    const guarded = guardRecords(at);
+    await guarded.recordStorage.getItem(KEY);
+    guarded.recordsRead(KEY);
+    guarded.forgetCopies(KEY, 'drop', 'acct_1');
+    await guarded.recordStorage.setItem(KEY, 'without the account');
+    expect(asked).toEqual(['read', 'opened', 'forget drop acct_1', 'write without the account']);
+  });
+
+  it('is told nothing before the store has read the records', async () => {
+    const { at, asked } = noting();
+    const guarded = guardRecords(at);
+    guarded.forgetCopies(KEY, 'clear');
+    await guarded.recordStorage.setItem(KEY, 'an empty phone');
+    expect(asked).toEqual([]);
+  });
+});
