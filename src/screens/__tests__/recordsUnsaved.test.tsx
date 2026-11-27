@@ -2,11 +2,13 @@
 // until a save works, and tries again by itself meanwhile (the store's recordsUnsaved; what is kept on the phone
 // meanwhile is storage.native.test.ts's). When the phone shut off while saving and opened on an older copy of the
 // records, the app says so once, over every screen, until the person taps OK (the store's shutOffWhileSaving).
+// In a browser the words are a browser's, and a browser that will not let the app at its storage at all, so the
+// records are only in memory, is said over every screen too (the store's recordsInMemory), but not in the preview.
 // The app's screens are a stand-in here, and so is everything it starts.
 const mockText = (words: string) => () => require('react').createElement(require('react-native').Text, null, words);
 jest.mock('../../navigation/RootNavigator', () => ({ RootNavigator: mockText('The app') }));
 jest.mock('../../services/connection', () => ({ watchConnection: () => () => undefined }));
-jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined }));
+jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined, watchReminders: () => () => undefined }));
 jest.mock('../../services/sync', () => {
   const { create } = require('zustand');
   return { startSync: () => () => undefined, useSyncStatus: create(() => ({ online: true, server: null, waiting: 0 })) };
@@ -21,6 +23,19 @@ jest.mock('@expo-google-fonts/barlow-condensed/700Bold', () => ({}));
 jest.mock('../../components/icons', () => new Proxy({}, { get: (_t, name) => (name === '__esModule' ? true : () => null) }));
 jest.mock('../../services/haptics', () => ({ haptic: new Proxy({}, { get: () => () => undefined }) }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
+// What build this is, as config.ts says: the preview (DEMO_MODE) or one that keeps real records, and one that sends
+// to a company server (SERVER) or not. A test that cares says which; the others run as the build Jest makes.
+let mockBuild: { preview?: boolean; server?: boolean } = {};
+jest.mock('../../config', () => {
+  const actual = jest.requireActual('../../config');
+  const build = { ...actual, __esModule: true };
+  Object.defineProperty(build, 'DEMO_MODE', { enumerable: true, get: () => mockBuild.preview ?? actual.DEMO_MODE });
+  Object.defineProperty(build, 'SERVER', {
+    enumerable: true,
+    get: () => (mockBuild.server === undefined ? actual.SERVER : mockBuild.server ? { url: 'https://example.supabase.co', key: 'sb_publishable_example' } : null),
+  });
+  return build;
+});
 
 type Fiber = { return: Fiber | null; memoizedProps?: Record<string, unknown> } | null;
 type Node = { props: Record<string, unknown>; unstable_fiber: unknown };
@@ -36,6 +51,8 @@ const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Prom
 
 const TITLE = 'Records could not be saved on this phone';
 const BODY = 'Free up space on the phone, then keep the app open until this message goes away.';
+const { Platform } = require('react-native') as typeof import('react-native');
+const { SAVE_AGAIN_SLOWLY_MS } = require('../../components/RecordsNotSaved') as typeof import('../../components/RecordsNotSaved');
 
 /** Let every save and read under way finish. */
 const flush = async () => {
@@ -56,7 +73,8 @@ afterEach(async () => {
   root = null;
   if (r) await act(async () => r.unmount());
   jest.useRealTimers();
-  useStore.setState({ recordsUnsaved: false, shutOffWhileSaving: false, saveRecordsAgain, settings });
+  mockBuild = {};
+  useStore.setState({ recordsUnsaved: false, shutOffWhileSaving: false, recordsInMemory: false, saveRecordsAgain, settings });
 });
 
 async function opened() {
@@ -119,6 +137,140 @@ it('tries again by itself while it says so, and stops once a save works', async 
   });
   expect(again).toHaveBeenCalledTimes(2);
   expect(shown()).not.toContain(TITLE);
+});
+
+it('on a phone, keeps trying every 15 seconds, since freeing space on the phone makes room', async () => {
+  const os = jest.replaceProperty(Platform, 'OS', 'android');
+  jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
+  try {
+    const again = jest.fn();
+    useStore.setState({ recordsUnsaved: true, saveRecordsAgain: again });
+    await opened();
+    for (let tries = 1; tries <= 8; tries++) {
+      await act(async () => {
+        jest.advanceTimersByTime(SAVE_AGAIN_MS);
+      });
+      expect(again).toHaveBeenCalledTimes(tries);
+    }
+  } finally {
+    os.restore();
+  }
+});
+
+describe('in a browser', () => {
+  const FULL = 'This browser has no more room for MineMuster’s records';
+  let os: { restore(): void } | null = null;
+  beforeEach(() => {
+    os = jest.replaceProperty(Platform, 'OS', 'web');
+  });
+  afterEach(() => {
+    os?.restore();
+    os = null;
+  });
+
+  it('a save turned down says the browser has no room, that what is done now lasts while the tab is open, and to tell a supervisor', async () => {
+    // A browser's room for a site is fixed, whatever room the computer has: freeing space on it changes nothing.
+    mockBuild = { server: true };
+    useStore.setState({ recordsUnsaved: true, saveRecordsAgain: jest.fn() });
+    await opened();
+    expect(shown()).toContain(FULL);
+    expect(shown()).toContain('What you do now is kept only while this tab stays open. Records already sent to your company are safe. Tell your supervisor.');
+    expect(shown()).not.toContain(TITLE);
+    expect(shown()).not.toContain('Free up space');
+    expect(shown()).toContain('The app');
+  });
+
+  it('says nothing of records sent in a build that sends none', async () => {
+    mockBuild = { server: false };
+    useStore.setState({ recordsUnsaved: true, saveRecordsAgain: jest.fn() });
+    await opened();
+    expect(shown()).toContain(FULL);
+    expect(shown()).toContain('What you do now is kept only while this tab stays open. Tell your supervisor.');
+    expect(shown()).not.toContain('sent');
+  });
+
+  it('tries again three times, 15 seconds apart, then every five minutes, and quickly again once a save has worked', async () => {
+    // Each try writes all the records, and a full browser turns every one down: not every 15 seconds for nothing.
+    // A change in the app still saves at once, as it always does.
+    jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
+    const again = jest.fn();
+    useStore.setState({ recordsUnsaved: true, saveRecordsAgain: again });
+    await opened();
+    for (let tries = 1; tries <= 3; tries++) {
+      await act(async () => {
+        jest.advanceTimersByTime(SAVE_AGAIN_MS);
+      });
+      expect(again).toHaveBeenCalledTimes(tries);
+    }
+    await act(async () => {
+      jest.advanceTimersByTime(SAVE_AGAIN_SLOWLY_MS - 1);
+    });
+    expect(again).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(again).toHaveBeenCalledTimes(4);
+    await act(async () => {
+      jest.advanceTimersByTime(SAVE_AGAIN_SLOWLY_MS);
+    });
+    expect(again).toHaveBeenCalledTimes(5);
+
+    // A save works, and later one is turned down again: three quick tries again, as from the start.
+    await act(async () => {
+      useStore.setState({ recordsUnsaved: false });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(SAVE_AGAIN_SLOWLY_MS * 2);
+    });
+    expect(again).toHaveBeenCalledTimes(5);
+    await act(async () => {
+      useStore.setState({ recordsUnsaved: true });
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(SAVE_AGAIN_MS);
+    });
+    expect(again).toHaveBeenCalledTimes(6);
+  });
+
+  describe('that will not let the app at its storage, so the records are only in memory', () => {
+    const IN_MEMORY = 'This browser is not keeping MineMuster’s records';
+
+    it('says so over the app in a build that keeps real records, with what to do', async () => {
+      mockBuild = { preview: false, server: true };
+      useStore.setState({ recordsInMemory: true });
+      await opened();
+      expect(shown()).toContain(IN_MEMORY);
+      expect(shown()).toContain(
+        'What you do here is lost when this tab closes, unless it has been sent to your company. Use the app on your phone, or allow this site to store data.',
+      );
+      expect(shown()).toContain('The app');
+      // Nothing is waiting to be saved: there is nowhere to save it, which is what is said.
+      expect(shown()).not.toContain(FULL);
+    });
+
+    it('speaks of nothing sent in a build that sends none', async () => {
+      mockBuild = { preview: false, server: false };
+      useStore.setState({ recordsInMemory: true });
+      await opened();
+      expect(shown()).toContain(IN_MEMORY);
+      expect(shown()).toContain('What you do here is lost when this tab closes. Use the app on your phone, or allow this site to store data.');
+      expect(shown()).not.toContain('sent');
+    });
+
+    it('says nothing in the preview, which runs from memory inside a frame', async () => {
+      mockBuild = { preview: true };
+      useStore.setState({ recordsInMemory: true });
+      await opened();
+      expect(shown()).not.toContain(IN_MEMORY);
+      expect(shown()).toContain('The app');
+    });
+
+    it('says nothing when the browser keeps them', async () => {
+      mockBuild = { preview: false, server: true };
+      await opened();
+      expect(shown()).not.toContain(IN_MEMORY);
+    });
+  });
 });
 
 /** What a tap on the button with this testID does. */

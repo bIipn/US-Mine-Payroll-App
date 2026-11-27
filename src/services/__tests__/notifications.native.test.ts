@@ -151,6 +151,34 @@ describe('scheduleLocal', () => {
     await mod.scheduleLocal([lunchOver()]);
     expect(scheduled).toHaveLength(1);
   });
+
+  // The reminders are handed over again whenever the app comes back to the front on a shift. One that comes back in
+  // the last second of a lunch must not take off the phone the notice it could no longer hand over in time.
+  it('leaves the notice the phone holds when it is due within the second, too late to hand it over again', async () => {
+    const { mod, notifications, scheduled } = load('android');
+    await mod.scheduleLocal([{ ...lunchOver(), at: Date.now() + 500 }]);
+    expect(notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+    expect(scheduled).toEqual([]);
+  });
+
+  it('takes off the phone a reminder already past, as before', async () => {
+    const { mod, notifications, scheduled } = load('android');
+    await mod.scheduleLocal([{ ...lunch15(), at: Date.now() - 60_000 }]);
+    expect(notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('lunch-15');
+    expect(scheduled).toEqual([]);
+  });
+
+  it('decides what goes before it takes anything off, so a slow phone does not lose a notice due soon', async () => {
+    const { mod, notifications, scheduled } = load('android');
+    // The phone takes a while to say whether notifications are allowed.
+    notifications.getPermissionsAsync.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      return { granted: true, canAskAgain: true };
+    });
+    await mod.scheduleLocal([{ ...lunchOver(), at: Date.now() + 1_200 }]);
+    expect(notifications.cancelScheduledNotificationAsync).toHaveBeenCalledWith('lunch-end');
+    expect((scheduled as Request[]).map((r) => r.identifier)).toEqual(['lunch-end']);
+  });
 });
 
 describe('requestNotificationPermission', () => {

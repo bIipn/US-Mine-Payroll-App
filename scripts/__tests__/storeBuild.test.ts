@@ -156,6 +156,15 @@ describe('the store settings (app.json)', () => {
     expect(app.android.permissions ?? []).not.toContain('android.permission.USE_EXACT_ALARM');
   });
 
+  it('reads the phone’s decimal mark with no permission and no change to how the app is laid out', () => {
+    // expo-localization's plugin with no options leaves the iPhone's Info.plist as it is and, on Android,
+    // only adds locale and layoutDirection to the main activity's configChanges, so a change of language or
+    // region does not restart the screen a checklist is half filled on. Options would set the languages
+    // the app offers and how it lays out right to left; the app sets neither.
+    expect(app.plugins).toContain('expo-localization');
+    expect(plugin('expo-localization')).toEqual({});
+  });
+
   it('asks for location while the app is in use only, and says who sees it', () => {
     const location = plugin('expo-location');
     expect(location).toMatchObject({

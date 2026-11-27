@@ -7,6 +7,7 @@ import { readMeter, unitReadingProblem } from '../../domain/fleet';
 import { CATEGORY_LABEL, CATEGORY_ORDER } from '../../domain/templates';
 import type { EquipmentCategory, EquipmentStatus } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
+import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
 import { color, space, type Tone } from '../../theme/theme';
@@ -22,6 +23,8 @@ const STATUS: Record<EquipmentStatus, { label: string; tone: Tone; solid?: boole
 export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
   const equipment = useStore((s) => s.equipment);
   const { addEquipment, removeEquipment, showToast } = useStore.getState();
+  // The phone's own decimal mark, which its number pad types: 4250,5 hours where the phone writes it so.
+  const mark = useDecimalMark();
 
   const [adding, setAdding] = useState(false);
   const [unit, setUnit] = useState('');
@@ -41,16 +44,16 @@ export function FleetScreen({ navigation }: ScreenProps<'Fleet'>) {
   const save = () => {
     // Read as the office dashboard reads it (readMeter): blank is 0, and a reading that cannot be read, like
     // one an Android number pad let a minus sign or a space into, is turned back, never made 0.
-    const reading = readMeter(meter);
+    const reading = readMeter(meter, mark);
     if (reading === undefined) {
       haptic.error();
-      setMeterError(unitReadingProblem(category));
+      setMeterError(unitReadingProblem(category, mark));
       return;
     }
     const result = addEquipment({ unit, category, make, model, meter: reading });
     if (!result.ok) {
       haptic.error();
-      if (result.error === unitReadingProblem(category)) setMeterError(result.error);
+      if (result.error === unitReadingProblem(category, mark)) setMeterError(result.error);
       else setError(result.error);
       return;
     }

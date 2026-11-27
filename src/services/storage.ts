@@ -10,7 +10,10 @@ import { guardRecords } from './recordGuard';
  *
  * The store's records are kept as a phone keeps them (recordGuard.ts): nothing is written over them until the
  * store has read them, so records that could not be read, or did not make sense, stay as they are and the app
- * says so; and a save the browser turns down (its storage is full) is said on every screen until one works.
+ * says so; and a save the browser turns down is said on every screen until one works. Once the records have been
+ * read, a browser turns a save down when its room for this site is full (QuotaExceededError, the one error setItem
+ * throws): that room is fixed, about 5 MB, whatever room the computer has, so the app says so in a browser's words
+ * and tries again less often (RecordsNotSaved.tsx).
  */
 const memory = new Map<string, string>();
 let broken = false;
@@ -50,9 +53,10 @@ export const safeStorage: StateStorage = {
 };
 
 /**
- * Keys of records the browser would not let the app read: it does not let the app at its storage at all, so
- * nothing can have been saved there. They are kept in memory for the session, as everything is then, and a save
- * of them is never said to have failed.
+ * Keys of records the browser would not let the app read: it does not let the app at its storage at all (blocked
+ * storage, a sandboxed frame, a corrupted store), so nothing can have been saved there. They are kept in memory for
+ * the session, as everything is then. A save of them is never said to have failed; that they are only in memory is
+ * (`keptInMemory`), since they go when the tab closes.
  */
 const recordsInMemory = new Set<string>();
 const recordMemory = new Map<string, string>();
@@ -88,6 +92,16 @@ export const recordsRead = records.recordsRead;
 
 /** Told whether a save of the records is waiting in memory because the browser turned it down (recordGuard.ts). */
 export const watchUnsaved = records.watchUnsaved;
+
+/**
+ * Whether the records under `key` are kept only in memory for this session, because the browser would not let the
+ * app at its storage when they were read: what is done is lost when the tab closes, unless it was sent. The store
+ * says so over every screen in a build that keeps real records (`recordsInMemory`); the preview, which runs inside
+ * a frame, expects it. Never on a phone (storage.native.ts).
+ */
+export function keptInMemory(key: string): boolean {
+  return recordsInMemory.has(key);
+}
 
 /**
  * Whether the last read of the records under `key` passed over a newer copy that was not whole, because the

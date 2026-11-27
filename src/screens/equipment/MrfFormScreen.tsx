@@ -4,10 +4,11 @@ import { StyleSheet, View } from 'react-native';
 
 import { Button, Divider, Field, IconButton, Notice, Page, Panel, Row, Segmented, Sheet, Toggle, Txt, UnitPlate } from '../../components/ui';
 import { examFindings, ON_THE_SHEET } from '../../domain/areaExam';
-import { parseReading, READING_PROBLEM } from '../../domain/reading';
+import { parseReading, readingProblem, readingText } from '../../domain/reading';
 import { CATEGORY_LABEL } from '../../domain/templates';
 import type { MrfPriority } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
+import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { inspectionHasHazard, mrfItemsFromInspection, useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
@@ -24,6 +25,8 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
   const inspection = useStore((s) => s.inspections.find((i) => i.id === route.params.inspectionId));
   const exam = useStore((s) => s.exams.find((x) => x.id === route.params.examId));
   const { createMrf, showToast } = useStore.getState();
+  // The phone's own decimal mark, which its number pad types, and the reading is read and written with.
+  const mark = useDecimalMark();
 
   const finding = exam ? examFindings(exam).find((f) => f.key === route.params.findingKey) : undefined;
   const [unitId, setUnitId] = useState(route.params.equipmentId ?? inspection?.equipmentId);
@@ -40,7 +43,7 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
       : items.map((i) => (i.note ? `${i.label}: ${i.note}` : i.label)).join('\n'),
   );
   const [location, setLocation] = useState(route.params.location ?? '');
-  const [meter, setMeter] = useState(inspection ? String(inspection.meter) : unit ? String(unit.meter) : '');
+  const [meter, setMeter] = useState(inspection ? readingText(inspection.meter, mark) : unit ? readingText(unit.meter, mark) : '');
   const [tagged, setTagged] = useState(forced);
   const [error, setError] = useState<{ field: 'location' | 'problem' | 'meter'; text: string } | null>(null);
 
@@ -57,10 +60,10 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
     }
     // Read as the store reads it (parseReading): left blank there is none, and one an Android number pad let
     // a minus sign into is turned back, not dropped without a word.
-    const meterValue = unit ? parseReading(meter) : undefined;
+    const meterValue = unit ? parseReading(meter, mark) : undefined;
     if (meterValue != null && Number.isNaN(meterValue)) {
       haptic.error();
-      setError({ field: 'meter', text: READING_PROBLEM });
+      setError({ field: 'meter', text: readingProblem(mark) });
       return;
     }
     const result = createMrf({
@@ -77,7 +80,7 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
     });
     if (!result.ok) {
       haptic.error();
-      setError({ field: result.error === READING_PROBLEM ? 'meter' : 'problem', text: result.error });
+      setError({ field: result.error === readingProblem(mark) ? 'meter' : 'problem', text: result.error });
       return;
     }
     sent.current = true;
@@ -213,7 +216,7 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
                 sub={CATEGORY_LABEL[e.category]}
                 onPress={() => {
                   setUnitId(e.id);
-                  setMeter(String(e.meter));
+                  setMeter(readingText(e.meter, mark));
                   setError(null);
                   setPicking(false);
                 }}

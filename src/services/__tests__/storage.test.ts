@@ -3,8 +3,8 @@
  * records are held as a phone holds them (recordGuard.ts): nothing is written over them, and nothing removes them,
  * until the store has read them, so records that could not be read are never saved over by an empty app. A browser
  * that will not let the app at its storage at all (a locked-down frame, some private windows) keeps them in memory
- * for the session, as it always has. A save the browser turns down (its storage is full) is said, and so is the next
- * one that works.
+ * for the session, and the store knows it (`recordsInMemory`), so a build that keeps real records can say so. A save
+ * the browser turns down (its storage is full) is said, and so is the next one that works.
  *
  * The browser is made up here: its storage is a map.
  */
@@ -111,17 +111,31 @@ describe('the web storage', () => {
     expect(b.rows.get(KEY)).toBe('saved and more');
   });
 
-  it('a browser that will not let the app at its storage keeps the records in memory for the session', async () => {
+  it('a browser that will not let the app at its storage keeps the records in memory for the session, and says so', async () => {
     const b: Browser = { ...browser(), blocked: true };
     const web = webStorage(b);
     const said: boolean[] = [];
     web.watchUnsaved((unsaved) => said.push(unsaved));
+    expect(web.keptInMemory(KEY)).toBe(false);
     expect(await web.recordStorage.getItem(KEY)).toBeNull();
     web.recordsRead(KEY);
     await web.recordStorage.setItem(KEY, 'this session');
     expect(await web.recordStorage.getItem(KEY)).toBe('this session');
-    // Nothing could ever have been saved there, so nothing is said to have failed.
+    // Nothing could ever have been saved there, so no save is said to have failed: that they are only in memory is.
     expect(said).toEqual([]);
+    expect(web.keptInMemory(KEY)).toBe(true);
+    expect(web.keptInMemory('another-key')).toBe(false);
+  });
+
+  it('a browser that lets the app at its storage keeps the records there, not in memory', async () => {
+    const b = browser(new Map([[KEY, 'saved']]));
+    const web = webStorage(b);
+    expect(await web.recordStorage.getItem(KEY)).toBe('saved');
+    web.recordsRead(KEY);
+    b.full = true;
+    await web.recordStorage.setItem(KEY, 'more');
+    // A full storage is a save turned down, not records kept in memory for good.
+    expect(web.keptInMemory(KEY)).toBe(false);
   });
 
   it('a save the browser turns down is said once, read back meanwhile, and the next save that works says so', async () => {
@@ -211,15 +225,26 @@ describe('the store on the web, when the records cannot be read', () => {
     expect(JSON.parse(b.rows.get(KEY)!).version).toBe(STATE_VERSION);
   });
 
-  it('a browser that will not let the app at its storage opens from memory, as it always has', async () => {
+  it('a browser that will not let the app at its storage opens from memory, and the store knows they are only there', async () => {
     const b: Browser = { ...browser(), blocked: true };
     const store = webStore(b);
     await flush();
     expect(store.getState().recordsUnreadable).toBe(false);
     expect(store.getState().hydrated).toBe(true);
+    // Said over every screen in a build that keeps real records (RecordsNotSavedFrame): they go when the tab closes.
+    expect(store.getState().recordsInMemory).toBe(true);
     store.setState({ mrfSeq: 3 });
     await flush();
     expect(store.getState().recordsUnsaved).toBe(false);
+    expect(store.getState().recordsInMemory).toBe(true);
+  });
+
+  it('a browser that keeps them says nothing of memory', async () => {
+    const { b } = await usedBrowser();
+    const store = webStore(b);
+    await flush();
+    expect(store.getState().hydrated).toBe(true);
+    expect(store.getState().recordsInMemory).toBe(false);
   });
 });
 

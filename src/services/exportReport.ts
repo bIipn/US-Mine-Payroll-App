@@ -19,9 +19,13 @@ const WENT: Record<'shared' | 'downloaded' | 'opened' | 'saved', string> = {
   saved: 'saved in the folder you picked',
 };
 
+/** A name as it starts a sentence: "payroll hours file" is "Payroll hours file"; "PDF" stays as it is. */
+const opening = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+
 /**
- * Tell the person which way the file went. `what` names the file ("PDF"), `detail` says what is in it, and
- * `none` is said instead when there is nothing in it.
+ * Tell the person which way the file went. `what` names the file as it reads in the middle of a sentence
+ * ("PDF", "Excel file", "payroll hours file"), and takes a capital where it starts one. `detail` says what
+ * is in it, and `none` is said instead when there is nothing in it.
  */
 function tellWay(way: FileWay, what: string, detail: string | null, none?: string) {
   const { showToast } = useStore.getState();
@@ -32,7 +36,7 @@ function tellWay(way: FileWay, what: string, detail: string | null, none?: strin
     showToast('The file was built but could not be saved on this device.', 'bo');
   } else {
     haptic.success();
-    const head = `${what} ${WENT[way]}`;
+    const head = `${opening(what)} ${WENT[way]}`;
     showToast(detail ? `${head}: ${detail}` : none ? `${head}. ${none}` : head);
   }
 }
@@ -77,5 +81,5 @@ export async function exportCsv(build: () => CsvFile, choose?: ChooseFileWay): P
     return;
   }
   const lines = file.lines ? `${file.lines} ${file.lines === 1 ? 'line' : 'lines'}` : null;
-  tellWay(await handOver(file.name, file.bytes, 'text/csv', choose), 'Payroll hours file', lines, 'No hours in this period.');
+  tellWay(await handOver(file.name, file.bytes, 'text/csv', choose), 'payroll hours file', lines, 'No hours in this period.');
 }

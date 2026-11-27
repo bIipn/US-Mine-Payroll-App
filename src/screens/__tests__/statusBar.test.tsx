@@ -56,7 +56,7 @@ jest.mock('@react-navigation/native', () => {
 });
 // What the app starts once the records are read: no company server, no reminders, and signal set by each test.
 jest.mock('../../services/connection', () => ({ CAN_CONNECT: false, watchConnection: () => () => undefined }));
-jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined }));
+jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined, watchReminders: () => () => undefined }));
 jest.mock('../../services/sync', () => {
   const { create } = require('zustand');
   return { startSync: () => () => undefined, useSyncStatus: create(() => ({ online: true, server: false, waiting: 0 })) };

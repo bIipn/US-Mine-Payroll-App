@@ -19,7 +19,7 @@ import { ToastHost } from './src/components/ui';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { RecordsUnreadableScreen } from './src/screens/auth/RecordsUnreadableScreen';
 import { watchConnection } from './src/services/connection';
-import { syncReminders } from './src/services/reminders';
+import { syncReminders, watchReminders } from './src/services/reminders';
 import { startSync } from './src/services/sync';
 import { openShiftOf, useStore } from './src/store/useStore';
 import { color } from './src/theme/theme';
@@ -51,6 +51,13 @@ export default function App() {
     const shift = session && keepsTime(settings.company) ? openShiftOf(shifts, session.employeeId, Date.now()) : undefined;
     if (session) void syncReminders(shift, settings.lunchReminders, rulesFor(settings.company.state));
   }, [hydrated, ensureSeeded]);
+
+  // Back in the app, on whatever screen is in front, the reminders for a shift are handed to the phone again:
+  // notifications or Alarms & reminders may have been turned on in the phone's settings meanwhile.
+  useEffect(() => {
+    if (!hydrated) return undefined;
+    return watchReminders();
+  }, [hydrated]);
 
   // Watch for signal, and send what the company's server does not have once there is some,
   // to the company this phone is connected to, if any.

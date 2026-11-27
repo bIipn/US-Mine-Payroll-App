@@ -430,3 +430,12 @@ export const watchUnsaved = records.watchUnsaved;
 export function passedOverNewer(key: string): boolean {
   return passedOver.get(key) ?? false;
 }
+
+/**
+ * Whether the records under `key` are kept only in memory for this session. Never on a phone: a read that fails
+ * here fails, and the app says the records could not be read. Only a browser that will not let the app at its
+ * storage keeps them in memory (storage.ts).
+ */
+export function keptInMemory(_key: string): boolean {
+  return false;
+}

@@ -4,8 +4,9 @@ import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, Page, Panel, Txt, UnitPlate } from '../../components/ui';
-import { GALLONS_PROBLEM, parseReading, READING_PROBLEM } from '../../domain/reading';
+import { gallonsProblem, parseReading, readingProblem } from '../../domain/reading';
 import type { ScreenProps } from '../../navigation/types';
+import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
@@ -21,6 +22,8 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   const { endUse, showToast } = useStore.getState();
   // A maintenance request is made in the app's full view: from the Clock alone, or the sign-in screen, there is none to open.
   const canReport = navigation.getState?.()?.routeNames?.includes('MrfForm') ?? true;
+  // The phone's own decimal mark, which its number pad types: 12,5 is twelve and a half where the phone writes it so.
+  const mark = useDecimalMark();
 
   const [meter, setMeter] = useState('');
   const [fuel, setFuel] = useState('');
@@ -33,20 +36,20 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   if (!log || !unit) return null;
 
   // Read as the store reads them (parseReading): a minus sign an Android number pad let through is turned back, not dropped.
-  const meterValue = parseReading(meter);
-  const fuelValue = parseReading(fuel);
+  const meterValue = parseReading(meter, mark);
+  const fuelValue = parseReading(fuel, mark);
   const used = meterValue != null && !Number.isNaN(meterValue) ? meterValue - log.startMeter : null;
 
   const submit = () => {
     // A second tap that lands while the screen is going would go back twice.
     if (sent.current) return;
     if (meterValue == null || Number.isNaN(meterValue)) {
-      setError(READING_PROBLEM);
+      setError(readingProblem(mark));
       return;
     }
     if (fuelValue != null && Number.isNaN(fuelValue)) {
       haptic.error();
-      setFuelError(GALLONS_PROBLEM);
+      setFuelError(gallonsProblem(mark));
       return;
     }
     const result = endUse(log.id, {
@@ -57,7 +60,7 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
     });
     if (!result.ok) {
       haptic.error();
-      if (result.error === GALLONS_PROBLEM) setFuelError(result.error);
+      if (result.error === gallonsProblem(mark)) setFuelError(result.error);
       else setError(result.error);
       return;
     }

@@ -51,6 +51,7 @@ const { AppState, Linking, Platform } = require('react-native') as {
   Platform: typeof PlatformType;
 };
 const { ClockScreen } = require('../clock/ClockScreen') as typeof import('../clock/ClockScreen');
+const { watchReminders } = require('../../services/reminders') as typeof import('../../services/reminders');
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const notices = require('../../services/notifications') as Record<string, jest.Mock>;
 const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Promise<void> }).act;
@@ -100,6 +101,8 @@ async function tap(root: Root, id: string) {
 const noticeIs = (state: LunchNotice) => notices.lunchNoticeState.mockImplementation(async () => state);
 
 let root: Root | null = null;
+/** Stops the app's own hand-over of the reminders on coming back to the front, which App starts with the records read. */
+let stopWatching: (() => void) | null = null;
 beforeEach(() => {
   mockFocused = true;
   for (const fn of Object.values(notices)) fn.mockClear();
@@ -108,12 +111,17 @@ beforeEach(() => {
   noticeIs('off');
   AppState.addEventListener.mockClear();
   Linking.openSettings.mockClear();
+  stopWatching = watchReminders();
 });
 afterEach(async () => {
+  stopWatching?.();
+  stopWatching = null;
   const r = root;
   root = null;
   if (r) await act(async () => r.unmount());
 });
+/** The ids of the reminders handed to the phone, once for each time each was handed over. */
+const handedOver = () => notices.scheduleLocal.mock.calls.flatMap(([reminders]) => reminders as { id: string }[]).map((x) => x.id);
 
 async function clockedInAndAtLunch() {
   leesPhone();
@@ -193,8 +201,8 @@ it('on Android, opens the phone settings, and once the notice is on there hands 
     for (let i = 0; i < 5; i += 1) await act(async () => undefined);
     expect(byId(r, 'lunch-no-notice')).toHaveLength(0);
     expect(shown(r)).toContain('Nothing to tap');
-    const handed = notices.scheduleLocal.mock.calls.flatMap(([reminders]) => reminders as { id: string }[]).map((x) => x.id);
-    expect(handed).toContain('lunch-end');
+    // Handed over once: by the app coming back, not again by the screen.
+    expect(handedOver().filter((id) => id === 'lunch-end')).toHaveLength(1);
     // Coming back asks nothing.
     expect(notices.requestNotificationPermission).toHaveBeenCalledTimes(1);
   } finally {
@@ -271,8 +279,7 @@ describe('reading what the phone allows again, with no punch', () => {
       await backToFront();
       expect(byId(r, 'lunch-no-notice')).toHaveLength(0);
       expect(shown(r)).toContain('Nothing to tap');
-      const handed = notices.scheduleLocal.mock.calls.flatMap(([reminders]) => reminders as { id: string }[]).map((x) => x.id);
-      expect(handed).toContain('lunch-end');
+      expect(handedOver().filter((id) => id === 'lunch-end')).toHaveLength(1);
       askedNothing();
     } finally {
       os.restore();
@@ -326,8 +333,7 @@ describe('reading what the phone allows again, with no punch', () => {
       notices.scheduleLocal.mockClear();
       await backToFront();
       expect(byId(r, 'on-time-notice')).toHaveLength(0);
-      const handed = notices.scheduleLocal.mock.calls.flatMap(([reminders]) => reminders as { id: string }[]).map((x) => x.id);
-      expect(handed).toContain('lunch-end');
+      expect(handedOver().filter((id) => id === 'lunch-end')).toHaveLength(1);
       askedNothing();
     } finally {
       os.restore();

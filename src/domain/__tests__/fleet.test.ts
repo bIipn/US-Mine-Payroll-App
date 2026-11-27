@@ -1,4 +1,4 @@
-import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitNumber, unitsCheckedOut, withoutUnit } from '../fleet';
+import { changedUnit, fleetOrder, meterUnitFor, newUnit, newUnitId, readMeter, unitNumber, unitReadingProblem, unitsCheckedOut, withoutUnit } from '../fleet';
 import type { Equipment, OperatingLog } from '../types';
 
 const loader: Equipment = { id: 'eq_a', unit: 'L-2', category: 'loader', make: 'Test', model: 'One', status: 'ready', meter: 4250.5, meterUnit: 'hrs' };
@@ -37,6 +37,16 @@ describe('adding a unit to the fleet', () => {
     });
     const made = newUnit(fleet, { unit: 'L-16', category: 'loader', make: 'Test', model: 'One', meter: 0 }, 'eq_new');
     expect(made.ok && made.unit.meter).toBe(0);
+  });
+
+  it('says how to type the hours with the decimal mark of the phone it is added on', () => {
+    // A phone that writes 12,5 for twelve and a half has a comma on its number pad and no point.
+    expect(unitReadingProblem('loader', ',')).toBe('Enter the equipment hours as a number, like 4250,5, or leave it blank.');
+    expect(unitReadingProblem('loader')).toBe(unitReadingProblem('loader', '.'));
+    expect(unitReadingProblem('light_vehicle', ',')).toBe(unitReadingProblem('light_vehicle'));
+    expect(newUnit(fleet, { unit: 'L-16', category: 'loader', make: 'Test', model: 'One', meter: -5 }, 'eq_new', ',')).toEqual({
+      ok: false, error: 'Enter the equipment hours as a number, like 4250,5, or leave it blank.',
+    });
   });
 
   it('takes a unit number as taken whatever its capitals or the spaces around it', () => {
@@ -110,6 +120,14 @@ describe('a reading as typed', () => {
   it('is not a reading when it is not a number a meter shows', () => {
     // A minus sign or a space between digits, as an Android number pad can type them: turned back, never 0.
     for (const typed of ['abc', '-5', '12 000', '12 hrs', '1e9', '4.2.1', '.', '99999999']) expect(readMeter(typed)).toBeUndefined();
+  });
+
+  it('reads it by the decimal mark of the phone it is typed on', () => {
+    expect(readMeter('4250,5', ',')).toBe(4250.5);
+    expect(readMeter('4.250,5', ',')).toBe(4250.5);
+    expect(readMeter('', ',')).toBe(0);
+    expect(readMeter('4250,5')).toBeUndefined();
+    for (const typed of ['-5', '12 5', '12,', '1,000.5']) expect(readMeter(typed, ',')).toBeUndefined();
   });
 });
 

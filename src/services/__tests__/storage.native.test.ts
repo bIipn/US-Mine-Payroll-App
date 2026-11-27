@@ -998,6 +998,8 @@ describe('the store, when the records on the phone cannot be read', () => {
     expect(store.getState().hydrated).toBe(true);
     expect(store.getState().mrfSeq).toBe(41);
     expect(store.getState().shutOffWhileSaving).toBe(false);
+    // A phone keeps its records on the phone: never only in memory, as a browser that blocks its storage does.
+    expect(store.getState().recordsInMemory).toBe(false);
   });
 
   it('a phone that lost power just after a save opens with a checkpoint before it, and says so until it is seen', async () => {

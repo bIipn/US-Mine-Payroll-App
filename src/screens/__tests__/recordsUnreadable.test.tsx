@@ -5,7 +5,7 @@
 const mockText = (words: string) => () => require('react').createElement(require('react-native').Text, null, words);
 jest.mock('../../navigation/RootNavigator', () => ({ RootNavigator: mockText('The app') }));
 jest.mock('../../services/connection', () => ({ watchConnection: () => () => undefined }));
-jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined }));
+jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined, watchReminders: () => () => undefined }));
 jest.mock('../../services/sync', () => {
   const { create } = require('zustand');
   return { startSync: () => () => undefined, useSyncStatus: create(() => ({ online: true, server: null, waiting: 0 })) };
@@ -95,7 +95,22 @@ describe('what to do next', () => {
     os = jest.replaceProperty(Platform, 'OS', 'android');
     useStore.setState({ hydrated: false, recordsUnreadable: true });
     await opened();
+    expect(shown()).toContain('The records on this phone could not be read');
     expect(shown()).toContain('Tap Try again. If they still cannot be read, close MineMuster and open it again, then tell your supervisor.');
+    expect(shown()).toContain('Do not delete the app or clear its storage: that deletes every record on this phone.');
+  });
+
+  it('in a browser, speaks of the browser and this tab, and not of deleting the app', async () => {
+    // There is no app to delete in a browser: clearing its cookies and site data is what would take the records.
+    os = jest.replaceProperty(Platform, 'OS', 'web');
+    useStore.setState({ hydrated: false, recordsUnreadable: true });
+    await opened();
+    expect(shown()).toContain('The records in this browser could not be read');
+    expect(shown()).toContain('Nothing has been deleted. MineMuster stays closed until they can be read, so nothing is saved over them.');
+    expect(shown()).toContain('Try again first. If they still cannot be read, close this tab and open MineMuster again, then tell your supervisor.');
+    expect(shown()).toContain('Do not clear this browser’s cookies or site data: that deletes every record in it.');
+    expect(shown()).not.toContain('delete the app');
+    expect(shown()).not.toContain('phone');
   });
 });
 

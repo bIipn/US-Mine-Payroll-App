@@ -91,6 +91,17 @@ describe('the toast says which way the file went', () => {
     expect(toast()).toEqual(['The PDF was not saved or sent.', 'info']);
     expect(mockSuccess).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
+
+    // Each file is named mid-sentence as it would be: Excel keeps its capital, the payroll hours file has none.
+    mockShowToast.mockReset();
+    await exportReport(excel, choose);
+    expect(toast()).toEqual(['The Excel file was not saved or sent.', 'info']);
+
+    mockShowToast.mockReset();
+    await exportCsv(csv(12), choose);
+    expect(toast()).toEqual(['The payroll hours file was not saved or sent.', 'info']);
+    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('says it could not be handed over, as before, when it failed', async () => {

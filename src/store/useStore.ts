@@ -8,8 +8,8 @@ import { clockBlocker, signOutBlockers, type Blocker } from '../domain/accountDe
 import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
-import { newUnit, unitsCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
-import { GALLONS_PROBLEM, isReading, READING_PROBLEM } from '../domain/reading';
+import { newUnit, newUnitId, unitsCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
+import { gallonsProblem, isReading, readingProblem } from '../domain/reading';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced, type SyncStatus } from '../domain/sync';
@@ -47,7 +47,8 @@ import type {
   ShiftEdit,
   SiteConfig,
 } from '../domain/types';
-import { passedOverNewer, recordsRead, recordStorage, watchUnsaved } from '../services/storage';
+import { decimalMark } from '../services/decimalMark';
+import { keptInMemory, passedOverNewer, recordsRead, recordStorage, watchUnsaved } from '../services/storage';
 import { fmtDate, fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
@@ -215,6 +216,13 @@ interface Actions {
    * (RecordsNotSavedFrame); never saved itself.
    */
   shutOffWhileSaving: boolean;
+  /**
+   * The browser would not let the app at its storage when the records were read (blocked storage, a sandboxed
+   * frame, a corrupted store), so they are kept only in the app's memory and go when the tab closes. Only on the
+   * web (storage.ts, keptInMemory); said on every screen in a build that keeps real records, not in the preview
+   * (RecordsNotSavedFrame); never saved itself.
+   */
+  recordsInMemory: boolean;
   toast: Toast | null;
   setHydrated: () => void;
   /** Read the records saved on this phone again, after they could not be read. */
@@ -598,6 +606,7 @@ export const useStore = create<Store>()(
         recordsUnreadable: false,
         recordsUnsaved: false,
         shutOffWhileSaving: false,
+        recordsInMemory: false,
         toast: null,
         setHydrated: () => set({ hydrated: true, recordsUnreadable: false }),
         readRecordsAgain: async () => {
@@ -998,9 +1007,10 @@ export const useStore = create<Store>()(
           );
           if (signed) return { ok: true, inspection: signed };
           // "Equp. hrs st" is a reading off the machine. Anything else would go on the card and into the fleet list,
-          // and so would gallons that are not a number: a minus sign an Android number pad let through, say.
-          if (!isReading(draft.meter)) return { ok: false, error: READING_PROBLEM };
-          if (draft.fuelGal != null && !isReading(draft.fuelGal)) return { ok: false, error: GALLONS_PROBLEM };
+          // and so would gallons that are not a number: a minus sign an Android number pad let through, say. Each
+          // is said with an example in the phone's own decimal mark, which its number pad types.
+          if (!isReading(draft.meter)) return { ok: false, error: readingProblem(decimalMark()) };
+          if (draft.fuelGal != null && !isReading(draft.fuelGal)) return { ok: false, error: gallonsProblem(decimalMark()) };
           const template = checklistFor(unit.category);
           // Nothing is signed with a line of the card left blank, or a Bad Order that does not say what is wrong.
           const { answers, blank } = signedAnswers(template, draft.answers);
@@ -1074,11 +1084,11 @@ export const useStore = create<Store>()(
           if (!log || log.endAt) return { ok: false, error: 'That unit has already been checked back in.' };
           // The reading and the gallons go on the day's card, the fleet list and the safety log: each must be a
           // number a meter shows, whatever a keyboard let through. Gallons left out are none.
-          if (!isReading(input.endMeter)) return { ok: false, error: READING_PROBLEM };
+          if (!isReading(input.endMeter)) return { ok: false, error: readingProblem(decimalMark()) };
           if (input.endMeter < log.startMeter) {
             return { ok: false, error: 'The ending meter cannot be lower than the starting meter.' };
           }
-          if (input.fuelGal != null && !isReading(input.fuelGal)) return { ok: false, error: GALLONS_PROBLEM };
+          if (input.fuelGal != null && !isReading(input.fuelGal)) return { ok: false, error: gallonsProblem(decimalMark()) };
           // A unit the company took out of the fleet while it was checked out here is kept in `gone`
           // only so its use can be ended: ending it lets the copy go.
           const kept = receiving?.gone[log.equipmentId];
@@ -1105,7 +1115,7 @@ export const useStore = create<Store>()(
           const location = input.location ? clean(input.location) : '';
           if (!input.equipmentId && !location) return { ok: false, error: 'Say where the problem is, or pick the unit it is on.' };
           // A reading on the request is off the machine, or there is none.
-          if (input.meter != null && !isReading(input.meter)) return { ok: false, error: READING_PROBLEM };
+          if (input.meter != null && !isReading(input.meter)) return { ok: false, error: readingProblem(decimalMark()) };
           const description = clean(input.description);
 
           // A request only points at what is really there: a unit in the fleet, a checklist made
@@ -1393,9 +1403,10 @@ export const useStore = create<Store>()(
           const shared = sharedProblem();
           if (shared) return shared;
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can change the fleet.' };
-          // What makes a unit number taken, and how a new unit starts, are the domain's (newUnit).
+          // What makes a unit number taken, and how a new unit starts, are the domain's (newUnit), and a reading
+          // it turns back is said in the phone's own decimal mark.
           const { equipment } = get();
-          const made = newUnit(equipment, input);
+          const made = newUnit(equipment, input, newUnitId(), decimalMark());
           if (!made.ok) return made;
           set({ equipment: [...equipment, made.unit] });
           return { ok: true };
@@ -1686,8 +1697,9 @@ export const useStore = create<Store>()(
           return;
         }
         recordsRead(RECORDS_NAME);
-        // A newer copy was torn by the phone shutting off while it saved, and an older one was read: said once.
-        useStore.setState({ shutOffWhileSaving: passedOverNewer(RECORDS_NAME) });
+        // A newer copy was torn by the phone shutting off while it saved, and an older one was read: said once. And a
+        // browser that would not let the app at its storage keeps the records in memory only: said while it does.
+        useStore.setState({ shutOffWhileSaving: passedOverNewer(RECORDS_NAME), recordsInMemory: keptInMemory(RECORDS_NAME) });
         state.readUnreadableAgain();
         state.setHydrated();
       },

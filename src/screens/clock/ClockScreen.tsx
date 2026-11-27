@@ -117,9 +117,11 @@ export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
    * and the Lunch reminders setting do): whether it will show it, and whether it comes at the minute. A person can
    * change either in the phone's settings at any time, with the app closed or in the background, so it is read on
    * a shift whenever the screen opens or comes back into view and whenever the app comes back to the front, as
-   * well as after a punch. With `resync`, once either has turned on since the last read, the reminders are handed
-   * to the phone again: none is handed over while notifications are off, and one handed over without Alarms &
-   * reminders can come late.
+   * well as after a punch. Coming back to the front, the app hands the reminders to the phone again by itself, on
+   * whatever screen is in front (`watchReminders`), so that read is for the warnings alone. With `resync` (the
+   * screen opened or back in view), once either has turned on since the last read, the reminders are handed to the
+   * phone again here too, for a change made while the app stayed in front: none is handed over while
+   * notifications are off, and one handed over without Alarms & reminders can come late.
    */
   const readNotices = async (resync: boolean) => {
     const ticket = ++reads.current;
@@ -139,7 +141,9 @@ export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
   const readOnReturn = useRef<() => void>(() => undefined);
   useEffect(() => {
     readOnReturn.current = () => {
-      if (focused && onShift) void readNotices(true);
+      // For the warnings only: the app hands the reminders over again itself (watchReminders). Read with another
+      // tab in front too, so that what was heard is current and opening this tab after does not hand them over twice.
+      if (onShift) void readNotices(false);
     };
   });
   // Opened, or back in view from another tab, on a shift.
@@ -254,14 +258,13 @@ export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
   };
 
   /**
-   * Opens the phone's Alarms & reminders setting. Once it is on, the reminders waiting are scheduled again, so the
-   * ones already handed to the phone come at the minute too.
+   * Opens the phone's Alarms & reminders setting. Coming back from it, the app hands the reminders waiting to the
+   * phone again by itself (`watchReminders`), so once it is on the ones already handed over come at the minute too.
    */
   const allowOnTime = async () => {
     const ok = await allowOnTimeNotices();
     setOnTime(ok);
     if (heard.current) heard.current = { ...heard.current, onTime: ok };
-    if (ok) await syncReminders(openShiftOf(useStore.getState().shifts, me.id, Date.now()), settings.lunchReminders, rules);
   };
   /** On a shift, with the lunch-over notice on, while the phone may still hold it back. */
   const askOnTime = !onTime && (notice ?? 'on') === 'on' && (status === 'on' || status === 'overdue' || status === 'lunch');

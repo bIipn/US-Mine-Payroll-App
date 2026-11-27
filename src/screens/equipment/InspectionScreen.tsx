@@ -7,9 +7,10 @@ import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, ProgressBar, Sheet, Tag, TopBar, Txt, TriChoice, UnitPlate } from '../../components/ui';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, FUEL_LINE } from '../../domain/templates';
-import { GALLONS_PROBLEM, parseReading, READING_PROBLEM } from '../../domain/reading';
+import { gallonsProblem, parseReading, readingProblem, readingText } from '../../domain/reading';
 import type { Answer, ChecklistItem, InspectionAnswer } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
+import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
@@ -30,13 +31,15 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
   const unit = opened.current;
   const allowAllOk = useStore((s) => s.settings.allowSectionAllOk);
   const { submitInspection, showToast } = useStore.getState();
+  // The phone's own decimal mark, which its number pad types, and the readings are read and written with.
+  const mark = useDecimalMark();
 
   const startedAt = useRef(Date.now()).current;
   const scroll = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const positions = useRef<Record<string, number>>({});
 
   const [draft, setDraft] = useState<Draft>({});
-  const [meter, setMeter] = useState(unit ? String(unit.meter) : '');
+  const [meter, setMeter] = useState(unit ? readingText(unit.meter, mark) : '');
   const [gallons, setGallons] = useState('');
   const [comments, setComments] = useState('');
   const [signing, setSigning] = useState(false);
@@ -63,9 +66,9 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
   }
   const miles = unit.meterUnit === 'mi';
   // Read as the store reads them (parseReading): left blank, gallons are none; a minus sign an Android number pad let through is no reading.
-  const meterValue = parseReading(meter) ?? Number.NaN;
+  const meterValue = parseReading(meter, mark) ?? Number.NaN;
   const meterOk = !Number.isNaN(meterValue);
-  const gallonsValue = parseReading(gallons);
+  const gallonsValue = parseReading(gallons, mark);
   const gallonsOk = gallonsValue === undefined || !Number.isNaN(gallonsValue);
   const missingNote = (i: ChecklistItem) => draft[i.id]?.answer === 'bo' && !draft[i.id]?.note?.trim();
   const firstProblem = items.find((i) => !draft[i.id] || missingNote(i));
@@ -165,7 +168,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
             hint={`Last reading ${fmtMeter(unit.meter)} ${unit.meterUnit}`}
             error={
               showMissing && !meterOk
-                ? READING_PROBLEM
+                ? readingProblem(mark)
                 : meterOk && meterValue < unit.meter
                   ? `That is lower than the last reading of ${fmtMeter(unit.meter)}. Check it before you sign.`
                   : null
@@ -235,7 +238,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
                   keyboardType="decimal-pad"
                   placeholder="0"
                   hint="Leave blank if you did not fuel. You can add it when you end use."
-                  error={showMissing && !gallonsOk ? GALLONS_PROBLEM : null}
+                  error={showMissing && !gallonsOk ? gallonsProblem(mark) : null}
                 />
               ) : null}
 

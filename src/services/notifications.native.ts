@@ -119,18 +119,28 @@ export async function cancelLocal(ids: string[]): Promise<void> {
   );
 }
 
-/** Hands the reminders to the phone, each replacing any of the same id already there. Never asks for notifications. */
+/** How far ahead a reminder must be for the phone to be handed it: one any sooner could be in the past by then. */
+const LEAD_MS = 1000;
+
+/**
+ * Hands the reminders to the phone, each replacing any of the same id already there. Never asks for notifications.
+ * Which go is decided once, before anything is taken off the phone: those at least a second ahead. One due within
+ * the second is left as the phone holds it, since it could not be handed over again in time and taking it off
+ * would lose it (the reminders are handed over again every time the app comes back to the front on a shift); one
+ * already past is taken off.
+ */
 export async function scheduleLocal(reminders: LocalReminder[]): Promise<void> {
   if (!reminders.length) return;
-  await cancelLocal(reminders.map((r) => r.id));
+  const now = Date.now();
+  const ahead = reminders.filter((r) => r.at > now + LEAD_MS);
+  await cancelLocal(reminders.filter((r) => r.at <= now || r.at > now + LEAD_MS).map((r) => r.id));
   await ensureChannels();
   try {
     if (!(await Notifications.getPermissionsAsync()).granted) return;
   } catch {
     return;
   }
-  for (const reminder of reminders) {
-    if (reminder.at <= Date.now() + 1000) continue;
+  for (const reminder of ahead) {
     try {
       await Notifications.scheduleNotificationAsync({
         identifier: reminder.id,

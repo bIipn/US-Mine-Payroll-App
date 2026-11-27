@@ -1,5 +1,5 @@
 import { uid } from '../util/hash';
-import { isReading, parseReading } from './reading';
+import { isReading, parseReading, type DecimalMark } from './reading';
 import { cleanText } from './roster';
 import { CATEGORY_ORDER } from './templates';
 import type { Equipment, EquipmentCategory, OperatingLog } from './types';
@@ -38,11 +38,14 @@ export const unitNumber = (typed: string) => cleanText(typed).toUpperCase();
 
 const NO_TYPE = 'Choose the type of equipment.';
 
-/** What to say of a new unit's reading that is not one: the odometer of a light vehicle, the equipment hours of anything else. */
-export function unitReadingProblem(category: EquipmentCategory): string {
+/**
+ * What to say of a new unit's reading that is not one: the odometer of a light vehicle, the equipment hours
+ * of anything else, with an example in the decimal mark of the phone it is typed on (`DecimalMark`).
+ */
+export function unitReadingProblem(category: EquipmentCategory, mark: DecimalMark = '.'): string {
   return meterUnitFor(category) === 'mi'
     ? 'Enter the odometer as a number of miles, like 61200, or leave it blank.'
-    : 'Enter the equipment hours as a number, like 4250.5, or leave it blank.';
+    : `Enter the equipment hours as a number, like 4250${mark}5, or leave it blank.`;
 }
 
 /**
@@ -50,14 +53,14 @@ export function unitReadingProblem(category: EquipmentCategory): string {
  * when a unit in the fleet has the same one, whatever its capitals. A new unit
  * starts ready, at the reading given, which must be one a meter shows (`isReading`):
  * one a keyboard let a minus sign into, or that could not be read, is turned back
- * and never made 0.
+ * and never made 0, in the words of the phone it was typed on (`mark`).
  */
-export function newUnit(fleet: readonly Equipment[], input: UnitInput, id: string = newUnitId()): UnitResult {
+export function newUnit(fleet: readonly Equipment[], input: UnitInput, id: string = newUnitId(), mark: DecimalMark = '.'): UnitResult {
   const name = unitNumber(input.unit);
   if (!name) return { ok: false, error: 'Enter a unit number.' };
   if (fleet.some((e) => e.unit.toUpperCase() === name)) return { ok: false, error: `Unit ${name} is already in the fleet.` };
   if (!CATEGORY_ORDER.includes(input.category)) return { ok: false, error: NO_TYPE };
-  if (!isReading(input.meter)) return { ok: false, error: unitReadingProblem(input.category) };
+  if (!isReading(input.meter)) return { ok: false, error: unitReadingProblem(input.category, mark) };
   return {
     ok: true,
     unit: {
@@ -116,11 +119,12 @@ export function unitsCheckedOut(
 }
 
 /**
- * A new unit's reading as typed (`parseReading`): "4,250.5" is 4250.5, and nothing
- * typed is 0. Undefined when it is not a number a meter shows: "-5" or "12 000".
+ * A new unit's reading as typed (`parseReading`), by the decimal mark of the phone
+ * it is typed on: "4,250.5" is 4250.5, or "4.250,5" where the mark is a comma, and
+ * nothing typed is 0. Undefined when it is not a number a meter shows: "-5" or "12 000".
  */
-export function readMeter(typed: string): number | undefined {
-  const n = parseReading(typed);
+export function readMeter(typed: string, mark: DecimalMark = '.'): number | undefined {
+  const n = parseReading(typed, mark);
   if (n === undefined) return 0;
   return Number.isNaN(n) ? undefined : n;
 }
