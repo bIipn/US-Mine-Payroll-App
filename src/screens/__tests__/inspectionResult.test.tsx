@@ -2,7 +2,9 @@
 // request is filled out and, after a defect, where the person says whether they run the unit or park it. On
 // iPhone its buttons are the only way off it: the screen has no back gesture. On Android the back button and
 // the back gesture must not skip what is still owed there either: they say what is left to do instead, work
-// as ever on the maintenance request opened on top of it, and work again once nothing is owed. For anyone
+// as ever on the maintenance request opened on top of it, and work again once nothing is owed, or once no
+// request could be made from it. A later checklist that finds what the person's own request, still open,
+// already says goes on that request when it is sent, and the screen goes on as after a send. For anyone
 // who left the screen before (an older version, the app closed), the checklist itself offers the request.
 // Android's handling of a back press is played here as React Native's BackHandler does it on Android: the
 // listener added last is asked first, until one says it dealt with the press. Everyone and everything here
@@ -33,6 +35,7 @@ const { createNativeStackNavigator } = require('@react-navigation/native-stack')
 const { SafeAreaProvider } = require('react-native-safe-area-context') as typeof import('react-native-safe-area-context');
 const { InspectionResultScreen } = require('../equipment/InspectionResultScreen') as typeof import('../equipment/InspectionResultScreen');
 const { InspectionDetailScreen } = require('../equipment/InspectionDetailScreen') as typeof import('../equipment/InspectionDetailScreen');
+const { MrfFormScreen } = require('../equipment/MrfFormScreen') as typeof import('../equipment/MrfFormScreen');
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const { CHECKLIST_ID } = require('../../domain/templates') as typeof import('../../domain/templates');
 const { space } = require('../../theme/theme') as typeof import('../../theme/theme');
@@ -88,8 +91,8 @@ function checklist(result: Inspection['result'], more: Partial<Inspection> = {})
   };
 }
 
-/** Lee's own phone, Lee signed in, with Lee's checklist on record. Kim is a supervisor. */
-function leesPhone(inspection: Inspection, more: { equipment?: Equipment[]; signedIn?: 'emp-lee' | 'emp-kim' } = {}) {
+/** Lee's own phone, Lee signed in, with Lee's checklist on record, after any `earlier` ones. Kim is a supervisor. */
+function leesPhone(inspection: Inspection, more: { equipment?: Equipment[]; signedIn?: 'emp-lee' | 'emp-kim'; earlier?: Inspection[] } = {}) {
   useStore.getState().ensureSeeded();
   const who = more.signedIn ?? 'emp-lee';
   useStore.setState({
@@ -100,7 +103,7 @@ function leesPhone(inspection: Inspection, more: { equipment?: Equipment[]; sign
     accounts: [{ id: `acct-${who}`, employeeId: who, email: '', provider: 'company', createdAt: 1 }],
     session: { accountId: `acct-${who}`, employeeId: who },
     equipment: more.equipment ?? [L5],
-    inspections: [inspection],
+    inspections: [...(more.earlier ?? []), inspection],
     mrfs: [],
     opLogs: [],
     toast: null,
@@ -124,9 +127,10 @@ afterEach(async () => {
 
 /**
  * The app's stack with the screen under test opened over the tabs, as a signed checklist opens its result,
- * on a phone whose navigation bar takes `bottom` at the foot of the screen.
+ * on a phone whose navigation bar takes `bottom` at the foot of the screen. The maintenance request form is
+ * a stand-in, or the real one.
  */
-async function opened(screen: 'InspectionResult' | 'InspectionDetail', inspectionId: string, bottom = 0) {
+async function opened(screen: 'InspectionResult' | 'InspectionDetail', inspectionId: string, bottom = 0, form: 'stand-in' | 'real' = 'stand-in') {
   const ref = nav.createNavigationContainerRef<RootStackParamList>();
   root = createRoot();
   const r = root;
@@ -145,7 +149,7 @@ async function opened(screen: 'InspectionResult' | 'InspectionDetail', inspectio
             h(Stack.Screen, { name: 'Main', component: standIn('Main') }),
             h(Stack.Screen, { name: 'InspectionResult', component: InspectionResultScreen }),
             h(Stack.Screen, { name: 'InspectionDetail', component: InspectionDetailScreen }),
-            h(Stack.Screen, { name: 'MrfForm', component: standIn('MrfForm') }),
+            h(Stack.Screen, { name: 'MrfForm', component: form === 'real' ? MrfFormScreen : standIn('MrfForm') }),
             h(Stack.Screen, { name: 'MrfDetail', component: standIn('MrfDetail') }),
             h(Stack.Screen, { name: 'ChecklistCard', component: standIn('ChecklistCard') }),
           ),
@@ -158,6 +162,8 @@ async function opened(screen: 'InspectionResult' | 'InspectionDetail', inspectio
 }
 
 const byId = (id: string) => root!.container.queryAll((n) => n.props.testID === id);
+/** Whether these words are on the screen, as one line of text. */
+const shown = (words: string) => root!.container.queryAll((n) => n.props.children === words).length > 0;
 /** A prop of the nearest component around a view that has it. */
 function propOf(n: Node, prop: string): unknown {
   let fiber = n.unstable_fiber as Fiber;
@@ -238,11 +244,77 @@ describe('Android’s back button on the result of a checklist', () => {
     expect(listeners.length).toBe(before + 1);
   });
 
+  it('never holds the screen for a request the store would turn back, whatever the reason', async () => {
+    leesPhone(checklist('bad_order'));
+    // A reason of the store's own, beyond the ones this screen can see for itself.
+    const store = require('../../store/useStore') as typeof import('../../store/useStore');
+    const turnedBack = jest.spyOn(store, 'requestTargetProblem').mockReturnValue('That checklist is not on record for this unit.');
+    try {
+      const { here } = await opened('InspectionResult', 'insp-bad_order');
+      expect(byId('result-bad_order')).not.toHaveLength(0);
+      expect(await pressBack()).toBe(true);
+      expect(here()).toBe('Main');
+      expect(useStore.getState().toast).toBeNull();
+    } finally {
+      turnedBack.mockRestore();
+    }
+  });
+
   it('never holds a screen that shows nothing: the unit was taken out of the fleet meanwhile', async () => {
     leesPhone(checklist('bad_order'), { equipment: [] });
     const { here } = await opened('InspectionResult', 'insp-bad_order');
     expect(byId('result-bad_order')).toHaveLength(0);
     expect(await pressBack()).toBe(true);
+    expect(here()).toBe('Main');
+  });
+});
+
+describe('a second checklist with the same Bad Order while the first request is still open', () => {
+  /** The work light out: not a line that takes the unit out of service, so the unit can be checked again. */
+  const light = { itemId: 'lights', answer: 'bo' as const, note: 'Left work light out' };
+
+  it('goes on the request that is in, says so, and lets the person off the result screen', async () => {
+    const now = Date.now();
+    const yesterday = checklist('defect', { id: 'insp-yesterday', answers: [light], startedAt: now - 86_400_000, submittedAt: now - 86_000_000 });
+    leesPhone(checklist('defect', { answers: [light] }), { earlier: [yesterday] });
+    const { ref, here } = await opened('InspectionResult', 'insp-yesterday', 0, 'real');
+
+    // Yesterday: the request is sent from its form, and Lee parks the unit.
+    await tap('send-mrf');
+    expect(here()).toBe('MrfForm');
+    await tap('mrf-submit');
+    expect(here()).toBe('InspectionResult');
+    const [first] = useStore.getState().mrfs;
+    expect(first).toMatchObject({ inspectionId: 'insp-yesterday', description: 'Lights: Left work light out', status: 'open' });
+    expect(shown(`Maintenance request #${first!.number} sent`)).toBe(true);
+    await tap('decide-park');
+    expect(here()).toBe('Main');
+
+    // Today: the same light, the same note. The request is owed, so back stays.
+    await act(async () => ref.navigate('InspectionResult', { inspectionId: 'insp-defect' }));
+    expect(await pressBack()).toBe(true);
+    expect(useStore.getState().toast).toMatchObject({ message: 'Fill out the maintenance request first', tone: 'warn' });
+
+    // Its form is filled with the same words. Send puts this checklist on the request that is in.
+    await tap('send-mrf');
+    expect(here()).toBe('MrfForm');
+    await tap('mrf-submit');
+    expect(here()).toBe('InspectionResult');
+    expect(useStore.getState().mrfs).toHaveLength(1);
+    expect(useStore.getState().inspections.find((i) => i.id === 'insp-defect')?.mrfId).toBe(first!.id);
+    const words = `What you found is on maintenance request #${first!.number} already`;
+    expect(useStore.getState().toast).toMatchObject({ message: words });
+    expect(shown(words)).toBe(true);
+    expect(shown(`Maintenance request #${first!.number} sent`)).toBe(false);
+    expect(byId('send-mrf')).toHaveLength(0);
+
+    // What is left is said as after a send, and the choice's buttons take Lee off the screen.
+    expect(await pressBack()).toBe(true);
+    expect(here()).toBe('InspectionResult');
+    expect(useStore.getState().toast).toMatchObject({ message: 'Say whether you run it or park it', tone: 'warn' });
+    expect(byId('decide-operate')).not.toHaveLength(0);
+    await tap('decide-park');
+    expect(useStore.getState().inspections.find((i) => i.id === 'insp-defect')?.decision).toBe('parked');
     expect(here()).toBe('Main');
   });
 });

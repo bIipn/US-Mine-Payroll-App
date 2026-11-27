@@ -4,15 +4,15 @@ import { StyleSheet, View } from 'react-native';
 
 import { Button, Divider, Field, IconButton, Notice, Page, Panel, Row, Segmented, Sheet, Toggle, Txt, UnitPlate } from '../../components/ui';
 import { examFindings, ON_THE_SHEET } from '../../domain/areaExam';
-import { parseReading, readingProblem, readingText } from '../../domain/reading';
+import { meterText, parseReading, readingProblem, readingText } from '../../domain/reading';
 import { CATEGORY_LABEL } from '../../domain/templates';
 import type { MrfPriority } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
-import { inspectionHasHazard, mrfItemsFromInspection, useMe, useStore } from '../../store/useStore';
+import { alreadyOnRequest, inspectionHasHazard, mrfItemsFromInspection, useMe, useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
-import { fmtDateTime, fmtMeter, fullName } from '../../util/format';
+import { fmtDateTime, fullName } from '../../util/format';
 
 /**
  * Maintenance Request, in the order of the paper form: by, date, location and
@@ -85,7 +85,12 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
     }
     sent.current = true;
     haptic.success();
-    showToast(`Maintenance request #${result.mrf.number} sent`);
+    // A checklist that found what the person's own request, still open, already says goes on that request.
+    showToast(
+      inspection && result.mrf.inspectionId !== inspection.id
+        ? alreadyOnRequest(result.mrf.number)
+        : `Maintenance request #${result.mrf.number} sent`,
+    );
     if (inspection || finding) navigation.goBack();
     else navigation.replace('MrfDetail', { mrfId: result.mrf.id });
   };
@@ -104,7 +109,8 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
             <UnitPlate unit={unit.unit} size="lg" />
             <View style={{ flex: 1 }}>
               <Txt v="strong">{unit.make} {unit.model}</Txt>
-              <Txt v="small" c={color.silica}>{CATEGORY_LABEL[unit.category]}, {fmtMeter(unit.meter)} {unit.meterUnit}</Txt>
+              {/* The unit's reading as the box below has it, with the phone's mark. */}
+              <Txt v="small" c={color.silica}>{CATEGORY_LABEL[unit.category]}, {meterText(unit.meter, mark)} {unit.meterUnit}</Txt>
             </View>
             {!inspection ? (
               <IconButton

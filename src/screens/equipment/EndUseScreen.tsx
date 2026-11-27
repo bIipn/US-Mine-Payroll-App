@@ -4,13 +4,13 @@ import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, Page, Panel, Txt, UnitPlate } from '../../components/ui';
-import { gallonsProblem, parseReading, readingProblem } from '../../domain/reading';
+import { gallonsProblem, meterText, parseReading, readingProblem } from '../../domain/reading';
 import type { ScreenProps } from '../../navigation/types';
 import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
-import { fmtDur, fmtMeter, fmtTime } from '../../util/format';
+import { fmtDur, fmtTime } from '../../util/format';
 import { useNow } from '../../util/hooks';
 
 /** End use of a unit: its hours at the end, the gallons added, and how it was left. */
@@ -84,7 +84,7 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
           <View style={{ flex: 1 }}>
             <Txt v="strong">Checked out at {fmtTime(log.startAt)}</Txt>
             <Txt v="small" c={color.silica}>
-              {fmtDur(now - log.startAt)} ago, {unit.meterUnit === 'mi' ? 'odometer' : 'equipment hours'} {fmtMeter(log.startMeter)} at the start
+              {fmtDur(now - log.startAt)} ago, {unit.meterUnit === 'mi' ? 'odometer' : 'equipment hours'} {meterText(log.startMeter, mark)} at the start
             </Txt>
           </View>
         </View>
@@ -96,9 +96,10 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
         value={meter}
         onChangeText={(text) => { setMeter(text); setError(null); }}
         keyboardType="decimal-pad"
-        placeholder={fmtMeter(log.startMeter)}
+        // The readings beside the box are written with the phone's mark, as the box reads them.
+        placeholder={meterText(log.startMeter, mark)}
         error={error}
-        hint={used != null && used >= 0 ? `${fmtMeter(used)} ${unit.meterUnit} this use` : `Started at ${fmtMeter(log.startMeter)}`}
+        hint={used != null && used >= 0 ? `${meterText(used, mark)} ${unit.meterUnit} this use` : `Started at ${meterText(log.startMeter, mark)}`}
       />
       <Field
         testID="end-fuel"

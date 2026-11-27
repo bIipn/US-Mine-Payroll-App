@@ -4,14 +4,14 @@ import { Platform, StyleSheet, View } from 'react-native';
 import { CompanyLogoPlate } from '../../components/Brand';
 import { Check } from '../../components/icons';
 import { Button, Chips, Divider, Field, Panel, Page, Row, Sheet, Toggle, Txt } from '../../components/ui';
-import { checkCompany, keepsTime, stateName, STATES } from '../../domain/company';
+import { checkCompany, stateName, STATES } from '../../domain/company';
 import { BANK, CODE_ROWS, companyFromDraft, draftOf, OFTEN, PAID_BY, paidByOf, scheduleOf, type CompanyDraft, type Often, type PaidBy } from '../../domain/companyForm';
 import { checkPaySchedule, describePaySchedule, nextPayday, type IfBankClosed } from '../../domain/payPeriod';
 import { rulesFor } from '../../domain/stateRules';
 import { mealSummary, overtimeSummary } from '../../domain/time';
 import type { ScreenProps } from '../../navigation/types';
 import { syncReminders } from '../../services/reminders';
-import { openShiftOf, useStore } from '../../store/useStore';
+import { useStore } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtDate } from '../../util/format';
 
@@ -57,11 +57,9 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
       setError(result.error);
       return;
     }
-    // The lunch reminders already waiting on this phone follow the state, so bring them in line with the new one.
-    const { shifts, session, settings } = useStore.getState();
-    // With no time clock there is no lunch to remind anyone of.
-    const shift = keepsTime(next) ? openShiftOf(shifts, session?.employeeId ?? '', Date.now()) : undefined;
-    if (session) void syncReminders(shift, settings.lunchReminders, rulesFor(next.state));
+    // The lunch reminders already waiting on this phone follow the state, so bring them in line with the new one
+    // (with no time clock there is no lunch to remind anyone of).
+    void syncReminders();
     showToast('Company details saved.');
     navigation.goBack();
   };

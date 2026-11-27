@@ -412,7 +412,13 @@ const DEADLINE_IDS = ['lunch-60', 'lunch-30', 'lunch-15', 'lunch-0'];
  *   on the clock, no lunch yet  -> the lunch-deadline reminders, if the person has them turned on
  *   at lunch                    -> the lunch-is-over notice, always: it is how they
  *                                  learn they are back on the clock
- *   lunch done or off the clock -> nothing
+ *   lunch done, still on shift  -> nothing more, and the lunch-is-over notice is left on the phone
+ *   off the clock               -> nothing, and everything is taken off
+ *
+ * Once a lunch's end has come, the phone has either shown its notice or is holding it back to save battery
+ * (Android, without Alarms & reminders), and then it must still come, so while the shift is open nothing takes it
+ * off: not an app opened just after lunch ended, a punch, nor the Lunch reminders setting. A clock-out does, since
+ * a notice that the person is back on the clock would come after they had left it.
  */
 export function reminderPlan(
   shift: Shift | undefined,
@@ -426,7 +432,8 @@ export function reminderPlan(
   if (current && now < lunchEndAt(current)) {
     return { schedule: [lunchOverReminder(lunchEndAt(current))], cancel: DEADLINE_IDS };
   }
-  if (current || !remindersOn) return nothing;
+  if (current) return { schedule: [], cancel: DEADLINE_IDS };
+  if (!remindersOn) return nothing;
   const schedule = lunchReminders(shift.clockIn.at, rules);
   // Where the state sets no deadline there is nothing to schedule, so clear any a phone still holds
   // from before the company's state changed: scheduling never replaces what is not scheduled again.

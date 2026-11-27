@@ -9,7 +9,7 @@ import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, newUnitId, unitsCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
-import { gallonsProblem, isReading, readingProblem } from '../domain/reading';
+import { gallonsProblem, isReading, leaveHoursProblem, rateProblem, readingProblem, timeSpentProblem } from '../domain/reading';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced, type SyncStatus } from '../domain/sync';
@@ -48,7 +48,7 @@ import type {
   SiteConfig,
 } from '../domain/types';
 import { decimalMark } from '../services/decimalMark';
-import { keptInMemory, passedOverNewer, recordsRead, recordStorage, watchUnsaved } from '../services/storage';
+import { forgetCopies, inAnotherTab, keptInMemory, passedOverNewer, recordsRead, recordStorage, takeRecords, watchOtherTabs, watchUnsaved } from '../services/storage';
 import { fmtDate, fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
@@ -223,6 +223,13 @@ interface Actions {
    * (RecordsNotSavedFrame); never saved itself.
    */
   recordsInMemory: boolean;
+  /**
+   * MineMuster is open in another tab of this browser, and that tab saves the records (storage.ts, recordsTab.ts):
+   * this one saves nothing, and what it shows may be older than what the other has saved. Said over every screen,
+   * in place of the app, until the person uses this tab instead (`takeRecordsHere`) or the other tab closes; then it
+   * reads them again. Only on the web; never saved itself.
+   */
+  recordsElsewhere: boolean;
   toast: Toast | null;
   setHydrated: () => void;
   /** Read the records saved on this phone again, after they could not be read. */
@@ -231,6 +238,11 @@ interface Actions {
   saveRecordsAgain: () => void;
   /** The person has seen that the phone shut off while saving. */
   dismissShutOffNotice: () => void;
+  /**
+   * Use this tab: take the records from the other tab of the browser that saves them, read them again, and save
+   * them from here on. The other tab then saves nothing, and says so. Resolves once they have been read again.
+   */
+  takeRecordsHere: () => Promise<void>;
   showToast: (message: string, tone?: ToastTone) => void;
   clearToast: () => void;
 
@@ -426,6 +438,31 @@ export function openLogs(opLogs: OperatingLog[]): Map<string, OperatingLog> {
   return map;
 }
 
+/** How urgent a maintenance request is, to tell whether a second one asks for more than the first. */
+const URGENCY: Record<MrfPriority, number> = { routine: 0, high: 1, safety: 2 };
+
+/**
+ * Why no maintenance request can be made for this unit and checklist, whatever is typed on the form, in the
+ * words createMrf turns one back with; undefined when one can be. A request points only at what is really
+ * there: a unit in the fleet, and a checklist made on that unit with no request yet. createMrf asks this
+ * itself, and a checklist's result screen holds Android's back button for a request only while this finds
+ * nothing, so it never waits on one the store would turn back.
+ */
+export function requestTargetProblem(
+  data: Pick<Store, 'session' | 'equipment' | 'inspections' | 'mrfs'>,
+  target: { equipmentId?: string; inspectionId?: string },
+): string | undefined {
+  if (!data.session) return 'You are signed out.';
+  if (target.equipmentId && !data.equipment.some((e) => e.id === target.equipmentId)) return 'That unit is no longer in the fleet list.';
+  if (target.inspectionId) {
+    const checklist = data.inspections.find((i) => i.id === target.inspectionId);
+    if (!checklist || checklist.equipmentId !== target.equipmentId) return 'That checklist is not on record for this unit.';
+    const sent = data.mrfs.find((m) => m.id === checklist.mrfId);
+    if (sent) return `Maintenance request #${sent.number} is already in for this checklist.`;
+  }
+  return undefined;
+}
+
 function statusFromMrfs(equipmentId: string, mrfs: Mrf[]): EquipmentStatus {
   const open = mrfs.filter((m) => m.equipmentId === equipmentId && m.status !== 'completed');
   if (open.some((m) => m.taggedOut)) return 'out_of_service';
@@ -607,6 +644,7 @@ export const useStore = create<Store>()(
         recordsUnsaved: false,
         shutOffWhileSaving: false,
         recordsInMemory: false,
+        recordsElsewhere: false,
         toast: null,
         setHydrated: () => set({ hydrated: true, recordsUnreadable: false }),
         readRecordsAgain: async () => {
@@ -615,6 +653,8 @@ export const useStore = create<Store>()(
         // Any change to the store saves all of it; this one changes nothing else.
         saveRecordsAgain: () => set({}),
         dismissShutOffNotice: () => set({ shutOffWhileSaving: false }),
+        // The records are read again once this tab has them (watchOtherTabs, below), and that is waited for.
+        takeRecordsHere: () => takeRecords(RECORDS_NAME),
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
         clearToast: () => set({ toast: null }),
 
@@ -634,6 +674,10 @@ export const useStore = create<Store>()(
           if (roster !== employees || named !== areaSheets) set({ employees: roster, areaSheets: named });
         },
         resetDemo: (owner = ROSTER_OWNER, sheets = AREA_SHEETS, people = ROSTER, samples = SAMPLE_CREW) => {
+          // Every way of emptying the phone comes here (clearDevice, forgetPhone, deleteMyAccount with clearPhone). The
+          // copies of the records kept from before go once the save that empties it has settled, and none is read
+          // again meanwhile (storage.native.ts).
+          forgetCopies(RECORDS_NAME, 'clear');
           if (!DEMO_MODE) {
             // A build that keeps real records starts the way a fresh install does: nothing in it but the build's own.
             set({ ...initialData(), seededAt: null });
@@ -713,6 +757,9 @@ export const useStore = create<Store>()(
           }
           const rates = { ...payRates };
           delete rates[session.employeeId];
+          // The account and the hourly rate are said to be deleted: the older copies of the records that hold them go
+          // once this save has settled (storage.native.ts).
+          forgetCopies(RECORDS_NAME, 'drop');
           set({ accounts: others, session: null, payRates: rates });
           return { ok: true, cleared: false };
         },
@@ -730,6 +777,7 @@ export const useStore = create<Store>()(
           if (employee && !offTheRosterHere(employee, !!get().connectedCompany, get().receiving)) return { ok: false, error: 'Sign in, then delete your account on More.' };
           const rates = { ...payRates };
           delete rates[account.employeeId];
+          forgetCopies(RECORDS_NAME, 'drop');
           set({ accounts: accounts.filter((a) => a.id !== account.id), payRates: rates, ...(session?.accountId === account.id ? { session: null } : null) });
           return { ok: true };
         },
@@ -1120,17 +1168,8 @@ export const useStore = create<Store>()(
 
           // A request only points at what is really there: a unit in the fleet, a checklist made
           // on that unit, a Bad Order on an exam that is still open. And one request for each.
-          if (input.equipmentId && !equipment.some((e) => e.id === input.equipmentId)) {
-            return { ok: false, error: 'That unit is no longer in the fleet list.' };
-          }
-          if (input.inspectionId) {
-            const checklist = inspections.find((i) => i.id === input.inspectionId);
-            if (!checklist || checklist.equipmentId !== input.equipmentId) {
-              return { ok: false, error: 'That checklist is not on record for this unit.' };
-            }
-            const sent = mrfs.find((m) => m.id === checklist.mrfId);
-            if (sent) return { ok: false, error: `Maintenance request #${sent.number} is already in for this checklist.` };
-          }
+          const target = requestTargetProblem({ session, equipment, inspections, mrfs }, input);
+          if (target) return { ok: false, error: target };
           if (input.examId || input.findingKey) {
             const exam = exams.find((x) => x.id === input.examId);
             const finding = exam ? examFindings(exam).find((f) => f.key === input.findingKey) : undefined;
@@ -1140,15 +1179,25 @@ export const useStore = create<Store>()(
             if (sent) return { ok: false, error: `Maintenance request #${sent.number} is already in for this.` };
           }
           // The same words about the same place from the same person, while the first is still
-          // open, is a second tap on the button and not a second problem.
+          // open and asks for as much, is a second tap on the button and not a second problem. One
+          // that asks for more (a red tag, or more urgency) is a request of its own, so that is not lost.
           const twin = mrfs.find(
             (m) =>
               m.status !== 'completed' &&
               m.requestedBy === session.employeeId &&
               m.equipmentId === input.equipmentId &&
               (m.location ?? '') === location &&
-              m.description === description,
+              m.description === description &&
+              (m.taggedOut || !input.taggedOut) &&
+              URGENCY[m.priority] >= URGENCY[input.priority],
           );
+          // A later checklist that found it again goes on that request, as a request sent from it would:
+          // it is a record of its own, and keeps its answers. Its result screen then goes on as after a
+          // send, rather than waiting on a request the store would never take.
+          if (twin && input.inspectionId && !input.examId && !input.findingKey) {
+            set({ inspections: inspections.map((i) => (i.id === input.inspectionId ? { ...i, mrfId: twin.id } : i)) });
+            return { ok: true, mrf: twin };
+          }
           if (twin) return { ok: false, error: `That request is already in: #${twin.number}.` };
 
           const now = Date.now();
@@ -1227,7 +1276,7 @@ export const useStore = create<Store>()(
           const done = clean(remarks);
           if (!done) return { ok: false, error: 'Say what was done. The remarks are the repair record.' };
           if (timeSpent != null && !(Number.isFinite(timeSpent) && timeSpent > 0 && timeSpent <= 100_000)) {
-            return { ok: false, error: 'Enter the time spent in hours, like 1.5.' };
+            return { ok: false, error: timeSpentProblem(decimalMark()) };
           }
           const now = Date.now();
           const all = mrfs.map((m): Mrf =>
@@ -1639,7 +1688,7 @@ export const useStore = create<Store>()(
           if (!isSupervisor()) return { ok: false, error: 'Only a supervisor can record paid leave.' };
           if (!employees.some((e) => e.id === employeeId)) return { ok: false, error: 'That person is not on the roster.' };
           if (!Number.isFinite(hours) || hours <= 0 || hours > 2400) {
-            return { ok: false, error: 'Enter the hours for that day, between 0.25 and 24.' };
+            return { ok: false, error: leaveHoursProblem(decimalMark()) };
           }
           set({
             leave: [...leave, {
@@ -1671,7 +1720,7 @@ export const useStore = create<Store>()(
             delete next[session.employeeId];
           } else {
             if (!Number.isFinite(cents) || cents < 1 || cents > 100_000) {
-              return { ok: false, error: 'Enter your hourly rate in dollars, like 24.00.' };
+              return { ok: false, error: rateProblem(decimalMark()) };
             }
             next[session.employeeId] = Math.round(cents);
           }
@@ -1693,13 +1742,18 @@ export const useStore = create<Store>()(
           // What is saved on the phone could not be read, or did not make sense. Opening as a new phone would hide
           // the records, and its first save would put an empty phone's in their place: the app says so instead, and
           // recordStorage writes nothing over them until they have been read.
-          useStore.setState({ recordsUnreadable: true });
+          useStore.setState({ recordsUnreadable: true, recordsElsewhere: inAnotherTab(RECORDS_NAME) });
           return;
         }
         recordsRead(RECORDS_NAME);
         // A newer copy was torn by the phone shutting off while it saved, and an older one was read: said once. And a
         // browser that would not let the app at its storage keeps the records in memory only: said while it does.
-        useStore.setState({ shutOffWhileSaving: passedOverNewer(RECORDS_NAME), recordsInMemory: keptInMemory(RECORDS_NAME) });
+        // And in a browser, another tab that saves them means this one saves nothing: said while it does not.
+        useStore.setState({
+          shutOffWhileSaving: passedOverNewer(RECORDS_NAME),
+          recordsInMemory: keptInMemory(RECORDS_NAME),
+          recordsElsewhere: inAnotherTab(RECORDS_NAME),
+        });
         state.readUnreadableAgain();
         state.setHydrated();
       },
@@ -1711,6 +1765,18 @@ export const useStore = create<Store>()(
 // changes; setting it saves the records again, which is one more try, and no more is told unless that changes it.
 watchUnsaved((unsaved) => {
   if (useStore.getState().recordsUnsaved !== unsaved) useStore.setState({ recordsUnsaved: unsaved });
+});
+
+// In a browser, another tab that takes the records stops this one saving them, and that is said until this tab has
+// them again: by Use this tab, or once the other tab closes. What this one has in memory may then be older than what
+// the other saved, so it reads them again before it saves anything (onRehydrateStorage says whether it now does).
+watchOtherTabs((key, here) => {
+  if (key !== RECORDS_NAME) return undefined;
+  if (!here) {
+    if (!useStore.getState().recordsElsewhere) useStore.setState({ recordsElsewhere: true });
+    return undefined;
+  }
+  return useStore.persist.rehydrate();
 });
 
 // ---- Lookups used across screens ---------------------------------------------------------
@@ -1748,6 +1814,11 @@ export function mrfItemsFromInspection(inspection: Inspection, equipment: Equipm
       const item = findItem(checklist, a.itemId);
       return { label: item?.label ?? a.itemId, note: a.note, cfr: item?.cfr };
     });
+}
+
+/** What is said when a checklist goes on the person's own open request that already says what it found. */
+export function alreadyOnRequest(number: number): string {
+  return `What you found is on maintenance request #${number} already`;
 }
 
 export function inspectionHasHazard(inspection: Inspection, equipment: Equipment): boolean {

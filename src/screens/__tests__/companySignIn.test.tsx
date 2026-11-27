@@ -97,6 +97,9 @@ const React: typeof import('react') = require('react');
 const { Platform } = require('react-native') as { Platform: typeof PlatformType };
 const { createRoot } = require('test-renderer') as { createRoot: () => Root };
 const nav = require('@react-navigation/native') as typeof import('@react-navigation/native');
+/** A screen drawn alone, as the one in front of a navigator would be: focused, and told of no change. */
+const alone = (screen: React.ReactElement) =>
+  React.createElement(nav.NavigationContext.Provider, { value: { isFocused: () => true, addListener: () => () => undefined } as never }, screen);
 const { RootNavigator } = require('../../navigation/RootNavigator') as typeof import('../../navigation/RootNavigator');
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const { revOf } = require('../../domain/sync') as typeof import('../../domain/sync');
@@ -942,7 +945,7 @@ describe('the top of the sign-in screens', () => {
     useStore.getState().resetDemo();
     root = createRoot();
     const r = root;
-    await act(async () => r.render(React.createElement(AuthScreen)));
+    await act(async () => r.render(alone(React.createElement(AuthScreen))));
     expect(shown()).toContain('Clock in. Check your machine. Get paid right.');
     expect(shown()).toContain('Time, checklists and maintenance requests for the crew.');
     await companyIs({ name: 'Test Pit A', state: 'NV', pay: null, timeClock: false });
@@ -961,7 +964,7 @@ describe('on the web', () => {
       root = createRoot();
       const r = root;
       await act(async () => {
-        r.render(React.createElement(CompanySignInScreen, { navigation: { navigate: jest.fn() }, route: { key: 'CompanySignIn', name: 'CompanySignIn' } } as never));
+        r.render(alone(React.createElement(CompanySignInScreen, { navigation: { navigate: jest.fn() }, route: { key: 'CompanySignIn', name: 'CompanySignIn' } } as never)));
       });
       await settle();
       expect(byId('crew-code')).toHaveLength(0);

@@ -7,7 +7,7 @@ import { keepsTime } from '../domain/company';
 import { useStore } from '../store/useStore';
 import { color, space } from '../theme/theme';
 import { TriangleAlert } from './icons';
-import { Button, Notice } from './ui';
+import { Button, Notice, Txt } from './ui';
 
 /** How often the app saves the records again while a save could not be written. */
 export const SAVE_AGAIN_MS = 15_000;
@@ -49,8 +49,15 @@ function unsavedWords(): { title: string; body: string } {
  * - once the phone has opened on an older copy of the records because it shut off while saving the newest
  *   (`shutOffWhileSaving`: a power cut, a forced restart), a notice of what to check, until the person taps OK.
  *
+ * And in a browser, while another tab of MineMuster saves the records (`recordsElsewhere`: storage.ts), this tab
+ * saves nothing, and what it shows may be older than what that tab saved: the app is hidden, so nothing in it can be
+ * seen, tapped or reached from the keyboard, and in its place the notice says so, with Use this tab, which takes the
+ * records, reads them again and shows the app once they have been. Nothing done here is dropped while it looks saved:
+ * nothing can be done.
+ *
  * The screens are told their top is the bottom of the notices, so nothing is hidden under them. As with
- * SignalFrame, the tree is the same with the notices or without, so nothing on screen resets.
+ * SignalFrame, the tree is the same with the notices or without, so nothing on screen resets: hidden, the app is
+ * still there, and comes back as it was.
  */
 export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }) {
   const unsaved = useStore((s) => s.recordsUnsaved);
@@ -59,6 +66,7 @@ export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }
   const time = useStore((s) => keepsTime(s.settings.company));
   const saveAgain = useStore((s) => s.saveRecordsAgain);
   const seen = useStore((s) => s.dismissShutOffNotice);
+  const elsewhere = useStore((s) => s.recordsElsewhere);
   const insets = useSafeAreaInsets();
   const [height, setHeight] = useState(0);
 
@@ -82,12 +90,15 @@ export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }
     return () => clearTimeout(timer);
   }, [unsaved, saveAgain]);
 
-  const shown = unsaved || inMemory || shutOff;
+  const shown = (unsaved || inMemory || shutOff) && !elsewhere;
   const below = shown ? { ...insets, top: insets.top + height } : insets;
   const words = unsavedWords();
   return (
     <View style={styles.frame}>
-      <SafeAreaInsetsContext.Provider value={below}>{children}</SafeAreaInsetsContext.Provider>
+      <View testID="records-app" style={[styles.frame, elsewhere && styles.hidden]}>
+        <SafeAreaInsetsContext.Provider value={below}>{children}</SafeAreaInsetsContext.Provider>
+      </View>
+      {elsewhere ? <OtherTabNotice /> : null}
       {shown ? (
         <View style={[styles.notices, { top: insets.top }]} onLayout={(e) => setHeight(Math.ceil(e.nativeEvent.layout.height))}>
           {unsaved ? (
@@ -130,8 +141,42 @@ export function RecordsNotSavedFrame({ children }: { children: React.ReactNode }
   );
 }
 
+/**
+ * What a tab of the browser shows in place of the app while another tab saves the records: that nothing is saved in
+ * this one, and Use this tab, tapped once at a time (`takeRecordsHere`).
+ */
+function OtherTabNotice() {
+  const take = useStore((s) => s.takeRecordsHere);
+  const insets = useSafeAreaInsets();
+  const [taking, setTaking] = useState(false);
+  const takeHere = async () => {
+    setTaking(true);
+    try {
+      await take();
+    } finally {
+      setTaking(false);
+    }
+  };
+  return (
+    <View testID="records-elsewhere" accessibilityRole="alert" style={[styles.elsewhere, { paddingTop: insets.top + space.xl, paddingBottom: insets.bottom + space.xl }]}>
+      <Notice
+        tone="warn"
+        icon={TriangleAlert}
+        title="MineMuster is open in another tab"
+        body="Only one tab at a time can save the records, so nothing is saved in this one. Use the other tab, or use this one instead."
+      />
+      <Txt v="small" c={color.silica}>
+        If you use this one, it reads the records again first, and the other tab stops saving them.
+      </Txt>
+      <Button label="Use this tab" kind="ink" loading={taking} onPress={() => void takeHere()} testID="use-this-tab" />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   frame: { flex: 1 },
+  hidden: { display: 'none' },
+  elsewhere: { flex: 1, justifyContent: 'center', gap: space.lg, paddingHorizontal: space.lg, backgroundColor: color.kaolin },
   notices: {
     position: 'absolute',
     left: 0,

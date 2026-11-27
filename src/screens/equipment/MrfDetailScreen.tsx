@@ -6,8 +6,10 @@ import { PaperLine, PaperRow, PaperSheet } from '../../components/Paper';
 import { StandardRefs } from '../../components/Standards';
 import { Avatar, Button, Divider, Field, Notice, Page, Panel, Row, Segmented, Sheet, Tag, Txt, UnitPlate } from '../../components/ui';
 import { examFindings, openFindings } from '../../domain/areaExam';
+import { parseDecimal, timeSpentProblem, withMark } from '../../domain/reading';
 import type { Employee, MrfEvent, MrfPriority, MrfStatus } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
+import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { employeeName, useMe, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space, type Tone } from '../../theme/theme';
@@ -43,6 +45,8 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
   const { assignMrf, startMrf, completeMrf, showToast } = useStore.getState();
 
   const exams = useStore((s) => s.exams);
+  // The phone's own decimal mark, which its number pad types: 1,5 hours where the phone writes a comma for a part.
+  const mark = useDecimalMark();
 
   const [sheet, setSheet] = useState<'assign' | 'start' | 'complete' | null>(null);
   const [note, setNote] = useState('');
@@ -92,13 +96,13 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
 
   const complete = () => {
     if (live()?.status === 'completed') return;
-    const typed = hours.trim();
-    const value = Number(typed);
-    if (typed && !(Number.isFinite(value) && value > 0)) return fail('Enter the time spent in hours, like 1.5.');
+    // Read by the phone's mark (parseDecimal): blank means nobody kept track; 1,5 is an hour and a half where the phone writes it so.
+    const value = parseDecimal(hours, mark);
+    if (value !== undefined && !(value > 0)) return fail(timeSpentProblem(mark));
     // Hours typed as a decimal are kept as hundredths, the way the timesheet does.
     const result = completeMrf(mrf.id, {
       remarks: note,
-      timeSpent: typed ? toHundredths(value * 60) : undefined,
+      timeSpent: value !== undefined ? toHundredths(value * 60) : undefined,
       completedBy: forSomeone && doneBy === 'assignee' ? mrf.assignedTo : undefined,
     });
     if (!result.ok) return fail(result.error);
@@ -256,7 +260,7 @@ export function MrfDetailScreen({ navigation, route }: ScreenProps<'MrfDetail'>)
           <Field
             testID="mrf-hours"
             label="Time spent (hours)"
-            placeholder="1.5"
+            placeholder={withMark('1.5', mark)}
             value={hours}
             onChangeText={(text) => { setHours(text); setError(null); }}
             keyboardType="decimal-pad"

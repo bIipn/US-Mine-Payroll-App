@@ -6,6 +6,11 @@
 // is holding back past its time still comes. Played here as the real App, its real navigator and the real Clock
 // screen; every other screen is a stand-in, and the phone's notifications are played by a stand-in that holds what
 // it is handed while notifications are allowed. Everyone and everything here is made up.
+//
+// A hand-over and a punch's own are made one at a time, each from the records as they are when its turn comes. On
+// Android a punch's location read can show a system dialog (the prompt to turn location on, or the one asking
+// whether the app may read it), which sends the app to the back and to the front again while the punch is being
+// made, so the hand-over on coming back is planned from the shift before the punch.
 import type { LocalReminder } from '../../services/notifications';
 
 // The app's own navigation container, with a handle on it to move about the app as a person would.
@@ -59,26 +64,51 @@ jest.mock('../../services/sync', () => {
   const { create } = require('zustand');
   return { startSync: () => () => undefined, useSyncStatus: create(() => ({ online: true, server: false, waiting: 0 })) };
 });
-// The phone gives no position, so every punch goes through with none (a clock-in marked for review).
-jest.mock('../../services/location', () => ({ locate: async () => ({ ok: false, reason: 'off' }) }));
+/**
+ * The phone gives no position, so every punch goes through with none (a clock-in marked for review). With `dialog`
+ * set, the read shows a system dialog first, and answers a tick after it is gone.
+ */
+const mockLocation: { dialog: (() => void) | null } = { dialog: null };
+jest.mock('../../services/location', () => ({
+  locate: async () => {
+    if (mockLocation.dialog) {
+      mockLocation.dialog();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    return { ok: false, reason: 'off' };
+  },
+}));
 /**
  * The phone's notifications: whether they are allowed for the app, whether Alarms & reminders is on, and the
  * reminders it holds by id, each with whether it was handed over to come at the minute. Like the phone, it holds
- * nothing it is handed while notifications are off.
+ * nothing it is handed while notifications are off, and a reminder handed over is taken off first, then whether
+ * notifications are allowed is read, then each is scheduled. A `slow` phone answers each of those calls a
+ * macrotask later, as a real one answers from another thread.
  */
-const mockPhone = { allowed: false, onTime: true, holds: new Map<string, { at: number; onTime: boolean }>() };
+const mockPhone = { allowed: false, onTime: true, slow: false, holds: new Map<string, { at: number; onTime: boolean }>() };
 jest.mock('../../services/notifications', () => {
   const takeOff = (ids: string[]) => ids.forEach((id) => mockPhone.holds.delete(id));
+  const answer = async () => {
+    if (mockPhone.slow) await new Promise((r) => setTimeout(r, 0));
+  };
   return {
     requestNotificationPermission: jest.fn(async () => mockPhone.allowed),
     lunchNoticeState: jest.fn(async () => (mockPhone.allowed ? 'on' : 'off')),
     onTimeNotices: jest.fn(async () => mockPhone.onTime),
     allowOnTimeNotices: jest.fn(async () => mockPhone.onTime),
-    cancelLocal: jest.fn(async (ids: string[]) => takeOff(ids)),
+    cancelLocal: jest.fn(async (ids: string[]) => {
+      await answer();
+      takeOff(ids);
+    }),
     scheduleLocal: jest.fn(async (reminders: LocalReminder[]) => {
+      await answer();
       takeOff(reminders.map((r) => r.id));
+      await answer();
       if (!mockPhone.allowed) return;
-      for (const r of reminders) if (r.at > Date.now()) mockPhone.holds.set(r.id, { at: r.at, onTime: mockPhone.onTime });
+      for (const r of reminders) {
+        await answer();
+        if (r.at > Date.now()) mockPhone.holds.set(r.id, { at: r.at, onTime: mockPhone.onTime });
+      }
     }),
   };
 });
@@ -124,6 +154,14 @@ AppState.addEventListener.mockImplementation((event: string, heard: (state: stri
 async function settle() {
   for (let i = 0; i < 6; i += 1) await act(async () => undefined);
 }
+/** Lets a slow phone answer everything it was asked. */
+async function drain() {
+  for (let i = 0; i < 40; i += 1) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+}
 /** Out of the app (to the phone's settings, say) and back into it. */
 async function awayAndBack() {
   await act(async () => [...listening].forEach((heard) => heard('background')));
@@ -140,13 +178,37 @@ afterEach(async () => {
   const r = root;
   root = null;
   if (r) await act(async () => r.unmount());
+  mockPhone.slow = false;
+  mockLocation.dialog = null;
 });
 
+type Phone = { allowed: boolean; onTime: boolean; slow?: boolean };
+type Shift = import('../../domain/types').Shift;
+
+/** Lee's own phone, Lee signed in, at a made-up pit in `state` with a boundary set, with `shifts` (none: off the clock). */
+function leesRecords(shifts: Shift[], state: string) {
+  useStore.getState().ensureSeeded();
+  const { settings } = useStore.getState();
+  useStore.setState({
+    employees: [{ id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true }],
+    accounts: [{ id: 'acct-lee', employeeId: 'emp-lee', email: '', provider: 'company', createdAt: 1 }],
+    session: { accountId: 'acct-lee', employeeId: 'emp-lee' },
+    shifts,
+    toast: null,
+    settings: {
+      ...settings,
+      lunchReminders: true,
+      company: { ...settings.company, name: 'Test Pit A', state, pay: null, timeClock: undefined },
+      site: { name: 'Test Pit A', center: { lat: 10, lng: 10 }, radiusM: 500 },
+    },
+  });
+}
+
 /**
- * Lee's own phone, Lee signed in on the Clock tab, at a made-up pit with a boundary set, with `shifts` (none: off
- * the clock). Then the phone as each test has it: nothing handed to it yet, and nothing asked of it.
+ * Lee's phone (`leesRecords`), opened on the Clock tab. Then the phone as each test has it: nothing handed to it
+ * yet, and nothing asked of it.
  */
-async function opened(phone: { allowed: boolean; onTime: boolean }, shifts: import('../../domain/types').Shift[] = []) {
+async function opened(phone: Phone, shifts: Shift[] = [], state = 'NV') {
   useStore.setState({ hydrated: false, recordsUnreadable: false });
   root = createRoot();
   const r = root;
@@ -154,23 +216,7 @@ async function opened(phone: { allowed: boolean; onTime: boolean }, shifts: impo
   await act(async () => {
     useStore.setState({ hydrated: true });
   });
-  await act(async () => {
-    useStore.getState().ensureSeeded();
-    const { settings } = useStore.getState();
-    useStore.setState({
-      employees: [{ id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true }],
-      accounts: [{ id: 'acct-lee', employeeId: 'emp-lee', email: '', provider: 'company', createdAt: 1 }],
-      session: { accountId: 'acct-lee', employeeId: 'emp-lee' },
-      shifts,
-      toast: null,
-      settings: {
-        ...settings,
-        lunchReminders: true,
-        company: { ...settings.company, name: 'Test Pit A', state: 'NV', pay: null, timeClock: undefined },
-        site: { name: 'Test Pit A', center: { lat: 10, lng: 10 }, radiusM: 500 },
-      },
-    });
-  });
+  await act(async () => leesRecords(shifts, state));
   await settle();
   Object.assign(mockPhone, phone);
   mockPhone.holds.clear();
@@ -288,5 +334,90 @@ describe('back in the app with nothing waiting', () => {
     expect(notices.cancelLocal).not.toHaveBeenCalled();
     expect(notices.lunchNoticeState).not.toHaveBeenCalled();
     expect(notices.requestNotificationPermission).not.toHaveBeenCalled();
+  });
+});
+
+describe('back in the app before lunch', () => {
+  it('past the first deadline reminder, leaves the one the phone is holding back and hands over only those ahead', async () => {
+    const now = Date.now();
+    // Clocked in 4 hours 10 minutes ago in California: the reminder an hour before the lunch deadline was due 10
+    // minutes ago, and the phone has held it back to save battery.
+    const clockIn = now - (4 * 60 + 10) * 60_000;
+    await opened({ allowed: true, onTime: false }, [{ id: 'sh-lee', employeeId: 'emp-lee', clockIn: { at: clockIn, noLocation: 'off' }, lunches: [], breaks: [] }], 'CA');
+    mockPhone.holds.set('lunch-60', { at: clockIn + 4 * 3_600_000, onTime: false });
+
+    await to('Hours');
+    await awayAndBack();
+    expect(mockPhone.holds.has('lunch-60')).toBe(true);
+    const handed = notices.scheduleLocal.mock.calls.flatMap(([reminders]) => (reminders as LocalReminder[]).map((x) => x.id));
+    expect(handed).toEqual(['lunch-30', 'lunch-15', 'lunch-0']);
+    expect(notices.cancelLocal).not.toHaveBeenCalled();
+    expect(notices.requestNotificationPermission).not.toHaveBeenCalled();
+  });
+});
+
+describe('a punch whose location read shows a system dialog', () => {
+  const DEADLINE_IDS = ['lunch-0', 'lunch-15', 'lunch-30', 'lunch-60'];
+  const onThePhone = () => [...mockPhone.holds.keys()].sort();
+  /** The dialog sends the app to the back, and to the front again once it is answered (No thanks, say). */
+  const dialog = () => {
+    for (const heard of [...listening]) heard('background');
+    for (const heard of [...listening]) heard('active');
+  };
+
+  /** Lee on a California shift, Lunch reminders on, with the phone answering slowly: the deadline reminders are on it. */
+  async function onShift() {
+    const r = await opened({ allowed: true, onTime: true, slow: true }, [], 'CA');
+    await tap(r, 'clock-in');
+    await drain();
+    expect(byId(r, 'status-on')).not.toHaveLength(0);
+    expect(onThePhone()).toEqual(DEADLINE_IDS);
+    mockLocation.dialog = dialog;
+    return r;
+  }
+
+  it('clocking out leaves no lunch deadline reminder on the phone', async () => {
+    const r = await onShift();
+    await tap(r, 'clock-out');
+    await tap(r, 'confirm-clock-out');
+    await drain();
+    expect(byId(r, 'status-off')).not.toHaveLength(0);
+    expect(onThePhone()).toEqual([]);
+  });
+
+  it('starting lunch leaves the lunch-over notice on the phone and no deadline reminder', async () => {
+    const r = await onShift();
+    await tap(r, 'start-lunch');
+    await drain();
+    expect(byId(r, 'status-lunch')).not.toHaveLength(0);
+    expect(onThePhone()).toEqual(['lunch-end']);
+    expect(mockPhone.holds.get('lunch-end')?.at).toBe(lunchEnds());
+  });
+});
+
+describe('opening the app just after lunch ended', () => {
+  it('leaves on the phone the lunch-over notice it is holding back, so it still comes', async () => {
+    const now = Date.now();
+    const lunch = { start: { at: now - 31 * 60_000, noLocation: 'off' as const }, end: { at: now - 60_000, auto: true as const } };
+    // The app was closed during lunch. Android, without Alarms & reminders, has held the notice back past its time.
+    useStore.setState({ hydrated: false, recordsUnreadable: false });
+    leesRecords([{ id: 'sh-lee', employeeId: 'emp-lee', clockIn: { at: now - 4 * 3_600_000, noLocation: 'off' }, lunches: [lunch], breaks: [] }], 'NV');
+    Object.assign(mockPhone, { allowed: true, onTime: false });
+    mockPhone.holds.clear();
+    mockPhone.holds.set('lunch-end', { at: lunch.end.at, onTime: false });
+    for (const fn of Object.values(notices)) fn.mockClear();
+
+    root = createRoot();
+    const r = root;
+    await act(async () => r.render(React.createElement(App)));
+    await act(async () => {
+      useStore.setState({ hydrated: true });
+    });
+    await settle();
+    expect(byId(r, 'status-on')).not.toHaveLength(0);
+    // The records were read, and the reminders brought in line with the shift: the deadline ones taken off.
+    expect(notices.cancelLocal).toHaveBeenCalled();
+    expect(notices.cancelLocal.mock.calls.flat(2)).not.toContain('lunch-end');
+    expect(mockPhone.holds.has('lunch-end')).toBe(true);
   });
 });

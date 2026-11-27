@@ -323,8 +323,21 @@ describe('reminderPlan', () => {
     }
   });
 
-  it('has nothing left to send once lunch is over', () => {
+  // Once its time has come the phone has either shown the notice or is holding it back to save battery (Android,
+  // without Alarms & reminders), and then it must still come: an app opened, a punch or the Lunch reminders setting
+  // just after lunch ended must not take it off the phone.
+  it('has nothing left to send once lunch is over, and leaves the lunch-over notice on the phone while the shift is open', () => {
     const back = shift({ lunches: [startedLunch({ at: at(10) })] });
-    expect(reminderPlan(back, true, at(10, 30))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
+    for (const remindersOn of [true, false]) {
+      expect(reminderPlan(back, remindersOn, at(10, 30))).toEqual({ schedule: [], cancel: DEADLINE_IDS });
+      expect(reminderPlan(back, remindersOn, at(13))).toEqual({ schedule: [], cancel: DEADLINE_IDS });
+    }
+    const onBreak = shift({ lunches: [startedLunch({ at: at(10) })], breaks: [{ start: at(12) }] });
+    expect(reminderPlan(onBreak, true, at(12, 5)).cancel).not.toContain('lunch-end');
+  });
+
+  it('takes the lunch-over notice off the phone at clock-out, when it would only come too late', () => {
+    const out = shift({ clockOut: { at: at(10, 31) }, lunches: [startedLunch({ at: at(10) })] });
+    expect(reminderPlan(out, true, at(10, 31))).toEqual({ schedule: [], cancel: [...DEADLINE_IDS, 'lunch-end'] });
   });
 });

@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { estimateGross, type RangePayroll } from '../domain/payroll';
+import { parseDollars, withMark } from '../domain/reading';
+import { useDecimalMark } from '../services/decimalMark';
 import { haptic } from '../services/haptics';
 import { useStore } from '../store/useStore';
 import { color, radius, space } from '../theme/theme';
@@ -72,11 +74,13 @@ export function RateSheet({ visible, onClose }: { visible: boolean; onClose: () 
   const { setMyRate, showToast } = useStore.getState();
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // The phone's own decimal mark, which its number pad types: 24,50 where the phone writes a comma for a part.
+  const mark = useDecimalMark();
 
-  // Start from the saved rate each time the sheet opens.
+  // Start from the saved rate each time the sheet opens, written with the phone's mark so it saves back the same.
   useEffect(() => {
     if (!visible) return;
-    setText(rate ? (rate / 100).toFixed(2) : '');
+    setText(rate ? withMark((rate / 100).toFixed(2), mark) : '');
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -84,9 +88,10 @@ export function RateSheet({ visible, onClose }: { visible: boolean; onClose: () 
   const close = onClose;
 
   const save = () => {
-    const cleaned = text.replace(/[$,\s]/g, '');
-    const dollars = cleaned === '' ? Number.NaN : Number(cleaned);
-    const result = setMyRate(Number.isFinite(dollars) ? Math.round(dollars * 100) : Number.NaN);
+    // Read by the phone's mark (parseDollars): 9,75 is $9.75 where the phone writes a comma for a part, and
+    // asked again where it writes a point, never saved as $975.00. The store rounds to the cent and says what is wrong.
+    const dollars = parseDollars(text, mark) ?? Number.NaN;
+    const result = setMyRate(Number.isNaN(dollars) ? Number.NaN : Math.round(dollars * 100));
     if (!result.ok) {
       haptic.error();
       setError(result.error);
@@ -111,7 +116,7 @@ export function RateSheet({ visible, onClose }: { visible: boolean; onClose: () 
           setError(null);
         }}
         keyboardType="decimal-pad"
-        placeholder="24.00"
+        placeholder={withMark('24.00', mark)}
         error={error}
         hint="It is on your pay stub under Rate, on the ST line."
       />

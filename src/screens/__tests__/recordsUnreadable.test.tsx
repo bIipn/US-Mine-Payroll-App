@@ -82,13 +82,13 @@ describe('what to do next', () => {
     os = null;
   });
 
-  it('on the iPhone, says to close MineMuster and open it again, since Try again cannot find them there', async () => {
-    // AsyncStorage on the iPhone forgets records it could not read until the app is opened again (storage.native.ts).
+  it('on the iPhone, says to tap Try again first, then to swipe MineMuster away and open it again', async () => {
+    // Try again reads the records' own file there, though AsyncStorage has forgotten them (storage.native.ts).
     os = jest.replaceProperty(Platform, 'OS', 'ios');
     useStore.setState({ hydrated: false, recordsUnreadable: true });
     await opened();
-    expect(shown()).toContain('Swipe MineMuster away to close it, then open it again. If it still says this, ask your supervisor.');
-    expect(shown()).not.toContain('Tap Try again');
+    expect(shown()).toContain('Tap Try again. If they still cannot be read, swipe MineMuster away to close it and open it again, then tell your supervisor.');
+    expect(shown()).toContain('Do not delete the app or clear its storage: that deletes every record on this phone.');
   });
 
   it('on Android, says to tap Try again first', async () => {

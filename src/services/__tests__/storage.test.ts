@@ -6,8 +6,15 @@
  * for the session, and the store knows it (`recordsInMemory`), so a build that keeps real records can say so. A save
  * the browser turns down (its storage is full) is said, and so is the next one that works.
  *
- * The browser is made up here: its storage is a map.
+ * Every tab of MineMuster in a browser shares that storage, so one tab at a time saves the records (recordsTab.ts):
+ * the one holding a Web Lock named for their key, or, with no Web Locks, every tab until another tab's save reaches
+ * it. A tab that does not save them says so (`recordsElsewhere`), and Use this tab takes them (`takeRecordsHere`).
+ *
+ * The browser is made up here: its storage is a map that every tab shares, a save sends the other tabs a 'storage'
+ * event, and its lock manager is src/testing/fakeLocks.ts.
  */
+import { FakeLocks } from '../../testing/fakeLocks';
+
 type Storage = typeof import('../storage');
 type UseStore = typeof import('../../store/useStore')['useStore'];
 
@@ -22,12 +29,61 @@ interface Browser {
   full?: boolean;
   /** A step of migrating what is saved fails. */
   migrateFails?: boolean;
+  /** The browser's lock manager (navigator.locks). Left out, it has none, as a page served over plain http has none. */
+  locks?: FakeLocks;
+  /** The tabs open in it, by name, each with its 'storage' listeners: what it hears of another tab's save. */
+  tabs: Map<string, Set<(event: { key: string | null }) => void>>;
 }
 
-const browser = (rows = new Map<string, string>()): Browser => ({ rows });
+const browser = (rows = new Map<string, string>(), locks?: FakeLocks): Browser => ({ rows, locks, tabs: new Map() });
 
-/** Load a module as the web build loads it, in this browser. */
-function inBrowser<T>(b: Browser, load: () => T): T {
+/** A tab saved under `key`: every other tab hears of it, in a task of its own, as a browser sends the 'storage' event. */
+function heard(b: Browser, by: string, key: string) {
+  for (const [tab, listeners] of b.tabs) {
+    if (tab === by) continue;
+    setTimeout(() => {
+      for (const listener of [...listeners]) listener({ key });
+    }, 0);
+  }
+}
+
+/** The tab closes: the lock it holds goes, and it hears nothing more. */
+function close(b: Browser, tab: string) {
+  b.locks?.close(tab);
+  b.tabs.delete(tab);
+}
+
+/**
+ * Load storage.ts as this tab of the browser has it: with its own window (its 'storage' listeners) and its own
+ * navigator.locks, which storage.ts takes as it loads.
+ */
+function asTab(b: Browser, tab: string, load: () => void) {
+  const listeners = new Set<(event: { key: string | null }) => void>();
+  b.tabs.set(tab, listeners);
+  const w = window as unknown as Record<string, unknown>;
+  const before = { add: Object.getOwnPropertyDescriptor(w, 'addEventListener'), remove: Object.getOwnPropertyDescriptor(w, 'removeEventListener'), locks: Object.getOwnPropertyDescriptor(navigator, 'locks') };
+  w.addEventListener = (type: string, listener: (event: { key: string | null }) => void) => {
+    if (type === 'storage') listeners.add(listener);
+  };
+  w.removeEventListener = (type: string, listener: (event: { key: string | null }) => void) => {
+    if (type === 'storage') listeners.delete(listener);
+  };
+  if (b.locks) Object.defineProperty(navigator, 'locks', { value: b.locks.client(tab), configurable: true });
+  const put = (on: object, name: string, was: PropertyDescriptor | undefined) => {
+    if (was) Object.defineProperty(on, name, was);
+    else delete (on as Record<string, unknown>)[name];
+  };
+  try {
+    load();
+  } finally {
+    put(w, 'addEventListener', before.add);
+    put(w, 'removeEventListener', before.remove);
+    put(navigator, 'locks', before.locks);
+  }
+}
+
+/** Load a module as the web build loads it, in this tab of this browser. */
+function inBrowser<T>(b: Browser, load: () => T, tab = 'tab'): T {
   const refuse = () => {
     if (b.blocked) throw new Error('SecurityError: The operation is insecure.');
   };
@@ -39,11 +95,16 @@ function inBrowser<T>(b: Browser, load: () => T): T {
     setItem: jest.fn(async (key: string, value: string) => {
       refuse();
       if (b.full) throw new Error("QuotaExceededError: Failed to execute 'setItem' on 'Storage'");
+      const was = b.rows.get(key);
       b.rows.set(key, value);
+      // A browser sends the event only when what is saved changes.
+      if (was !== value) heard(b, tab, key);
     }),
     removeItem: jest.fn(async (key: string) => {
       refuse();
+      const was = b.rows.has(key);
       b.rows.delete(key);
+      if (was) heard(b, tab, key);
     }),
   };
   let loaded: T | undefined;
@@ -61,6 +122,8 @@ function inBrowser<T>(b: Browser, load: () => T): T {
         },
       };
     });
+    // The web's storage takes this tab's window and navigator.locks as it loads; nothing else is given them.
+    asTab(b, tab, () => require('../storage.ts'));
     loaded = load();
   });
   return loaded!;
@@ -68,17 +131,20 @@ function inBrowser<T>(b: Browser, load: () => T): T {
 
 const webStorage = (b: Browser) => inBrowser(b, () => require('../storage.ts') as Storage);
 
-/** A store build's store, in this browser: it holds nobody made up and names nobody. */
-function webStore(b: Browser): UseStore {
+/** A store build's store, in this tab of this browser: it holds nobody made up and names nobody. */
+function webStore(b: Browser, tab = 'tab'): UseStore {
   const saved = { ...process.env };
   for (const key of ['EXPO_PUBLIC_SUPABASE_URL', 'EXPO_PUBLIC_SUPABASE_KEY', 'EXPO_PUBLIC_ROSTER', 'EXPO_PUBLIC_ROSTER_OWNER', 'EXPO_PUBLIC_AREA_SHEETS', 'EXPO_PUBLIC_COMPANY']) delete process.env[key];
   Object.assign(process.env, { EXPO_PUBLIC_DEMO: '0', EXPO_PUBLIC_SAMPLE_CREW: '0' });
   try {
-    return inBrowser(b, () => (require('../../store/useStore') as { useStore: UseStore }).useStore);
+    return inBrowser(b, () => (require('../../store/useStore') as { useStore: UseStore }).useStore, tab);
   } finally {
     process.env = saved;
   }
 }
+
+/** What the browser has saved of the records. */
+const saved = (b: Browser) => JSON.parse(b.rows.get(KEY)!).state as { mrfSeq: number };
 
 /** Let every save and read under way finish. */
 const flush = async () => {
@@ -263,5 +329,136 @@ describe('the store on the web, when a save is turned down', () => {
     await flush();
     expect(store.getState().recordsUnsaved).toBe(false);
     expect(JSON.parse(b.rows.get(KEY)!).state.mrfSeq).toBe(42);
+  });
+});
+
+describe('two tabs of one browser', () => {
+  describe('with Web Locks', () => {
+    it('the tab opened first saves the records; one opened while it is open saves nothing, and says so', async () => {
+      const b = browser(new Map(), new FakeLocks());
+      const first = webStore(b, 'first');
+      await flush();
+      expect(first.getState().hydrated).toBe(true);
+      expect(first.getState().recordsElsewhere).toBe(false);
+      expect(b.locks!.holder(KEY)).toBe('first');
+      first.setState({ mrfSeq: 41 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(41);
+
+      const second = webStore(b, 'second');
+      await flush();
+      expect(second.getState().hydrated).toBe(true);
+      expect(second.getState().mrfSeq).toBe(41);
+      // Said over every screen (RecordsNotSavedFrame), and nothing done in it is written over the first tab's.
+      expect(second.getState().recordsElsewhere).toBe(true);
+      second.setState({ mrfSeq: 7 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(41);
+      first.setState({ mrfSeq: 42 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(42);
+      expect(first.getState().recordsElsewhere).toBe(false);
+    });
+
+    it('Use this tab reads the records again and saves them; the tab they were taken from saves nothing more, and says so', async () => {
+      const b = browser(new Map(), new FakeLocks());
+      const first = webStore(b, 'first');
+      await flush();
+      const second = webStore(b, 'second');
+      await flush();
+      first.setState({ mrfSeq: 42 });
+      second.setState({ mrfSeq: 7 });
+      await flush();
+
+      await second.getState().takeRecordsHere();
+      await flush();
+      expect(second.getState().recordsElsewhere).toBe(false);
+      // What the first tab saved, read again; what was done here meanwhile was not saved, as the tab said.
+      expect(second.getState().mrfSeq).toBe(42);
+      expect(first.getState().recordsElsewhere).toBe(true);
+      second.setState({ mrfSeq: 43 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(43);
+      first.setState({ mrfSeq: 99 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(43);
+
+      // And back again.
+      await first.getState().takeRecordsHere();
+      await flush();
+      expect(first.getState().recordsElsewhere).toBe(false);
+      expect(first.getState().mrfSeq).toBe(43);
+      expect(second.getState().recordsElsewhere).toBe(true);
+    });
+
+    it('when the tab that saves them closes, the one left has them by itself, and reads them first', async () => {
+      const b = browser(new Map(), new FakeLocks());
+      const first = webStore(b, 'first');
+      await flush();
+      const second = webStore(b, 'second');
+      await flush();
+      first.setState({ mrfSeq: 50 });
+      second.setState({ mrfSeq: 7 });
+      await flush();
+
+      close(b, 'first');
+      await flush();
+      expect(second.getState().recordsElsewhere).toBe(false);
+      expect(second.getState().mrfSeq).toBe(50);
+      second.setState({ mrfSeq: 51 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(51);
+    });
+
+    it('a browser that will not let the app at its storage: each tab keeps its own in memory, as before', async () => {
+      const b: Browser = { ...browser(new Map(), new FakeLocks()), blocked: true };
+      const first = webStore(b, 'first');
+      await flush();
+      const second = webStore(b, 'second');
+      await flush();
+      for (const tab of [first, second]) {
+        expect(tab.getState().hydrated).toBe(true);
+        expect(tab.getState().recordsInMemory).toBe(true);
+        expect(tab.getState().recordsElsewhere).toBe(false);
+      }
+      second.setState({ mrfSeq: 3 });
+      await flush();
+      expect(second.getState().recordsUnsaved).toBe(false);
+      // Nothing is shared, so no tab holds on to the lock.
+      expect(b.locks!.holder(KEY)).toBeNull();
+    });
+  });
+
+  describe('with no Web Locks', () => {
+    it('a punch in the tab opened later is not written over by the tab opened earlier: that tab saves nothing more, and says so', async () => {
+      const b = browser();
+      const earlier = webStore(b, 'earlier');
+      await flush();
+      const later = webStore(b, 'later');
+      await flush();
+      expect(earlier.getState().recordsElsewhere).toBe(false);
+      expect(later.getState().recordsElsewhere).toBe(false);
+
+      later.setState({ mrfSeq: 41 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(41);
+      expect(earlier.getState().recordsElsewhere).toBe(true);
+      earlier.setState({ mrfSeq: 7 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(41);
+
+      // Use this tab, in the earlier one: it reads them again, then saves, and the later one hears of it.
+      await earlier.getState().takeRecordsHere();
+      await flush();
+      expect(earlier.getState().recordsElsewhere).toBe(false);
+      expect(earlier.getState().mrfSeq).toBe(41);
+      earlier.setState({ mrfSeq: 43 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(43);
+      expect(later.getState().recordsElsewhere).toBe(true);
+      later.setState({ mrfSeq: 99 });
+      await flush();
+      expect(saved(b).mrfSeq).toBe(43);
+    });
   });
 });

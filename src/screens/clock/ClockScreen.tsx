@@ -15,12 +15,12 @@ import { unitsCheckedOut } from '../../domain/fleet';
 import { clockInVerdict, toGeoStamp, type Reading, type TurnDown } from '../../domain/geofence';
 import { monthOf, nextPayday, payPeriodOf } from '../../domain/payPeriod';
 import { computeRange } from '../../domain/payroll';
-import { deadlineWords, floorMin, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL, mealStatus, shiftTotals, type TimeRules } from '../../domain/time';
+import { deadlineWords, floorMin, lunchEndAt, MEAL_NOTE_LABEL, mealStatus, shiftTotals, type TimeRules } from '../../domain/time';
 import type { DemoLocation, GeoStamp, MealNote, NoLocation, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
-import { allowOnTimeNotices, lunchNoticeState, onTimeNotices, requestNotificationPermission, scheduleLocal, type LunchNotice } from '../../services/notifications';
-import { syncReminders } from '../../services/reminders';
+import { allowOnTimeNotices, lunchNoticeState, onTimeNotices, requestNotificationPermission, type LunchNotice } from '../../services/notifications';
+import { previewLunchOver, syncReminders } from '../../services/reminders';
 import { openShiftOf, staleShiftOf, useMe, useRules, useStore, type ToastTone } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
 import {
@@ -132,10 +132,7 @@ export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
     setNotice(nowNotice);
     setOnTime(nowOnTime);
     const turnedOn = !!was && ((was.notice !== 'on' && nowNotice === 'on') || (!was.onTime && nowOnTime));
-    if (resync && turnedOn && me) {
-      const { shifts: latest, settings: current } = useStore.getState();
-      await syncReminders(openShiftOf(latest, me.id, Date.now()), current.lunchReminders, rules);
-    }
+    if (resync && turnedOn && me) await syncReminders();
   };
   /** What coming back to the front does, as of the latest render. */
   const readOnReturn = useRef<() => void>(() => undefined);
@@ -246,7 +243,8 @@ export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
    * a locked phone if they are. No other punch asks, so a phone told no is not
    * asked again at every punch (Android asks a second time, then never again);
    * each only reads what the phone allows. This runs after the punch is on
-   * record, so answering the phone's question never changes a punch time.
+   * record, so answering the phone's question never changes a punch time, and the reminders are handed over in
+   * turn with any other hand-over, planned from the records as they are then (`syncReminders`).
    */
   const armNotices = async (current: Shift | undefined, ask: boolean) => {
     if (current) {
@@ -254,7 +252,7 @@ export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
       // The reminders are handed over just below.
       await readNotices(false);
     }
-    await syncReminders(current, settings.lunchReminders, rules);
+    await syncReminders();
   };
 
   /**
@@ -772,8 +770,6 @@ function ProblemBody({ problem }: { problem: Problem }) {
 /** Preview-only controls for showing the app away from the mine. */
 function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRemainingMs?: number }) {
   const demoLocation = useStore((s) => s.settings.demoLocation);
-  const lunchReminders = useStore((s) => s.settings.lunchReminders);
-  const rules = useRules();
   const { setDemoLocation, demoRewindShift, showToast } = useStore.getState();
   return (
     <View style={styles.demo}>
@@ -803,12 +799,10 @@ function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRe
           style={{ marginTop: space.sm }}
           onPress={() => {
             const moved = demoRewindShift(Math.ceil(lunchRemainingMs / MIN));
-            const lunch = moved?.lunches[moved.lunches.length - 1];
-            if (!moved || !lunch) return;
+            if (!moved?.lunches.length) return;
             // Send the real notice as well, a few seconds from now, so it can be seen in a demo.
-            void syncReminders(moved, lunchReminders, rules).then(() =>
-              scheduleLocal([{ ...lunchOverReminder(lunchEndAt(lunch)), at: Date.now() + 3000 }]),
-            );
+            void syncReminders();
+            void previewLunchOver();
           }}
         />
       ) : onShift ? (
@@ -822,7 +816,7 @@ function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRe
           onPress={() => {
             const moved = demoRewindShift(60);
             if (moved) {
-              void syncReminders(moved, lunchReminders, rules);
+              void syncReminders();
               showToast('Clock-in moved back 1 hour', 'info');
             }
           }}

@@ -11,17 +11,15 @@ import { ActivityIndicator, Platform, StyleSheet, useWindowDimensions, View } fr
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { APP_NAME } from './src/config';
-import { rulesFor } from './src/domain/stateRules';
 import { RecordsNotSavedFrame } from './src/components/RecordsNotSaved';
 import { SignalFrame } from './src/components/SignalStrip';
-import { keepsTime } from './src/domain/company';
 import { ToastHost } from './src/components/ui';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { RecordsUnreadableScreen } from './src/screens/auth/RecordsUnreadableScreen';
 import { watchConnection } from './src/services/connection';
 import { syncReminders, watchReminders } from './src/services/reminders';
 import { startSync } from './src/services/sync';
-import { openShiftOf, useStore } from './src/store/useStore';
+import { useStore } from './src/store/useStore';
 import { color } from './src/theme/theme';
 
 const navTheme = {
@@ -46,10 +44,8 @@ export default function App() {
   useEffect(() => {
     if (!hydrated) return;
     ensureSeeded();
-    // Re-arm any lunch reminders for a shift that was already running.
-    const { session, shifts, settings } = useStore.getState();
-    const shift = session && keepsTime(settings.company) ? openShiftOf(shifts, session.employeeId, Date.now()) : undefined;
-    if (session) void syncReminders(shift, settings.lunchReminders, rulesFor(settings.company.state));
+    // Re-arm any lunch reminders for a shift that was already running, as the records read have it.
+    void syncReminders();
   }, [hydrated, ensureSeeded]);
 
   // Back in the app, on whatever screen is in front, the reminders for a shift are handed to the phone again:
@@ -60,15 +56,16 @@ export default function App() {
   }, [hydrated]);
 
   // Watch for signal, and send what the company's server does not have once there is some,
-  // to the company this phone is connected to, if any.
+  // to the company this phone is connected to, if any. Not from a browser tab that another tab has taken the
+  // records from (storage.ts): what this one has may be older than what that tab saved, and that tab sends them.
+  const recordsElsewhere = useStore((s) => s.recordsElsewhere);
+  useEffect(() => {
+    if (!hydrated || recordsElsewhere) return undefined;
+    return startSync();
+  }, [hydrated, recordsElsewhere]);
   useEffect(() => {
     if (!hydrated) return undefined;
-    const stopSync = startSync();
-    const stopLink = watchConnection();
-    return () => {
-      stopLink();
-      stopSync();
-    };
+    return watchConnection();
   }, [hydrated]);
 
   // If the fonts cannot load, carry on with the system font rather than a blank screen.

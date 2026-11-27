@@ -17,7 +17,7 @@ import { requestNotificationPermission } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { notTakenChanges, useSyncStatus } from '../../services/sync';
 import { SAMPLE_CREW_IDS } from '../../store/seed';
-import { openShiftOf, useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
+import { useMe, useRules, useStore, useSupervisorHere } from '../../store/useStore';
 import { color, space } from '../../theme/theme';
 import { fmtMoney, fmtTime, fullName, initials } from '../../util/format';
 import { NotTakenRow } from './NotTakenRow';
@@ -126,8 +126,7 @@ export function MoreScreen() {
     if (on && !(await requestNotificationPermission())) {
       showToast('Notifications are off for this app. Turn them on in your phone settings to get lunch reminders.', 'warn');
     }
-    const { shifts } = useStore.getState();
-    void syncReminders(openShiftOf(shifts, me.id, Date.now()), on, rules);
+    void syncReminders();
   };
 
   return (

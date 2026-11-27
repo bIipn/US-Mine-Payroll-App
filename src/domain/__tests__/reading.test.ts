@@ -1,4 +1,8 @@
-import { gallonsProblem, isReading, parseReading, READING_MAX, readingProblem, readingText, type DecimalMark } from '../reading';
+import { fmtMeter } from '../../util/format';
+import {
+  gallonsProblem, isReading, leaveHoursProblem, meterText, parseDecimal, parseDollars, parseReading, rateProblem, READING_MAX,
+  readingProblem, readingText, timeSpentProblem, withMark, type DecimalMark,
+} from '../reading';
 
 // A reading typed into a number box: equipment hours, an odometer, gallons of fuel. On Android the number
 // pad is whatever the keyboard shows, and nothing filters it (React Native's own key listener lets every key
@@ -142,6 +146,147 @@ describe('what to put right', () => {
   });
 });
 
+describe('any other number typed into a box with a decimal pad', () => {
+  // Hours of paid leave, the time spent on a maintenance request, an hourly rate: the same keyboard, the same
+  // mark, so the same rule as a reading, and each box keeps its own range.
+  it('is read by the same rule as a reading, by the phone’s mark', () => {
+    for (const mark of ['.', ','] as const) {
+      for (const typed of ['', '  ', '4,5', '4.5', '1,000', '1.000,5', '10 000', '12,5,0', '-5', '1e3', 'abc', '8,00', '8.00', '0,25', '.5', ',5']) {
+        expect({ mark, typed, read: parseDecimal(typed, mark) }).toEqual({ mark, typed, read: parseReading(typed, mark) });
+      }
+    }
+  });
+
+  it('reads 4,5 as four and a half where the phone writes a comma, and asks again where it writes a point', () => {
+    expect(parseDecimal('4,5', ',')).toBe(4.5);
+    expect(parseDecimal('9,75', ',')).toBe(9.75);
+    expect(parseDecimal('8,00', ',')).toBe(8);
+    expect(parseDecimal('4.5')).toBe(4.5);
+    expect(parseDecimal('4,5')).toBeNaN();
+    expect(parseDecimal('9,75')).toBeNaN();
+  });
+
+  it('has no range of its own: a box keeps its own', () => {
+    expect(parseDecimal(String(READING_MAX * 2))).toBe(READING_MAX * 2);
+    expect(parseReading(String(READING_MAX * 2))).toBeNaN();
+    expect(parseDecimal('0')).toBe(0);
+    expect(parseDecimal('9'.repeat(400))).toBeNaN();
+  });
+
+  it('is nothing when nothing is typed, and not a number with a sign, an exponent or a letter', () => {
+    expect(parseDecimal('')).toBeUndefined();
+    expect(parseDecimal(' ', ',')).toBeUndefined();
+    nanDecimal(['-4', '+4', '1e1', '0x10', '4 hrs', 'Infinity']);
+  });
+});
+
+function nanDecimal(typed: string[]) {
+  for (const mark of ['.', ','] as const) {
+    for (const t of typed) expect({ mark, typed: t, read: parseDecimal(t, mark) }).toEqual({ mark, typed: t, read: Number.NaN });
+  }
+}
+
+describe('dollars typed into the hourly rate', () => {
+  it('reads 9,75 as nine dollars and seventy-five cents where the phone writes a comma, never 975', () => {
+    expect(parseDollars('9,75', ',')).toBe(9.75);
+    expect(parseDollars('24,50', ',')).toBe(24.5);
+    expect(parseDollars('1.000,00', ',')).toBe(1000);
+  });
+
+  it('asks again for 9,75 where the phone writes a point, as a reading does, and reads the rest as before', () => {
+    // Before, every comma was dropped, and 9,75 was saved as $975.00 an hour.
+    expect(parseDollars('9,75')).toBeNaN();
+    expect(parseDollars('24.50')).toBe(24.5);
+    expect(parseDollars('1,000.00')).toBe(1000);
+    expect(parseDollars(' 24 ')).toBe(24);
+  });
+
+  it('takes one dollar sign ahead of the amount or after it, spaces beside it, in either region', () => {
+    expect(parseDollars('$24.50')).toBe(24.5);
+    expect(parseDollars(' $ 24.50 ')).toBe(24.5);
+    expect(parseDollars('24.50$')).toBe(24.5);
+    expect(parseDollars('$24,50', ',')).toBe(24.5);
+    expect(parseDollars('24,50 $', ',')).toBe(24.5);
+  });
+
+  it('keeps a third place as typed, for the store to round to the cent as it always has', () => {
+    expect(parseDollars('24.505')).toBe(24.505);
+    expect(parseDollars('24,505', ',')).toBe(24.505);
+  });
+
+  it('is nothing when nothing is typed, and turns back the rest', () => {
+    expect(parseDollars('')).toBeUndefined();
+    expect(parseDollars('   ', ',')).toBeUndefined();
+    for (const mark of ['.', ','] as const) {
+      for (const typed of ['$', '$$24', '24$50', '$24$', '-$24', '$-24', 'US$24', '24 dollars', '€24']) {
+        expect({ mark, typed, read: parseDollars(typed, mark) }).toEqual({ mark, typed, read: Number.NaN });
+      }
+    }
+  });
+});
+
+describe('a number written into a box for the person to keep or change', () => {
+  it('is written with the phone’s own mark, so it reads back as the same number', () => {
+    expect(withMark('8.00', ',')).toBe('8,00');
+    expect(withMark('24.50', ',')).toBe('24,50');
+    expect(withMark('1.5', ',')).toBe('1,5');
+    expect(withMark('8', ',')).toBe('8');
+    for (const text of ['8.00', '24.50', '1.5', '8']) expect(withMark(text, '.')).toBe(text);
+    for (const mark of ['.', ','] as const) {
+      expect(parseDecimal(withMark('8.00', mark), mark)).toBe(8);
+      expect(parseDollars(withMark('1000.00', mark), mark)).toBe(1000);
+    }
+  });
+
+  it('is how a reading is written', () => {
+    for (const mark of ['.', ','] as const) {
+      for (const n of [0, 12.5, 4250.5, 100.125]) expect(readingText(n, mark)).toBe(withMark(String(n), mark));
+    }
+  });
+});
+
+describe('a reading shown beside the box it is typed into', () => {
+  it('is fmtMeter where the phone writes a point, as on the card, the exports and the PDF', () => {
+    for (const n of [0, 12.5, 4250.5, 61_200, 1_234_567.85, READING_MAX]) {
+      expect(meterText(n)).toBe(fmtMeter(n));
+      expect(meterText(n, '.')).toBe(fmtMeter(n));
+    }
+    expect(meterText(4250.5)).toBe('4,250.5');
+  });
+
+  it('has the phone’s comma for a part where it writes one, and a space that does not break between thousands', () => {
+    expect(meterText(4250.5, ',')).toBe('4 250,5');
+    expect(meterText(12.5, ',')).toBe('12,5');
+    expect(meterText(0, ',')).toBe('0,0');
+    expect(meterText(1_234_567.85, ',')).toBe('1 234 567,9');
+  });
+
+  it('reads back as the reading it shows, in either region', () => {
+    for (const mark of ['.', ','] as const) {
+      for (const n of [0, 12.5, 4250.5, 61_200, READING_MAX]) expect({ mark, n, read: parseReading(meterText(n, mark), mark) }).toEqual({ mark, n, read: n });
+    }
+  });
+});
+
+describe('what to put right in the other boxes', () => {
+  it('shows a part with the phone’s own mark', () => {
+    expect(rateProblem()).toBe('Enter your hourly rate in dollars, like 24.00.');
+    expect(rateProblem(',')).toBe('Enter your hourly rate in dollars, like 24,00.');
+    expect(leaveHoursProblem()).toBe('Enter the hours for that day, between 0.25 and 24.');
+    expect(leaveHoursProblem(',')).toBe('Enter the hours for that day, between 0,25 and 24.');
+    expect(timeSpentProblem()).toBe('Enter the time spent in hours, like 1.5.');
+    expect(timeSpentProblem(',')).toBe('Enter the time spent in hours, like 1,5.');
+  });
+
+  it('gives examples that read as numbers in their own region', () => {
+    for (const mark of ['.', ','] as const) {
+      expect(parseDollars(`24${mark}00`, mark)).toBe(24);
+      expect(parseDecimal(`0${mark}25`, mark)).toBe(0.25);
+      expect(parseDecimal(`1${mark}5`, mark)).toBe(1.5);
+    }
+  });
+});
+
 // Every screen that takes a reading reads it with this rule and the phone's own mark, so a minus sign is
 // turned back the same way everywhere, 12,5 is twelve and a half where the phone writes it so, and none
 // drops what it cannot read without a word.
@@ -193,5 +338,52 @@ describe('the screens that take a reading', () => {
     expect(said.length).toBeGreaterThan(0);
     expect(said.filter((s) => !s.endsWith('(decimalMark())'))).toEqual([]);
     expect(store).toMatch(/newUnit\(equipment, input, newUnitId\(\), decimalMark\(\)\)/);
+  });
+
+  it('show the last reading beside the box with the phone’s mark, never with fmtMeter', () => {
+    for (const file of ['screens/equipment/EndUseScreen.tsx', 'screens/equipment/InspectionScreen.tsx', 'screens/equipment/MrfFormScreen.tsx']) {
+      const text = source(file);
+      expect({ file, fmtMeter: text.match(/\bfmtMeter\(/g) }).toEqual({ file, fmtMeter: null });
+      const shown = text.match(/\bmeterText\([^()]*\)/g) ?? [];
+      expect(shown.length).toBeGreaterThan(0);
+      expect({ file, without: shown.filter((c) => !/,\s*mark\)$/.test(c)) }).toEqual({ file, without: [] });
+    }
+  });
+});
+
+// The other boxes with a decimal pad: an hourly rate, hours of paid leave, the time spent on a maintenance
+// request. The same keyboard sends the same keys, so they read by the same rule and the same mark.
+const OTHER_BOXES = ['components/PayEstimate.tsx', 'components/LeaveSheet.tsx', 'screens/equipment/MrfDetailScreen.tsx'];
+
+describe('the other screens that take a number with a part', () => {
+  it('read it with parseDecimal or parseDollars and the phone’s mark, never with Number() or by dropping commas', () => {
+    for (const file of OTHER_BOXES) {
+      const text = source(file);
+      expect({ file, mark: /const mark = useDecimalMark\(\);/.test(text) }).toEqual({ file, mark: true });
+      const calls = text.match(/\b(?:parseDecimal|parseDollars)\([^()]*\)/g) ?? [];
+      expect({ file, reads: calls.length > 0 }).toEqual({ file, reads: true });
+      expect({ file, without: calls.filter((c) => !/,\s*mark\)$/.test(c)) }).toEqual({ file, without: [] });
+      expect({ file, number: text.match(/Number\((hours|typed|text|cleaned|value)\b[^)]*\)/g) }).toEqual({ file, number: null });
+      expect({ file, dropped: text.match(/\.replace\(\/\[[^\]]*,[^\]]*\]/g) }).toEqual({ file, dropped: null });
+    }
+  });
+
+  it('write what they start with, and the example in the box, with the phone’s mark', () => {
+    for (const file of OTHER_BOXES) {
+      const text = source(file);
+      expect({ file, written: /\bwithMark\([^()]*(?:\([^()]*\))?[^()]*, mark\)/.test(text) }).toEqual({ file, written: true });
+      expect({ file, placeholder: text.match(/placeholder="[\d.,]+"/g) }).toEqual({ file, placeholder: null });
+      expect({ file, fixed: text.match(/useState\('\d+\.\d+'\)|set\w+\('\d+\.\d+'\)/g) }).toEqual({ file, fixed: null });
+    }
+  });
+
+  it('and the store and the screens turn one back in the same words, with the phone’s mark', () => {
+    const store = source('store/useStore.ts');
+    const said = store.match(/\b(?:rateProblem|leaveHoursProblem|timeSpentProblem)\((?:[^()]|\(\))*\)/g) ?? [];
+    expect(said.length).toBe(3);
+    expect(said.filter((s) => !s.endsWith('(decimalMark())'))).toEqual([]);
+    expect(store).not.toMatch(/like 24\.00|between 0\.25|like 1\.5/);
+    expect(source('screens/equipment/MrfDetailScreen.tsx')).toMatch(/\btimeSpentProblem\(mark\)/);
+    for (const file of OTHER_BOXES) expect({ file, example: source(file).match(/like \d+\.\d+/g) }).toEqual({ file, example: null });
   });
 });

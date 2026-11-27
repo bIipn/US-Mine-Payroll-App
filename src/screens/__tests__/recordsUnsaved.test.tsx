@@ -4,14 +4,26 @@
 // records, the app says so once, over every screen, until the person taps OK (the store's shutOffWhileSaving).
 // In a browser the words are a browser's, and a browser that will not let the app at its storage at all, so the
 // records are only in memory, is said over every screen too (the store's recordsInMemory), but not in the preview.
+// And while another tab of the browser saves the records, so this one saves nothing, that is said in place of every
+// screen until the person uses this tab instead (the store's recordsElsewhere; storage.test.ts has the tabs).
 // The app's screens are a stand-in here, and so is everything it starts.
 const mockText = (words: string) => () => require('react').createElement(require('react-native').Text, null, words);
 jest.mock('../../navigation/RootNavigator', () => ({ RootNavigator: mockText('The app') }));
 jest.mock('../../services/connection', () => ({ watchConnection: () => () => undefined }));
 jest.mock('../../services/reminders', () => ({ syncReminders: async () => undefined, watchReminders: () => () => undefined }));
+// How many times the app has started sending to the company, and stopped.
+const mockSync = { started: 0, stopped: 0 };
 jest.mock('../../services/sync', () => {
   const { create } = require('zustand');
-  return { startSync: () => () => undefined, useSyncStatus: create(() => ({ online: true, server: null, waiting: 0 })) };
+  return {
+    startSync: () => {
+      mockSync.started += 1;
+      return () => {
+        mockSync.stopped += 1;
+      };
+    },
+    useSyncStatus: create(() => ({ online: true, server: null, waiting: 0 })),
+  };
 });
 jest.mock('expo-font', () => ({ useFonts: () => [true, null] }));
 jest.mock('@expo-google-fonts/barlow/500Medium', () => ({}));
@@ -62,7 +74,7 @@ const flush = async () => {
 const SHUT_OFF = 'This phone shut off while saving';
 
 let root: Root | null = null;
-const { saveRecordsAgain, settings } = useStore.getState();
+const { saveRecordsAgain, settings, takeRecordsHere } = useStore.getState();
 beforeAll(async () => {
   // The store reads what is saved (nothing, here), and from then on its saves are written.
   await flush();
@@ -74,7 +86,7 @@ afterEach(async () => {
   if (r) await act(async () => r.unmount());
   jest.useRealTimers();
   mockBuild = {};
-  useStore.setState({ recordsUnsaved: false, shutOffWhileSaving: false, recordsInMemory: false, saveRecordsAgain, settings });
+  useStore.setState({ recordsUnsaved: false, shutOffWhileSaving: false, recordsInMemory: false, recordsElsewhere: false, saveRecordsAgain, settings, takeRecordsHere });
 });
 
 async function opened() {
@@ -319,5 +331,81 @@ describe('when the phone shut off while saving', () => {
     await act(async () => tap('shut-off-ok')());
     expect(shown()).toContain(TITLE);
     expect(shown()).not.toContain(SHUT_OFF);
+  });
+});
+
+describe('while MineMuster is open in another tab, which saves the records', () => {
+  const TITLE_ELSEWHERE = 'MineMuster is open in another tab';
+  const { StyleSheet } = require('react-native') as typeof import('react-native');
+  /** Whether the app under the notice is hidden: nothing in it can be seen, tapped or reached from the keyboard. */
+  const appHidden = () => {
+    const app = root!.container.queryAll((n) => n.props.testID === 'records-app')[0];
+    if (!app) throw new Error('No app here.');
+    return StyleSheet.flatten(app.props.style as import('react-native').StyleProp<import('react-native').ViewStyle>)?.display === 'none';
+  };
+  /** The Use this tab button: what a tap on it does, and whether it is turned off. */
+  function useThisTab(): { onPress: () => void; off: boolean } {
+    const found = root!.container.queryAll((n) => n.props.testID === 'use-this-tab')[0];
+    if (!found) throw new Error('No Use this tab here.');
+    let fiber = found.unstable_fiber as Fiber;
+    while (fiber && typeof fiber.memoizedProps?.onPress !== 'function') fiber = fiber.return;
+    const props = fiber!.memoizedProps!;
+    const state = props.accessibilityState as { disabled?: boolean } | undefined;
+    return { onPress: props.onPress as () => void, off: props.disabled === true || state?.disabled === true };
+  }
+
+  it('says so in place of the app, with what to do, and nothing in this tab can be changed meanwhile', async () => {
+    useStore.setState({ recordsElsewhere: true });
+    await opened();
+    expect(shown()).toContain(TITLE_ELSEWHERE);
+    expect(shown()).toContain('Only one tab at a time can save the records, so nothing is saved in this one. Use the other tab, or use this one instead.');
+    expect(shown()).toContain('Use this tab');
+    expect(appHidden()).toBe(true);
+  });
+
+  it('Use this tab takes the records, once at a time, and the app is back once they have been read again', async () => {
+    let done: () => void = () => undefined;
+    const take = jest.fn(() => new Promise<void>((resolve) => (done = resolve)));
+    useStore.setState({ recordsElsewhere: true, takeRecordsHere: take });
+    await opened();
+    await act(async () => useThisTab().onPress());
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(useThisTab().off).toBe(true);
+    await act(async () => {
+      useStore.setState({ recordsElsewhere: false });
+      done();
+    });
+    expect(shown()).not.toContain(TITLE_ELSEWHERE);
+    expect(appHidden()).toBe(false);
+    expect(shown()).toContain('The app');
+  });
+
+  it('is not said while this tab saves them', async () => {
+    await opened();
+    expect(shown()).not.toContain(TITLE_ELSEWHERE);
+    expect(appHidden()).toBe(false);
+  });
+
+  it('sends nothing from this tab meanwhile: what it has may be older, and the tab that saves the records sends them', async () => {
+    mockSync.started = 0;
+    mockSync.stopped = 0;
+    useStore.setState({ recordsElsewhere: true });
+    await opened();
+    expect(mockSync.started).toBe(0);
+    await act(async () => {
+      useStore.setState({ recordsElsewhere: false });
+    });
+    expect(mockSync).toEqual({ started: 1, stopped: 0 });
+    await act(async () => {
+      useStore.setState({ recordsElsewhere: true });
+    });
+    expect(mockSync).toEqual({ started: 1, stopped: 1 });
+  });
+
+  it('is said in place of a notice that a save could not be written: there is none to make here', async () => {
+    useStore.setState({ recordsElsewhere: true, recordsUnsaved: true, saveRecordsAgain: jest.fn() });
+    await opened();
+    expect(shown()).toContain(TITLE_ELSEWHERE);
+    expect(shown()).not.toContain(TITLE);
   });
 });

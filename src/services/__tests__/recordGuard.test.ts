@@ -59,3 +59,64 @@ it('is kept for each key apart', async () => {
   await expect(guarded.recordStorage.getItem(KEY)).rejects.toThrow();
   expect(await guarded.recordStorage.getItem('another-key')).toBeNull();
 });
+
+describe('once another tab of the browser saves the records (letGo)', () => {
+  it('nothing is written over them from this one, until it has read them again', async () => {
+    const { at, written } = place(['saved', 'saved by the other tab']);
+    const guarded = guardRecords(at);
+    expect(await guarded.recordStorage.getItem(KEY)).toBe('saved');
+    guarded.recordsRead(KEY);
+    await guarded.recordStorage.setItem(KEY, 'one');
+    guarded.letGo(KEY);
+    await guarded.recordStorage.setItem(KEY, 'what this tab has in memory');
+    await guarded.recordStorage.removeItem(KEY);
+    expect(written).toEqual(['one']);
+
+    expect(await guarded.recordStorage.getItem(KEY)).toBe('saved by the other tab');
+    guarded.recordsRead(KEY);
+    await guarded.recordStorage.setItem(KEY, 'two');
+    expect(written).toEqual(['one', 'two']);
+  });
+
+  it('a save asked for before it, and not yet done, is not done', async () => {
+    const { at, written } = place(['saved']);
+    const guarded = guardRecords(at);
+    expect(await guarded.recordStorage.getItem(KEY)).toBe('saved');
+    guarded.recordsRead(KEY);
+    const asked = guarded.recordStorage.setItem(KEY, 'asked before');
+    guarded.letGo(KEY);
+    await asked;
+    expect(written).toEqual([]);
+  });
+
+  it('a save held in memory because it could not be written is let go of, and no longer said', async () => {
+    let full = true;
+    const written: string[] = [];
+    const reads = ['saved', 'saved by the other tab'];
+    const guarded = guardRecords({
+      async read() {
+        return reads.shift() ?? null;
+      },
+      async write(_key, value) {
+        if (full) throw new Error('QuotaExceededError');
+        written.push(value);
+      },
+      async remove() {},
+    });
+    const said: boolean[] = [];
+    guarded.watchUnsaved((unsaved) => said.push(unsaved));
+    expect(await guarded.recordStorage.getItem(KEY)).toBe('saved');
+    guarded.recordsRead(KEY);
+    await guarded.recordStorage.setItem(KEY, 'not written');
+    expect(said).toEqual([true]);
+
+    guarded.letGo(KEY);
+    expect(said).toEqual([true, false]);
+    // Read again, it is what the other tab saved, not what this one held.
+    expect(await guarded.recordStorage.getItem(KEY)).toBe('saved by the other tab');
+    full = false;
+    guarded.recordsRead(KEY);
+    await guarded.recordStorage.setItem(KEY, 'three');
+    expect(written).toEqual(['three']);
+  });
+});

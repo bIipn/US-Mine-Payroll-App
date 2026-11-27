@@ -7,14 +7,14 @@ import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, ProgressBar, Sheet, Tag, TopBar, Txt, TriChoice, UnitPlate } from '../../components/ui';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, FUEL_LINE } from '../../domain/templates';
-import { gallonsProblem, parseReading, readingProblem, readingText } from '../../domain/reading';
+import { gallonsProblem, meterText, parseReading, readingProblem, readingText } from '../../domain/reading';
 import type { Answer, ChecklistItem, InspectionAnswer } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { useDecimalMark } from '../../services/decimalMark';
 import { haptic } from '../../services/haptics';
 import { useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
-import { fmtDate, fmtMeter, fmtTime, fullName } from '../../util/format';
+import { fmtDate, fmtTime, fullName } from '../../util/format';
 
 type Draft = Record<string, { answer: Answer; note?: string; hazard?: boolean }>;
 
@@ -165,12 +165,13 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
             onChangeText={setMeter}
             keyboardType="decimal-pad"
             selectTextOnFocus
-            hint={`Last reading ${fmtMeter(unit.meter)} ${unit.meterUnit}`}
+            // The last reading as the box has it, with the phone's mark: 4250,5 in the box is not 4,250.5 beside it.
+            hint={`Last reading ${meterText(unit.meter, mark)} ${unit.meterUnit}`}
             error={
               showMissing && !meterOk
                 ? readingProblem(mark)
                 : meterOk && meterValue < unit.meter
-                  ? `That is lower than the last reading of ${fmtMeter(unit.meter)}. Check it before you sign.`
+                  ? `That is lower than the last reading of ${meterText(unit.meter, mark)}. Check it before you sign.`
                   : null
             }
           />
@@ -302,7 +303,8 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
           <View style={{ flex: 1 }}>
             <Txt v="strong">{unit.make} {unit.model}</Txt>
             <Txt v="small" c={color.silica}>
-              {miles ? 'Odometer' : 'Equipment hours'} {fmtMeter(meterValue)}{gallonsValue != null && gallonsValue > 0 ? `, ${gallonsValue} gallons added` : ''}
+              {/* What is about to be signed, as the person typed it: with the phone's mark. */}
+              {miles ? 'Odometer' : 'Equipment hours'} {meterText(meterValue, mark)}{gallonsValue != null && gallonsValue > 0 ? `, ${readingText(gallonsValue, mark)} gallons added` : ''}
             </Txt>
           </View>
         </View>

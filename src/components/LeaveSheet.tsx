@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import type { DayLine } from '../domain/payroll';
+import { parseDecimal, withMark } from '../domain/reading';
 import type { LeaveEntry, LeaveType } from '../domain/types';
+import { useDecimalMark } from '../services/decimalMark';
 import { haptic } from '../services/haptics';
 import { useStore } from '../store/useStore';
 import { color, radius, space, TAP } from '../theme/theme';
@@ -27,9 +29,13 @@ export function LeaveSheet({ visible, onClose, employeeId, employeeName, days, l
   now: number;
 }) {
   const { addLeave, removeLeave, showToast } = useStore.getState();
+  // The phone's own decimal mark, which its number pad types: 4,5 hours where the phone writes a comma for a part.
+  const mark = useDecimalMark();
+  /** A full day, as the box starts, written with the phone's mark so it reads back as eight hours. */
+  const fullDay = withMark(fmtHrs(800), mark);
   const [type, setType] = useState<LeaveType>('pto');
   const [day, setDay] = useState('');
-  const [hours, setHours] = useState('8.00');
+  const [hours, setHours] = useState(fullDay);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -40,19 +46,20 @@ export function LeaveSheet({ visible, onClose, employeeId, employeeName, days, l
     const pick = days.find((d) => d.dayStart === today) ?? days.find((d) => d.shifts.length === 0) ?? days[0];
     setDay(pick ? String(pick.dayStart) : '');
     setType('pto');
-    setHours('8.00');
+    setHours(fullDay);
     setNote('');
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   const save = () => {
-    const value = Number(hours);
+    // Read by the phone's mark (parseDecimal); the store says what is wrong with hours it does not take.
+    const value = parseDecimal(hours, mark) ?? Number.NaN;
     const result = addLeave({
       employeeId,
       day: Number(day),
       type,
-      hours: hours.trim() === '' || !Number.isFinite(value) ? Number.NaN : Math.round(value * 100),
+      hours: Number.isNaN(value) ? Number.NaN : Math.round(value * 100),
       note,
     });
     if (!result.ok) {

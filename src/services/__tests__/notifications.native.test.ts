@@ -168,6 +168,14 @@ describe('scheduleLocal', () => {
     expect(scheduled).toEqual([]);
   });
 
+  // A hand-over whose turn is over (src/services/reminders.ts) may already have been followed by one made from newer
+  // records, so a call it made late must not put on the phone what the newer one left off.
+  it('schedules nothing more once the hand-over it is part of is no longer in its turn', async () => {
+    const { mod, scheduled } = load('android');
+    await mod.scheduleLocal([lunchOver(), lunch15()], () => scheduled.length === 0);
+    expect((scheduled as Request[]).map((r) => r.identifier)).toEqual(['lunch-end']);
+  });
+
   it('decides what goes before it takes anything off, so a slow phone does not lose a notice due soon', async () => {
     const { mod, notifications, scheduled } = load('android');
     // The phone takes a while to say whether notifications are allowed.

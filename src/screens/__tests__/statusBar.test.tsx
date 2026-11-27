@@ -3,17 +3,25 @@
 // result of a checklist and a signed pre shift exam. Each asks for white or dark icons to suit it, but only
 // while it is the screen in front: a tab left open behind another, or a screen with another opened over it,
 // asks for nothing, so the light screens get the app's own dark icons. With no signal the black strip across
-// the top asks for white icons, and a coloured screen opened then cannot make them dark on it. React Native
-// merges every status bar a screen draws in the order they were drawn, and on Android it hands the result to
-// the phone; that is played here as the real App, its real navigator and those three real screens draw them,
-// on an Android phone. Every other screen is a stand-in. Everyone and everything here is made up.
+// the top asks for white icons, and a coloured screen opened then cannot make them dark on it. The sign-in
+// screens draw a dark band under the status bar too, and ask for white icons over it. React Native merges
+// every status bar a screen draws in the order they were drawn, and on Android it hands the result to the
+// phone; that is played here as the real App, its real navigator and those three real screens draw them,
+// with the sign-in screens' real top, on an Android phone. Every other screen is a stand-in. Everyone and
+// everything here is made up.
 import type { Platform as PlatformType } from 'react-native';
 
 import type { AreaExam, Equipment, Inspection } from '../../domain/types';
 
 const mockText = (words: string) => () => require('react').createElement(require('react-native').Text, null, words);
-jest.mock('../../screens/auth/AuthScreen', () => ({ AuthScreen: mockText('Auth') }));
-jest.mock('../../screens/auth/CompanySignInScreen', () => ({ CompanySignInScreen: mockText('CompanySignIn') }));
+/** A sign-in screen with its real top: the dark band both sign-in screens draw under the status bar. */
+const mockSignIn = (words: string) => () => {
+  const R = require('react');
+  const { SignInHeader } = require('../../components/SignInHeader');
+  return R.createElement(R.Fragment, null, R.createElement(SignInHeader, { company: null }), mockText(words)());
+};
+jest.mock('../../screens/auth/AuthScreen', () => ({ AuthScreen: mockSignIn('Auth') }));
+jest.mock('../../screens/auth/CompanySignInScreen', () => ({ CompanySignInScreen: mockSignIn('CompanySignIn') }));
 jest.mock('../../screens/equipment/ChecklistCardScreen', () => ({ ChecklistCardScreen: mockText('ChecklistCard') }));
 jest.mock('../../screens/equipment/EndUseScreen', () => ({ EndUseScreen: mockText('EndUse') }));
 jest.mock('../../screens/equipment/EquipmentScreen', () => ({ EquipmentScreen: mockText('Checklists') }));
@@ -159,9 +167,9 @@ function exam(): AreaExam {
 
 /**
  * The app opened on Lee's own phone, as it opens on a phone: the loading view first, while the records are
- * read, then Lee signed in on the Clock tab, `on` the clock or off it.
+ * read, then Lee signed in on the Clock tab, `on` the clock or off it, or nobody `signedIn` yet.
  */
-async function opened({ on = false } = {}) {
+async function opened({ on = false, signedIn = true } = {}) {
   useStore.setState({ hydrated: false, recordsUnreadable: false });
   root = createRoot();
   const r = root;
@@ -176,7 +184,7 @@ async function opened({ on = false } = {}) {
     useStore.setState({
       employees: [{ id: 'emp-lee', firstName: 'Lee', lastName: 'Park', role: 'employee', active: true }],
       accounts: [{ id: 'acct-lee', employeeId: 'emp-lee', email: '', provider: 'company', createdAt: 1 }],
-      session: { accountId: 'acct-lee', employeeId: 'emp-lee' },
+      session: signedIn ? { accountId: 'acct-lee', employeeId: 'emp-lee' } : null,
       shifts: on ? [{ id: 'sh-lee', employeeId: 'emp-lee', clockIn: { at: now - 3_600_000, noLocation: 'off' }, lunches: [], breaks: [] }] : [],
       equipment: [L5],
       inspections: [badOrder()],
@@ -243,6 +251,23 @@ describe('the status bar icons on Android', () => {
     expect(await icons()).toBe('light-content');
     await to('MrfDetail', { mrfId: 'none' });
     expect(await icons()).toBe('dark-content');
+  });
+
+  it('are white on the sign-in screen’s dark band, when the app opens and after signing out', async () => {
+    await opened({ signedIn: false });
+    expect(await icons()).toBe('light-content');
+    // Signed in, on a light tab: the sign-in screen has gone, and its white icons with it.
+    await act(async () => {
+      useStore.setState({ session: { accountId: 'acct-lee', employeeId: 'emp-lee' } });
+    });
+    await to('Equipment');
+    expect(await icons()).toBe('dark-content');
+    // Signed out from there: white again on the band.
+    await act(async () => {
+      useStore.getState().signOut();
+    });
+    expect(useStore.getState().session).toBeNull();
+    expect(await icons()).toBe('light-content');
   });
 
   it('are white under the black no-signal strip, even on the yellow Clock screen opened after it', async () => {

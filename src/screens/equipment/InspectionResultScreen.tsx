@@ -10,7 +10,7 @@ import { Button, Notice, Txt, UnitPlate } from '../../components/ui';
 import { BAD_ORDER_STEPS, CLEARED_REMINDERS, DEFECT_STEPS } from '../../domain/standards';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
-import { mrfItemsFromInspection, useMe, useStore } from '../../store/useStore';
+import { alreadyOnRequest, mrfItemsFromInspection, requestTargetProblem, useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtMeter, fmtTime, fullName } from '../../util/format';
 import { useBackPress } from '../../util/hooks';
@@ -21,13 +21,18 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
   const inspection = useStore((s) => s.inspections.find((i) => i.id === route.params.inspectionId));
   const unit = useStore((s) => s.equipment.find((e) => e.id === inspection?.equipmentId));
   const mrf = useStore((s) => s.mrfs.find((m) => m.id === inspection?.mrfId));
+  // Whether a request can be made from this checklist at all, by the store's own checks of what it points at.
+  const canRequest = useStore((s) => !!inspection && !requestTargetProblem(s, { equipmentId: inspection.equipmentId, inspectionId: inspection.id }));
   const { decideAfterDefect, showToast } = useStore.getState();
 
   // What is still owed here: the maintenance request for a Bad Order or a defect, then, after a defect, whether
   // the person runs the unit or parks it. Until then only this screen's buttons leave it. iPhone has no back
   // gesture on it; on Android the back button and the back gesture say what is left instead of going back.
   // The buttons that settle it go on by themselves, and the request's own form, opened on top, goes back as ever.
-  const owed = !!inspection && !!unit && !!me && inspection.result !== 'pass' && (!mrf || (inspection.result === 'defect' && !inspection.decision));
+  // A request the store would not take is never waited on: then back goes back.
+  const owed =
+    !!inspection && !!unit && !!me && inspection.result !== 'pass' &&
+    (mrf ? inspection.result === 'defect' && !inspection.decision : canRequest);
   useBackPress(owed, () => {
     showToast(mrf ? 'Say whether you run it or park it' : 'Fill out the maintenance request first', 'warn');
     return true;
@@ -128,7 +133,12 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
           ) : null}
 
           {inspection.result !== 'pass' && mrf ? (
-            <Notice tone="ok" icon={CircleCheck} title={`Maintenance request #${mrf.number} sent`} body="It is on the maintenance request list, and it stays open until the repair is signed off." />
+            mrf.inspectionId === inspection.id ? (
+              <Notice tone="ok" icon={CircleCheck} title={`Maintenance request #${mrf.number} sent`} body="It is on the maintenance request list, and it stays open until the repair is signed off." />
+            ) : (
+              // Found again while the person's own request for it is still open: this checklist went on that request.
+              <Notice tone="ok" icon={CircleCheck} title={alreadyOnRequest(mrf.number)} body="You sent it before and it is still open, so it was not sent twice. It stays on the maintenance request list until the repair is signed off." />
+            )
           ) : null}
 
           {inspection.result === 'bad_order' && mrf ? (

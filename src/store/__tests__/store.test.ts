@@ -7,7 +7,7 @@ import { checklistFor } from '../../domain/templates';
 import { shiftFlags, shiftTotals } from '../../domain/time';
 import type { InspectionAnswer } from '../../domain/types';
 import { parseRoster } from '../../domain/roster';
-import { openShiftOf, useStore } from '../useStore';
+import { openShiftOf, requestTargetProblem, useStore } from '../useStore';
 
 const at = (h: number, m = 0) => new Date(2026, 10, 13, h, m, 0).getTime();
 const onSite = toGeoStamp(SAMPLE_SITE, { ...SAMPLE_SITE.center, accuracyM: 5 }, 'gps');
@@ -611,6 +611,10 @@ describe('maintenance requests', () => {
     expect(s().mrfs).toHaveLength(before);
     // Something else wrong in the same place is a request of its own.
     expect(s().createMrf({ location: 'Bagging plant, bag conveyor', priority: 'high', description: 'Belt is tracking off', taggedOut: false })).toMatchObject({ ok: true });
+    // So is the same thing asked for as more urgent than the first: what it asks for more is not lost.
+    expect(s().createMrf({ location: 'Bagging plant, bag conveyor', priority: 'safety', description: 'Tail roller is seized', taggedOut: false })).toMatchObject({
+      ok: true, mrf: { priority: 'safety' },
+    });
   });
 
   it('is not sent for a unit or a checklist that is not there', () => {
@@ -644,6 +648,86 @@ describe('maintenance requests', () => {
       ok: false, error: `Maintenance request #${first.mrf.number} is already in for this checklist.`,
     });
     expect(s().inspections.find((i) => i.id === check.inspection.id)?.mrfId).toBe(first.mrf.id);
+  });
+
+  describe('a later checklist that finds what the request still open on the unit already says', () => {
+    const input = { priority: 'high' as const, description: 'Lights: Left work light out', taggedOut: false };
+    /** Two of the operator's checklists on WT-01 with the same Bad Order, and the request sent from the first, still open. */
+    const twoChecklists = () => {
+      s().signInDemo('employee');
+      const wt = unit('WT-01');
+      const check = () => {
+        const made = s().submitInspection({
+          equipmentId: wt.id, startedAt: Date.now(), meter: wt.meter,
+          answers: answers('WT-01', { lights: { answer: 'bo', note: 'Left work light out' } }),
+        });
+        if (!made.ok) throw new Error(made.error);
+        return made.inspection;
+      };
+      const first = check();
+      const sent = s().createMrf({ ...input, equipmentId: wt.id, inspectionId: first.id });
+      if (!sent.ok) throw new Error(sent.error);
+      s().decideAfterDefect(first.id, 'parked');
+      jest.setSystemTime(at(9, 0));
+      const again = check();
+      return { wt, first, again, sent: sent.mrf };
+    };
+
+    it('puts the checklist on that request instead of turning it back, and sends the checklist again', () => {
+      const { wt, first, again, sent } = twoChecklists();
+      expect(again.result).toBe('defect');
+      // The server has everything so far.
+      s().markSynced(changesToSend(s(), s().synced, new Set()));
+      const firstBefore = s().inspections.find((i) => i.id === first.id);
+      const [count, seq] = [s().mrfs.length, s().mrfSeq];
+
+      // The form for the second checklist, filled from its Bad Order lines: the same words as the first.
+      expect(s().createMrf({ ...input, equipmentId: wt.id, inspectionId: again.id })).toEqual({ ok: true, mrf: sent });
+      expect([s().mrfs.length, s().mrfSeq]).toEqual([count, seq]);
+      const linked = s().inspections.find((i) => i.id === again.id)!;
+      expect(linked.mrfId).toBe(sent.id);
+      // A signed record keeps its answers: the pointer to the request is all that is added.
+      expect({ ...linked, mrfId: undefined }).toEqual({ ...again, mrfId: undefined });
+      expect(s().inspections.find((i) => i.id === first.id)).toBe(firstBefore);
+
+      // The checklist changed, so it goes to the server again, on top of the version the server has. The request does not.
+      const waiting = changesToSend(s(), s().synced, new Set());
+      expect(waiting.map((c) => [c.kind, c.id])).toEqual([['inspection', again.id]]);
+      expect(waiting[0]).toMatchObject({ base: expect.any(String), record: { id: again.id, mrfId: sent.id } });
+
+      // From then on it is a checklist with its request in, like any other.
+      expect(s().createMrf({ ...input, equipmentId: wt.id, inspectionId: again.id })).toEqual({
+        ok: false, error: `Maintenance request #${sent.number} is already in for this checklist.`,
+      });
+    });
+
+    it('sends a request of its own when the second asks for more: a red tag the first did not', () => {
+      const { wt, again, sent } = twoChecklists();
+      const own = s().createMrf({ ...input, equipmentId: wt.id, inspectionId: again.id, priority: 'safety', taggedOut: true });
+      expect(own).toMatchObject({ ok: true, mrf: { number: sent.number + 1, inspectionId: again.id, taggedOut: true } });
+      if (!own.ok) return;
+      expect(s().inspections.find((i) => i.id === again.id)?.mrfId).toBe(own.mrf.id);
+      expect(unit('WT-01').status).toBe('out_of_service');
+    });
+
+    it('is a request of its own once the first is completed, or when the first is someone else’s', () => {
+      const { wt, again, sent } = twoChecklists();
+      s().signInDemo('supervisor');
+      expect(s().completeMrf(sent.id, { remarks: 'Replaced the work light' })).toEqual({ ok: true });
+      s().signInDemo('employee');
+      expect(s().createMrf({ ...input, equipmentId: wt.id, inspectionId: again.id })).toMatchObject({ ok: true, mrf: { number: sent.number + 1 } });
+    });
+
+    it('says why no request can be made from a checklist, in the words the store turns one back with', () => {
+      const { wt, first, again, sent } = twoChecklists();
+      // The open request with the same words takes the second checklist: nothing stops one being made from it.
+      expect(requestTargetProblem(s(), { equipmentId: wt.id, inspectionId: again.id })).toBeUndefined();
+      expect(requestTargetProblem(s(), { equipmentId: wt.id, inspectionId: first.id })).toBe(`Maintenance request #${sent.number} is already in for this checklist.`);
+      expect(requestTargetProblem(s(), { equipmentId: 'eq_nowhere', inspectionId: again.id })).toBe('That unit is no longer in the fleet list.');
+      expect(requestTargetProblem(s(), { equipmentId: wt.id, inspectionId: 'insp_nowhere' })).toBe('That checklist is not on record for this unit.');
+      s().signOut();
+      expect(requestTargetProblem(s(), { equipmentId: wt.id, inspectionId: again.id })).toBe('You are signed out.');
+    });
   });
 
   it('fills in the rest of the paper form as the work is done', () => {

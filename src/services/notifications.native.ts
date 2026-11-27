@@ -127,9 +127,10 @@ const LEAD_MS = 1000;
  * Which go is decided once, before anything is taken off the phone: those at least a second ahead. One due within
  * the second is left as the phone holds it, since it could not be handed over again in time and taking it off
  * would lose it (the reminders are handed over again every time the app comes back to the front on a shift); one
- * already past is taken off.
+ * already past is taken off. Once `inTurn` says the hand-over this is part of is no longer in its turn
+ * (src/services/reminders.ts), nothing more is scheduled: a later hand-over may have been made since.
  */
-export async function scheduleLocal(reminders: LocalReminder[]): Promise<void> {
+export async function scheduleLocal(reminders: LocalReminder[], inTurn: () => boolean = () => true): Promise<void> {
   if (!reminders.length) return;
   const now = Date.now();
   const ahead = reminders.filter((r) => r.at > now + LEAD_MS);
@@ -141,6 +142,7 @@ export async function scheduleLocal(reminders: LocalReminder[]): Promise<void> {
     return;
   }
   for (const reminder of ahead) {
+    if (!inTurn()) return;
     try {
       await Notifications.scheduleNotificationAsync({
         identifier: reminder.id,

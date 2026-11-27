@@ -65,9 +65,15 @@ export async function cancelLocal(ids: string[]): Promise<void> {
   }
 }
 
-export async function scheduleLocal(reminders: LocalReminder[]): Promise<void> {
+/**
+ * Sets each reminder to show while the tab is open, replacing any of the same id. Once `inTurn` says the hand-over
+ * this is part of is no longer in its turn (src/services/reminders.ts), nothing more is set: a later hand-over may
+ * have been made since.
+ */
+export async function scheduleLocal(reminders: LocalReminder[], inTurn: () => boolean = () => true): Promise<void> {
   await cancelLocal(reminders.map((r) => r.id));
   for (const reminder of reminders) {
+    if (!inTurn()) return;
     const delay = reminder.at - Date.now();
     // setTimeout tops out near 24 days; a shift never needs more than hours.
     if (delay <= 0 || delay > 24 * 3_600_000) continue;
