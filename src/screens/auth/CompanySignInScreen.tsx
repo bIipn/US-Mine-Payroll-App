@@ -15,6 +15,7 @@ import { checkAccount, server, signOutOfPhone, useServerAccount, type AccountSta
 import { syncNow, useSyncStatus } from '../../services/sync';
 import { useStore } from '../../store/useStore';
 import { color, space, TAP } from '../../theme/theme';
+import { useBackPress } from '../../util/hooks';
 import { CheckedOutUnits } from '../equipment/CheckedOutUnits';
 import { SignOutHeldUp, type HeldUp } from '../more/SignOutOfPhone';
 import { CrewSignIn, keepCrewSession, passcodesHere, type CrewTyped, type SignedIn } from './CrewSignIn';
@@ -106,23 +107,36 @@ export function CompanySignInScreen({ navigation }: ScreenProps<'CompanySignIn'>
           )}
         </View>
 
-        {signedOut && phone ? (
-          <View style={styles.below}>
-            <Panel flush>
-              {withEmail ? (
-                <Row testID="crew-use-code" left={<HardHat color={color.ink} size={24} />} title="Crew? Sign in with the company code" chevron onPress={() => setWithEmail(false)} />
-              ) : (
-                <Row testID="crew-use-email" left={<UserCog color={color.ink} size={24} />} title="Supervisor? Sign in with email" chevron onPress={() => setWithEmail(true)} />
-              )}
-            </Panel>
-          </View>
-        ) : null}
+        {signedOut && phone ? <CrewOrEmail withEmail={withEmail} onChange={setWithEmail} /> : null}
 
         <View style={styles.below}>
           <WebPageLinks testID="company-sign-in-pages" />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+/**
+ * On a phone, the way from the crew sign-in to the email sign-in and back. The email sign-in is not a screen
+ * of its own, so on Android the back button and the back gesture close it here, back to the crew sign-in, as
+ * they would close a screen; on the crew sign-in they are Android's own again.
+ */
+function CrewOrEmail({ withEmail, onChange }: { withEmail: boolean; onChange: (withEmail: boolean) => void }) {
+  useBackPress(withEmail, () => {
+    onChange(false);
+    return true;
+  });
+  return (
+    <View style={styles.below}>
+      <Panel flush>
+        {withEmail ? (
+          <Row testID="crew-use-code" left={<HardHat color={color.ink} size={24} />} title="Crew? Sign in with the company code" chevron onPress={() => onChange(false)} />
+        ) : (
+          <Row testID="crew-use-email" left={<UserCog color={color.ink} size={24} />} title="Supervisor? Sign in with email" chevron onPress={() => onChange(true)} />
+        )}
+      </Panel>
+    </View>
   );
 }
 

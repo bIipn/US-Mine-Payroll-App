@@ -12,10 +12,12 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { APP_NAME } from './src/config';
 import { rulesFor } from './src/domain/stateRules';
+import { RecordsNotSavedFrame } from './src/components/RecordsNotSaved';
 import { SignalFrame } from './src/components/SignalStrip';
 import { keepsTime } from './src/domain/company';
 import { ToastHost } from './src/components/ui';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { RecordsUnreadableScreen } from './src/screens/auth/RecordsUnreadableScreen';
 import { watchConnection } from './src/services/connection';
 import { syncReminders } from './src/services/reminders';
 import { startSync } from './src/services/sync';
@@ -36,6 +38,8 @@ export default function App() {
     BarlowCondensed_700Bold,
   });
   const hydrated = useStore((s) => s.hydrated);
+  // The records saved on this phone could not be read: the app says so, and does not open as a new phone.
+  const recordsUnreadable = useStore((s) => s.recordsUnreadable);
   const ensureSeeded = useStore((s) => s.ensureSeeded);
   const { width } = useWindowDimensions();
 
@@ -61,31 +65,39 @@ export default function App() {
   }, [hydrated]);
 
   // If the fonts cannot load, carry on with the system font rather than a blank screen.
-  const ready = hydrated && (fontsLoaded || !!fontError);
+  const fontsReady = fontsLoaded || !!fontError;
+  const ready = hydrated && fontsReady;
   // On a wide browser window the app sits in a phone-width column.
   const framed = Platform.OS === 'web' && width > 640;
 
   return (
     <SafeAreaProvider>
+      {/* The app's own status bar, drawn first so it is the base: the no-signal strip and a screen with a coloured
+          top, drawn after it, each put their own over it while they are there (ScreenStatusBar). */}
+      <StatusBar style="auto" />
       <View style={[styles.root, framed && styles.rootFramed]}>
         <View style={[styles.app, framed && styles.appFramed]}>
           <SignalFrame>
-            {/* On the web the browser tab says MineMuster, not the name of the screen. */}
-            {ready ? (
-              <NavigationContainer theme={navTheme} documentTitle={{ formatter: () => APP_NAME }}>
-                <RootNavigator />
-              </NavigationContainer>
-            ) : (
-              <View style={styles.loading}>
-                <ActivityIndicator color={color.yellow} size="large" />
-              </View>
-            )}
-            {/* Inside the frame, so a message shows under the no-signal strip, not over it. */}
-            <ToastHost />
+            {/* A save of the records that could not be written is said over every screen, under the no-signal strip. */}
+            <RecordsNotSavedFrame>
+              {recordsUnreadable && fontsReady ? (
+                <RecordsUnreadableScreen />
+              ) : ready ? (
+                // On the web the browser tab says MineMuster, not the name of the screen.
+                <NavigationContainer theme={navTheme} documentTitle={{ formatter: () => APP_NAME }}>
+                  <RootNavigator />
+                </NavigationContainer>
+              ) : (
+                <View style={styles.loading}>
+                  <ActivityIndicator color={color.yellow} size="large" />
+                </View>
+              )}
+              {/* Inside the frames, so a message shows under the no-signal strip and that notice, not over them. */}
+              <ToastHost />
+            </RecordsNotSavedFrame>
           </SignalFrame>
         </View>
       </View>
-      <StatusBar style="auto" />
     </SafeAreaProvider>
   );
 }

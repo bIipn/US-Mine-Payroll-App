@@ -11,7 +11,12 @@ const mockScreen = (name: string) => {
 };
 jest.mock('../../screens/auth/AuthScreen', () => ({ AuthScreen: mockScreen('Auth') }));
 jest.mock('../../screens/auth/CompanySignInScreen', () => ({ CompanySignInScreen: mockScreen('CompanySignIn') }));
-jest.mock('../../screens/clock/ClockScreen', () => ({ ClockScreen: mockScreen('Clock') }));
+// The Clock screen says whether it was drawn alone, with no tab bar under it.
+jest.mock('../../screens/clock/ClockScreen', () => {
+  const R = require('react');
+  const { Text } = require('react-native');
+  return { ClockScreen: ({ clockOnly }: { clockOnly?: boolean }) => R.createElement(Text, null, clockOnly ? 'Clock alone' : 'Clock') };
+});
 jest.mock('../../screens/equipment/ChecklistCardScreen', () => ({ ChecklistCardScreen: mockScreen('ChecklistCard') }));
 jest.mock('../../screens/equipment/EndUseScreen', () => ({ EndUseScreen: mockScreen('EndUse') }));
 jest.mock('../../screens/equipment/EquipmentScreen', () => ({ EquipmentScreen: mockScreen('Equipment') }));
@@ -72,14 +77,15 @@ type Root = typeof import('../RootNavigator');
 type Store = typeof import('../../store/useStore');
 
 const React: typeof import('react') = require('react');
-const { createRoot } = require('test-renderer') as { createRoot: () => { render(e: unknown): void; unmount(): void } };
+type Renderer = { render(e: unknown): void; unmount(): void; container: { toJSON(): unknown } };
+const { createRoot } = require('test-renderer') as { createRoot: () => Renderer };
 const nav: Nav = require('@react-navigation/native');
 const { RootNavigator }: Root = require('../RootNavigator');
 const { useStore }: Store = require('../../store/useStore');
 const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Promise<void> }).act;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-let renderer: { render(e: unknown): void; unmount(): void } | null = null;
+let renderer: Renderer | null = null;
 afterEach(async () => {
   const r = renderer;
   renderer = null;
@@ -130,6 +136,29 @@ describe('after Delete my account deletes the account on the phone', () => {
       expect(s().signIn('lee@example.com', 'crusher77')).toEqual({ ok: true });
     });
     expect(stack()).toEqual(['Main']);
+  });
+});
+
+describe('someone taken off the roster while on the clock', () => {
+  it('keeps the Clock screen alone, told there is no tab bar under it', async () => {
+    const { ref, s, stack } = await mounted();
+    await act(async () => {
+      expect(s().signUp({ firstName: 'Lee', lastName: 'Park', email: 'lee@example.com', password: 'crusher77' })).toMatchObject({ ok: true });
+    });
+    const shown = () => JSON.stringify(renderer!.container.toJSON());
+    // In the tabs, the tab bar is under the Clock screen.
+    expect(ref.getCurrentRoute()?.name).toBe('Clock');
+    expect(shown()).not.toContain('Clock alone');
+
+    const lee = s().session!.employeeId;
+    await act(async () => {
+      useStore.setState({
+        shifts: [{ id: 'sh-lee', employeeId: lee, clockIn: { at: Date.now() - 3_600_000, noLocation: 'off' }, lunches: [], breaks: [] }],
+        employees: s().employees.map((e) => (e.id === lee ? { ...e, active: false } : e)),
+      });
+    });
+    expect({ current: ref.getCurrentRoute()?.name, stack: stack() }).toEqual({ current: 'Main', stack: ['Main'] });
+    expect(shown()).toContain('Clock alone');
   });
 });
 

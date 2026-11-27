@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { Platform } from 'react-native';
 
 import { DEMO_MODE } from '../config';
 import { destination, type RawFix } from '../domain/geofence';
@@ -10,7 +11,36 @@ export type LocateResult =
   | { ok: true; fix: RawFix; source: GeoStamp['source'] }
   | { ok: false; reason: NoLocation };
 
+/** How long the GPS has to give a position once the reading is asked for. */
 const GPS_TIMEOUT_MS = 15_000;
+/**
+ * How long Android's own "turn on location" prompt can go unanswered with the app in front. The app's timers
+ * stand still while the prompt is up, so a person reading it is never hurried: this is only so no punch waits on
+ * a prompt the phone never answers.
+ */
+const SWITCH_ANSWER_MS = 60_000;
+
+/** What a screen can add to a reading. */
+export interface LocateOptions {
+  /**
+   * Android only, and only before the phone first asks for location: say why the app reads it, and resolve once
+   * that is read. Android's own prompt has no room for the app's reason; an iPhone's shows it.
+   */
+  beforeAsking?: () => Promise<void>;
+}
+
+/** What `promise` gives, or `late` once `ms` have passed. The clock is stopped either way. */
+async function within<T, L>(ms: number, promise: Promise<T>, late: L): Promise<T | L> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeUp = new Promise<L>((resolve) => {
+    timer = setTimeout(() => resolve(late), ms);
+  });
+  try {
+    return await Promise.race([promise, timeUp]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Why a reading the app was allowed to take gave no position: location is off
@@ -26,18 +56,49 @@ async function whyNoPosition(): Promise<NoLocation> {
 }
 
 /**
+ * Whether a phone may still ask whether the app can read its location: on
+ * Android, one that has never asked. A phone that cannot say is not asked about.
+ */
+async function neverAsked(): Promise<boolean> {
+  try {
+    return (await Location.getForegroundPermissionsAsync()).status === Location.PermissionStatus.UNDETERMINED;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Android, with location off for the whole phone: offer the phone's own
+ * one-tap switch, and wait for the answer. Says whether location is on now.
+ * The prompt is settled before the reading starts, so the time spent on it
+ * never comes off the GPS's 15 seconds; and the reading itself never shows it.
+ */
+async function switchedOn(): Promise<boolean> {
+  const on = () => Location.hasServicesEnabledAsync().catch(() => true);
+  if (await on()) return true;
+  await within(SWITCH_ANSWER_MS, Location.enableNetworkProviderAsync().catch(() => undefined), undefined);
+  // Turned down, or no answer: location may still have been turned on another way.
+  return on();
+}
+
+/**
  * One location reading, taken at the moment of a punch.
  *
  * The app asks only for "while using the app" permission and never tracks
  * anyone in the background: a position is read when a button is pressed,
  * stamped on that punch, and that is all. When the person allows only an
  * approximate location, no position is read at all: one that vague cannot be
- * checked against the boundary. With location off for the whole phone the
- * reading is still asked for, so the phone can offer its own one-tap switch
- * (Android does, as part of the reading); only once it fails does the answer
- * say location is off.
+ * checked against the boundary.
+ *
+ * On Android the screen says why first, the one time the phone is about to
+ * ask (`beforeAsking`). With location off for the whole phone, Android offers
+ * its own switch before the reading (`switchedOn`); left off, the answer is
+ * that location is off. With location on, the GPS is read without Google's
+ * "location accuracy" prompt, so a phone set to use the GPS alone is read as
+ * it is. An iPhone shows no such prompt. A reading that is slow or fails falls
+ * back to a position from the last minute.
  */
-export async function locate(site: SiteConfig | null, setting: DemoLocation): Promise<LocateResult> {
+export async function locate(site: SiteConfig | null, setting: DemoLocation, options: LocateOptions = {}): Promise<LocateResult> {
   // Simulated GPS is for a preview only. A build that keeps real records reads the phone's own,
   // whatever a preview once left in the settings on this device.
   const demo: DemoLocation = DEMO_MODE ? setting : 'gps';
@@ -51,7 +112,9 @@ export async function locate(site: SiteConfig | null, setting: DemoLocation): Pr
     return { ok: true, source: 'demo', fix: { ...awayFromSite(site), accuracyM: 8 } };
   }
 
+  const android = Platform.OS === 'android';
   try {
+    if (android && options.beforeAsking && (await neverAsked())) await options.beforeAsking();
     const permission = await Location.requestForegroundPermissionsAsync();
     // Turned down for the app (an iPhone with Location Services off says the same).
     if (permission.status !== Location.PermissionStatus.GRANTED) return { ok: false, reason: 'off' };
@@ -62,12 +125,15 @@ export async function locate(site: SiteConfig | null, setting: DemoLocation): Pr
       return { ok: false, reason: 'approximate' };
     }
 
-    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), GPS_TIMEOUT_MS));
-    const reading = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
-      timeout,
-    ]);
-    const position = reading ?? (await Location.getLastKnownPositionAsync({ maxAge: 60_000 }));
+    if (android && !(await switchedOn())) return { ok: false, reason: 'off' };
+
+    // The 15 seconds start here, with every question the phone asks already answered.
+    const reading = await within(
+      GPS_TIMEOUT_MS,
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, mayShowUserSettingsDialog: false }).catch(() => null),
+      null,
+    );
+    const position = reading ?? (await Location.getLastKnownPositionAsync({ maxAge: 60_000 }).catch(() => null));
     if (!position) return { ok: false, reason: await whyNoPosition() };
 
     return {

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import type { Change } from '../../domain/sync';
+import { SEND_TIMEOUT_MS, type Change } from '../../domain/sync';
 
 // A made-up project: no request leaves the test.
 jest.mock('../../config', () => ({ SERVER: { url: 'https://example.supabase.co', key: 'sb_publishable_test' } }));
@@ -96,6 +96,55 @@ const SAM_USER = {
 };
 /** Sam's account, as the app has it: a passcode account's hidden address never reaches it. */
 const SAM = { id: 'u-sam', email: '', kind: 'passcode' as const };
+/** Avery's account as Supabase Auth answers it. */
+const AVERY_USER = { ...AVERY, aud: 'authenticated', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: {} };
+const UNREACHABLE = 'The company server could not be reached. Check your signal and try again.';
+
+// supabase-js itself, not the stand-in, for the tests that need what it does.
+const actual = jest.requireActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js');
+const base64url = (text: string) => btoa(text).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+/** An access token as Supabase Auth makes one. The phone only reads what is in it (whose, and until when); the server checks it. */
+const token = (sub: string, exp: number) => `${[{ alg: 'HS256', typ: 'JWT' }, { sub, exp, role: 'authenticated' }].map((part) => base64url(JSON.stringify(part))).join('.')}.c2lnbmVk`;
+/** The app started again: nothing of it is left in memory, and the phone's storage is as it was. */
+function restartedApp(): typeof import('../server') {
+  let app: typeof import('../server') | undefined;
+  jest.isolateModules(() => {
+    app = require('../server');
+  });
+  return app!;
+}
+/** Let the app run, in the test's own time, until `done`: supabase-js's retries and its refresh ticker go off as they would. */
+async function runUntil(done: () => boolean, limitMs = 5 * 60_000) {
+  for (let ran = 0; !done() && ran < limitMs; ran += 1_000) await jest.advanceTimersByTimeAsync(1_000);
+}
+async function settled<T>(promise: Promise<T>): Promise<T> {
+  let over = false;
+  promise.then(
+    () => (over = true),
+    () => (over = true),
+  );
+  await runUntil(() => over);
+  return promise;
+}
+/** What became of a call so far, read without waiting on it. */
+function watch<T>(promise: Promise<T>) {
+  const seen: { outcome?: 'answered' | 'failed'; value?: unknown } = {};
+  promise.then(
+    (value) => Object.assign(seen, { outcome: 'answered', value }),
+    (error) => Object.assign(seen, { outcome: 'failed', value: error }),
+  );
+  return seen;
+}
+/**
+ * A request whose answer never comes, as on Android with one bar of signal: OkHttp waits with no time
+ * limit, so it ends only when it is stopped.
+ */
+const noAnswer = (_url: string, init?: RequestInit) =>
+  new Promise<Response>((_answer, fail) => {
+    const stopped = () => fail(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+    if (init?.signal?.aborted) stopped();
+    else init?.signal?.addEventListener('abort', stopped);
+  });
 
 beforeEach(() => {
   mockRpc.mockReset();
@@ -114,10 +163,13 @@ describe('the client', () => {
     mockRpc.mockResolvedValue({ data: [], error: null });
     await server.myCompanies();
     expect(mockCreateClient).toHaveBeenCalledTimes(1);
-    const [url, key, options] = mockCreateClient.mock.calls[0] as [string, string, { auth: Record<string, unknown> }];
+    const [url, key, options] = mockCreateClient.mock.calls[0] as [string, string, { auth: Record<string, unknown>; global?: { fetch?: unknown } }];
     expect(url).toBe('https://example.supabase.co');
     expect(key).toBe('sb_publishable_test');
     expect(options.auth).toMatchObject({ persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: 'minemuster-server-session' });
+    // Every request it makes (signing in, refreshing, the server's functions and tables) has a time limit.
+    expect(typeof server.timedFetch).toBe('function');
+    expect(options.global?.fetch).toBe(server.timedFetch);
     // The session goes into the app's own storage and comes back out of it.
     const storage = options.auth.storage as { getItem(k: string): Promise<string | null>; setItem(k: string, v: string): Promise<void>; removeItem(k: string): Promise<void> };
     await storage.setItem('k', 'v');
@@ -168,6 +220,52 @@ describe('the account', () => {
     await expect(server.signOut()).resolves.toBeUndefined();
     expect(await safeStorage.getItem('minemuster-server-session')).toBeNull();
     stop();
+  });
+
+  it('takes the session off the phone when the server does not answer the sign-out, and the client let go puts nothing back', async () => {
+    const KEY = 'minemuster-server-session';
+    type Kept = { getItem(k: string): Promise<string | null>; setItem(k: string, v: string): Promise<void>; removeItem(k: string): Promise<void> };
+    const storageOf = (n: number) => (mockCreateClient.mock.calls[n] as [string, string, { auth: { storage: Kept } }])[2].auth.storage;
+    mockRpc.mockResolvedValue({ data: [], error: null });
+    await server.myCompanies();
+    const held = storageOf(mockCreateClient.mock.calls.length - 1);
+    const heard: (string | null)[] = [];
+    const stop = server.onAccountChange((account) => heard.push(account?.email ?? null));
+    await new Promise((r) => setTimeout(r, 0));
+    await safeStorage.setItem(KEY, JSON.stringify(sessionOf(AVERY)));
+    jest.useFakeTimers();
+    try {
+      // The sign-out goes, and its answer never comes: signal that stops halfway.
+      mockAuth.signOut.mockImplementationOnce(() => new Promise(() => undefined));
+      const going = watch(server.signOut());
+      await jest.advanceTimersByTimeAsync(server.SIGN_OUT_WAIT_MS - 1);
+      expect(going.outcome).toBeUndefined();
+      expect(mockAuth.signOut).toHaveBeenCalledWith({ scope: 'local' });
+      // It is waited for only so long: the session is taken off the phone all the same.
+      await jest.advanceTimersByTimeAsync(1);
+      expect(going.outcome).toBe('answered');
+      expect(await safeStorage.getItem(KEY)).toBeNull();
+      expect(heard).toEqual(['avery@example.com', null]);
+      expect(mockAuth.stopAutoRefresh).toHaveBeenCalled();
+      expect(unsubscribe).toHaveBeenCalled();
+      // What the client let go still had under way (that sign-out, or a refresh), answered late, can neither
+      // put the session back on the phone nor take off one kept since.
+      await held.setItem(KEY, JSON.stringify(sessionOf(AVERY)));
+      expect(await safeStorage.getItem(KEY)).toBeNull();
+      await safeStorage.setItem(KEY, 'kept since');
+      await held.removeItem(KEY);
+      expect(await held.getItem(KEY)).toBeNull();
+      expect(await safeStorage.getItem(KEY)).toBe('kept since');
+      // The next client keeps the session as before.
+      await server.myCompanies();
+      const next = storageOf(mockCreateClient.mock.calls.length - 1);
+      expect(next).not.toBe(held);
+      expect(await next.getItem(KEY)).toBe('kept since');
+    } finally {
+      jest.useRealTimers();
+      stop();
+      await safeStorage.removeItem(KEY);
+    }
   });
 
   it('hears who is signed in, straight away and when it changes, until told to stop', async () => {
@@ -728,8 +826,7 @@ describe('deleting the company sign-in', () => {
 });
 
 describe('staying signed in', () => {
-  // supabase-js itself, not the stand-in: what it does with a session it keeps is what keeps a person signed in.
-  const actual = jest.requireActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js');
+  // supabase-js itself, not the stand-in (`actual`): what it does with a session it keeps is what keeps a person signed in.
   /** Every file the app is built from, tests aside. */
   const appFiles = (dir: string): string[] =>
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === '__tests__' ? [] : appFiles(`${dir}/${e.name}`)) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
@@ -748,30 +845,6 @@ describe('staying signed in', () => {
 
   const KEY = 'minemuster-server-session';
   const DAY = 86_400_000;
-  const base64url = (text: string) => btoa(text).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-  /** An access token as Supabase Auth makes one. The phone only reads what is in it (whose, and until when); the server checks it. */
-  const token = (sub: string, exp: number) => `${[{ alg: 'HS256', typ: 'JWT' }, { sub, exp, role: 'authenticated' }].map((part) => base64url(JSON.stringify(part))).join('.')}.c2lnbmVk`;
-  /** The app started again: nothing of it is left in memory, and the phone's storage is as it was. */
-  function restartedApp(): typeof import('../server') {
-    let app: typeof import('../server') | undefined;
-    jest.isolateModules(() => {
-      app = require('../server');
-    });
-    return app!;
-  }
-  /** Let the app run, in the test's own time, until `done`: supabase-js's retries and its refresh ticker go off as they would. */
-  async function runUntil(done: () => boolean, limitMs = 5 * 60_000) {
-    for (let ran = 0; !done() && ran < limitMs; ran += 1_000) await jest.advanceTimersByTimeAsync(1_000);
-  }
-  async function settled<T>(promise: Promise<T>): Promise<T> {
-    let over = false;
-    promise.then(
-      () => (over = true),
-      () => (over = true),
-    );
-    await runUntil(() => over);
-    return promise;
-  }
   const stored = async () => JSON.parse((await safeStorage.getItem(KEY)) ?? 'null') as { refresh_token?: string; user?: { id?: string } } | null;
 
   it('keeps the session through a restart, days with no signal and an expired token', async () => {
@@ -870,5 +943,166 @@ describe('staying signed in', () => {
     expect(appFiles(src).flatMap((file) => callers(file, /\b(?:server|link)\??\.signOutOtherSessions\(/g).map((fn) => `${rel(file)} ${fn}`))).toEqual([
       'screens/auth/CrewSignIn.tsx keepCrewSession',
     ]);
+  });
+});
+
+describe('a request that gets no answer', () => {
+  const BASE = 'https://example.supabase.co';
+  const KEY = 'minemuster-server-session';
+  afterEach(() => jest.useRealTimers());
+
+  it('is given 30 seconds, to the last of its answer, and then stopped', async () => {
+    jest.useFakeTimers();
+    mockFetch.mockImplementation(noAnswer);
+    const asked = watch(server.timedFetch(`${BASE}/auth/v1/token?grant_type=refresh_token`, { method: 'POST', headers: { apikey: 'k' }, body: '{}' }));
+    await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1);
+    expect(asked.outcome).toBeUndefined();
+    // It goes as supabase-js asked it, with a signal the phone can stop it with.
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe(`${BASE}/auth/v1/token?grant_type=refresh_token`);
+    expect(init).toMatchObject({ method: 'POST', headers: { apikey: 'k' }, body: '{}' });
+    expect(init.signal?.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(asked).toMatchObject({ outcome: 'failed', value: { name: 'AbortError' } });
+    expect(init.signal?.aborted).toBe(true);
+
+    // An answer that starts and then stops coming is stopped at the same time: the time runs to the last of it.
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValueOnce(reply(200, { ok: true }));
+    const started = await server.timedFetch(`${BASE}/rest/v1/rpc/my_companies`, { method: 'POST' });
+    expect(started.status).toBe(200);
+    const body = mockFetch.mock.calls[0][1].signal!;
+    await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1);
+    expect(body.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(body.aborted).toBe(true);
+  });
+
+  it('is stopped sooner when its caller stops it', async () => {
+    jest.useFakeTimers();
+    mockFetch.mockImplementation(noAnswer);
+    const round = new AbortController();
+    const asked = watch(server.timedFetch(`${BASE}/rest/v1/rpc/push_records`, { method: 'POST', signal: round.signal }));
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(asked.outcome).toBeUndefined();
+    round.abort();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(asked).toMatchObject({ outcome: 'failed', value: { name: 'AbortError' } });
+    // One its caller stopped already never waits at all.
+    const before = new AbortController();
+    before.abort();
+    const late = watch(server.timedFetch(`${BASE}/rest/v1/rpc/push_records`, { method: 'POST', signal: before.signal }));
+    await jest.advanceTimersByTimeAsync(0);
+    expect(late).toMatchObject({ outcome: 'failed', value: { name: 'AbortError' } });
+  });
+
+  it('gives an edge function longer than delete-account’s own minute, so that one is what ends it', async () => {
+    jest.useFakeTimers();
+    mockFetch.mockImplementation(noAnswer);
+    const asked = watch(server.timedFetch(`${BASE}/functions/v1/delete-account`, { method: 'POST' }));
+    const sent = mockFetch.mock.calls[0][1].signal!;
+    await jest.advanceTimersByTimeAsync(server.DELETE_TIMEOUT_MS);
+    expect(asked.outcome).toBeUndefined();
+    expect(sent.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(asked).toMatchObject({ outcome: 'failed', value: { name: 'AbortError' } });
+  });
+
+  describe('through supabase-js itself', () => {
+    const clients: SupabaseClient[] = [];
+    let warned: jest.SpyInstance;
+    beforeEach(async () => {
+      warned = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      jest.useFakeTimers({ now: Date.parse('2026-11-20T06:00:00Z') });
+      mockCreateClient.mockImplementation((...args: unknown[]) => {
+        const made = actual.createClient(...(args as Parameters<typeof actual.createClient>));
+        clients.push(made);
+        return made;
+      });
+      await safeStorage.removeItem(KEY);
+    });
+    afterEach(async () => {
+      for (const made of clients.splice(0)) await made.auth.stopAutoRefresh();
+      jest.useRealTimers();
+      mockCreateClient.mockImplementation(fakeClient);
+      warned.mockRestore();
+      await safeStorage.removeItem(KEY);
+    });
+
+    it('a sign-in and a read with no answer say the server could not be reached, after 30 seconds', async () => {
+      mockFetch.mockImplementation(noAnswer);
+      const app = restartedApp();
+      const signingIn = watch(app.signIn('avery@example.com', 'haulroad88'));
+      await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1);
+      expect(signingIn.outcome).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(signingIn).toEqual({ outcome: 'answered', value: { ok: false, error: UNREACHABLE } });
+      expect(mockFetch.mock.calls[0][0]).toBe(`${BASE}/auth/v1/token?grant_type=password`);
+
+      const finding = watch(app.myCompanies());
+      await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS - 1_000);
+      expect(finding.outcome).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(2_000);
+      expect(finding).toEqual({ outcome: 'answered', value: { ok: false, error: UNREACHABLE } });
+      expect(mockFetch.mock.calls[mockFetch.mock.calls.length - 1][0]).toBe(`${BASE}/rest/v1/rpc/my_companies`);
+    });
+
+    it('a refresh with no answer is given up, the session kept, and the next round sends once answers come again', async () => {
+      let answering = false;
+      mockFetch.mockImplementation(async (url, init) => {
+        const path = url.replace(BASE, '');
+        if (!answering) return noAnswer(url, init);
+        const now = Math.floor(Date.now() / 1000);
+        if (path === '/auth/v1/token?grant_type=refresh_token') {
+          return reply(200, { access_token: token('u-sam', now + 3600), refresh_token: 'r-2', token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, user: SAM_USER });
+        }
+        if (path === '/rest/v1/rpc/push_records') return reply(200, { accepted: [{ key: 'shift:s1', rev: 'r1' }], ignored: [] });
+        return reply(404, { message: 'Not found' });
+      });
+      // The access token ran out while the app was closed.
+      const t0 = Math.floor(Date.now() / 1000);
+      await safeStorage.setItem(KEY, JSON.stringify({ access_token: token('u-sam', t0 - 60), refresh_token: 'r-1', token_type: 'bearer', expires_in: 3600, expires_at: t0 - 60, user: SAM_USER }));
+      const app = restartedApp();
+      const first = watch(app.companyTransport('c-a').push([change('shift:s1', 'r1')]));
+      await runUntil(() => first.outcome !== undefined, 3 * 60_000);
+      // Given up, as with no signal: the records wait, and nobody is signed out.
+      expect(first).toMatchObject({ outcome: 'failed', value: { trouble: 'unreachable' } });
+      // After the one request's 30 seconds, not after however long its answer would have taken.
+      expect(Date.now() - t0 * 1000).toBeLessThanOrEqual(SEND_TIMEOUT_MS + 1_000);
+      expect(JSON.parse((await safeStorage.getItem(KEY)) ?? 'null')).toMatchObject({ refresh_token: 'r-1', user: { id: 'u-sam' } });
+
+      // The answers come again: nothing is left waiting on the request that never ended.
+      answering = true;
+      await jest.advanceTimersByTimeAsync(2 * 60_000);
+      expect(await settled(app.companyTransport('c-a').push([change('shift:s1', 'r1')]))).toMatchObject({ took: [{ key: 'shift:s1', rev: 'r1' }] });
+      expect(JSON.parse((await safeStorage.getItem(KEY)) ?? 'null')).toMatchObject({ refresh_token: 'r-2', user: { id: 'u-sam' } });
+    });
+
+    it('delete-account keeps its own minute, past the 30 seconds of any other request', async () => {
+      let functionAsked: { at: number; signal?: AbortSignal | null } | null = null;
+      mockFetch.mockImplementation(async (url, init) => {
+        const path = url.replace(BASE, '');
+        const now = Math.floor(Date.now() / 1000);
+        if (path === '/auth/v1/token?grant_type=password') {
+          return reply(200, { access_token: token(AVERY.id, now + 3600), refresh_token: 'r-1', token_type: 'bearer', expires_in: 3600, expires_at: now + 3600, user: AVERY_USER });
+        }
+        if (path === '/auth/v1/user') return reply(200, AVERY_USER);
+        if (path === '/functions/v1/delete-account') functionAsked = { at: Date.now(), signal: init?.signal };
+        return noAnswer(url, init);
+      });
+      const app = restartedApp();
+      const deleting = watch(app.deleteAccount('avery@example.com', 'haulroad88'));
+      await runUntil(() => functionAsked !== null, 10_000);
+      const asked = functionAsked as unknown as { at: number; signal?: AbortSignal | null };
+      expect(asked).not.toBeNull();
+      await jest.advanceTimersByTimeAsync(asked.at + SEND_TIMEOUT_MS + 1_000 - Date.now());
+      expect(deleting.outcome).toBeUndefined();
+      expect(asked.signal?.aborted).toBe(false);
+      await jest.advanceTimersByTimeAsync(asked.at + app.DELETE_TIMEOUT_MS - 1 - Date.now());
+      expect(deleting.outcome).toBeUndefined();
+      // Its own minute ends it: whether the sign-in went is not known, and Supabase Auth says it is still there.
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(deleting).toMatchObject({ outcome: 'answered', value: { ok: false, answer: { kind: 'not_known' } } });
+    });
   });
 });

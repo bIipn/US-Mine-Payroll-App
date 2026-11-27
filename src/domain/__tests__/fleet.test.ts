@@ -25,6 +25,20 @@ describe('adding a unit to the fleet', () => {
     expect(newUnit(fleet, { unit: '   ', category: 'loader', make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: false, error: 'Enter a unit number.' });
   });
 
+  it('starts at a reading a meter shows, or is not added', () => {
+    // A minus sign typed on an Android number pad, or a reading that could not be read: never 0 hours without a word.
+    for (const meter of [-5, Number.NaN, Number.POSITIVE_INFINITY, 10_000_001]) {
+      expect(newUnit(fleet, { unit: 'L-16', category: 'loader', make: 'Test', model: 'One', meter })).toEqual({
+        ok: false, error: 'Enter the equipment hours as a number, like 4250.5, or leave it blank.',
+      });
+    }
+    expect(newUnit(fleet, { unit: 'P-9', category: 'light_vehicle', make: 'Test', model: 'One', meter: -1 })).toEqual({
+      ok: false, error: 'Enter the odometer as a number of miles, like 61200, or leave it blank.',
+    });
+    const made = newUnit(fleet, { unit: 'L-16', category: 'loader', make: 'Test', model: 'One', meter: 0 }, 'eq_new');
+    expect(made.ok && made.unit.meter).toBe(0);
+  });
+
   it('takes a unit number as taken whatever its capitals or the spaces around it', () => {
     expect(newUnit(fleet, { unit: ' t-10 ', category: 'haul_truck', make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: false, error: 'Unit T-10 is already in the fleet.' });
     expect(unitNumber(' t-10 ')).toBe('T-10');
@@ -34,9 +48,11 @@ describe('adding a unit to the fleet', () => {
     expect(newUnit(fleet, { unit: 'X-1', category: 'crane' as never, make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: false, error: 'Choose the type of equipment.' });
   });
 
-  it('starts a reading that is not a number at zero, as the app always has', () => {
-    const made = newUnit(fleet, { unit: 'X-1', category: 'dozer', make: '', model: '', meter: Number.NaN }, 'eq_x');
-    expect(made.ok && made.unit.meter).toBe(0);
+  it('starts at zero only when nothing is typed, never for a reading that is not a number', () => {
+    // Nothing typed is 0 (readMeter, on the phone and the dashboard); a reading that could not be read is turned back.
+    const blank = newUnit(fleet, { unit: 'X-1', category: 'dozer', make: '', model: '', meter: readMeter('') ?? Number.NaN }, 'eq_x');
+    expect(blank.ok && blank.unit.meter).toBe(0);
+    expect(newUnit(fleet, { unit: 'X-1', category: 'dozer', make: '', model: '', meter: Number.NaN }, 'eq_x')).toMatchObject({ ok: false });
   });
 
   it('gives each new unit an id of its own, as the app gives its records', () => {
@@ -86,12 +102,14 @@ describe('a reading as typed', () => {
   it('reads hours with a comma and a tenth, and nothing typed as zero', () => {
     expect(readMeter('4,250.5')).toBe(4250.5);
     expect(readMeter(' 120 ')).toBe(120);
+    expect(readMeter('.5')).toBe(0.5);
     expect(readMeter('')).toBe(0);
     expect(readMeter('   ')).toBe(0);
   });
 
   it('is not a reading when it is not a number a meter shows', () => {
-    for (const typed of ['abc', '-5', '12 hrs', '1e9', '4.2.1', '.5', '99999999']) expect(readMeter(typed)).toBeUndefined();
+    // A minus sign or a space between digits, as an Android number pad can type them: turned back, never 0.
+    for (const typed of ['abc', '-5', '12 000', '12 hrs', '1e9', '4.2.1', '.', '99999999']) expect(readMeter(typed)).toBeUndefined();
   });
 });
 

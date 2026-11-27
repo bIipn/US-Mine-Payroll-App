@@ -1,11 +1,12 @@
-import { useNavigation } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { BellRing, ChevronRight, ClipboardCheck, Coffee, Factory, FastForward, LogIn, LogOut, MapPin, Rewind, Utensils, Wrench } from '../../components/icons';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppState, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
 
 import { CompanyLogoPlate } from '../../components/Brand';
+import { useLocationPurpose } from '../../components/LocationPurpose';
+import { ScreenStatusBar } from '../../components/ScreenStatusBar';
 import { SiteMap } from '../../components/SiteMap';
 import { TimeCard } from '../../components/TimeCard';
 import { Button, Divider, Notice, Panel, ProgressBar, Row, Segmented, Sheet, Tag, Txt } from '../../components/ui';
@@ -18,7 +19,7 @@ import { deadlineWords, floorMin, lunchEndAt, lunchOverReminder, MEAL_NOTE_LABEL
 import type { DemoLocation, GeoStamp, MealNote, NoLocation, Shift } from '../../domain/types';
 import { haptic } from '../../services/haptics';
 import { locate } from '../../services/location';
-import { allowOnTimeNotices, onTimeNotices, requestNotificationPermission, scheduleLocal } from '../../services/notifications';
+import { allowOnTimeNotices, lunchNoticeState, onTimeNotices, requestNotificationPermission, scheduleLocal, type LunchNotice } from '../../services/notifications';
 import { syncReminders } from '../../services/reminders';
 import { openShiftOf, staleShiftOf, useMe, useRules, useStore, type ToastTone } from '../../store/useStore';
 import { color, font, radius, space, type Tone } from '../../theme/theme';
@@ -40,6 +41,8 @@ import {
 } from '../../util/format';
 import { useNow } from '../../util/hooks';
 import { CheckedOutUnits } from '../equipment/CheckedOutUnits';
+import { CARD_REACH, clockInFirst, FIELD_FOOT, type ClockMeasures } from './clockLayout';
+import { NoticeOff } from './NoticeOff';
 import { OnTimeNotice } from './OnTimeNotice';
 
 type Status = 'off' | 'on' | 'lunch' | 'overdue';
@@ -64,7 +67,11 @@ const FIELD: Record<Status, { bg: string; fg: string; muted: string; label: stri
   overdue: { bg: color.red, fg: color.white, muted: '#F6D9D3', label: 'Lunch is overdue', bar: 'light' },
 };
 
-export function ClockScreen() {
+/**
+ * `clockOnly`: drawn alone, with no tab bar under it, for someone taken off the roster while on the clock
+ * (signedInView's clock_only). The phone's own navigation bar is then at its foot, and My hours is not there.
+ */
+export function ClockScreen({ clockOnly = false }: { clockOnly?: boolean }) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const now = useNow(1000);
@@ -91,22 +98,74 @@ export function ClockScreen() {
   const [problem, setProblem] = useState<Problem | null>(null);
   const [confirmOut, setConfirmOut] = useState(false);
   const [mealNote, setMealNote] = useState<MealNote | null>(null);
-  /** Whether the phone will let the lunch-is-over notice through. Unknown until a lunch is started. */
-  const [notifyOk, setNotifyOk] = useState<boolean | null>(null);
+  /** Whether the phone will show the lunch-is-over notice (`lunchNoticeState`). Unknown until the first read on a shift. */
+  const [notice, setNotice] = useState<LunchNotice | null>(null);
   /**
    * Whether the phone delivers the lunch-over notice at the minute: on Android only with the Alarms & reminders
    * permission. Assumed yes until the phone says otherwise, so nothing flashes up on an iPhone.
    */
   const [onTime, setOnTime] = useState(true);
+  const focused = useIsFocused();
+  /** On the clock or at lunch: while the notice that lunch is over matters. */
+  const onShift = !!me && !!openShiftOf(shifts, me.id, now);
+  /** What the phone said at the last read, to tell what has turned on since. None before the first. */
+  const heard = useRef<{ notice: LunchNotice; onTime: boolean } | null>(null);
+  /** Counts the reads, so one that answers after a later one is dropped. */
+  const reads = useRef(0);
+  /**
+   * Reads what the phone allows for the notice that lunch is over, and never asks for anything (only a clock-in
+   * and the Lunch reminders setting do): whether it will show it, and whether it comes at the minute. A person can
+   * change either in the phone's settings at any time, with the app closed or in the background, so it is read on
+   * a shift whenever the screen opens or comes back into view and whenever the app comes back to the front, as
+   * well as after a punch. With `resync`, once either has turned on since the last read, the reminders are handed
+   * to the phone again: none is handed over while notifications are off, and one handed over without Alarms &
+   * reminders can come late.
+   */
+  const readNotices = async (resync: boolean) => {
+    const ticket = ++reads.current;
+    const [nowNotice, nowOnTime] = await Promise.all([lunchNoticeState(), onTimeNotices()]);
+    if (ticket !== reads.current) return;
+    const was = heard.current;
+    heard.current = { notice: nowNotice, onTime: nowOnTime };
+    setNotice(nowNotice);
+    setOnTime(nowOnTime);
+    const turnedOn = !!was && ((was.notice !== 'on' && nowNotice === 'on') || (!was.onTime && nowOnTime));
+    if (resync && turnedOn && me) {
+      const { shifts: latest, settings: current } = useStore.getState();
+      await syncReminders(openShiftOf(latest, me.id, Date.now()), current.lunchReminders, rules);
+    }
+  };
+  /** What coming back to the front does, as of the latest render. */
+  const readOnReturn = useRef<() => void>(() => undefined);
   useEffect(() => {
-    let live = true;
-    void onTimeNotices().then((ok) => {
-      if (live) setOnTime(ok);
-    });
-    return () => {
-      live = false;
+    readOnReturn.current = () => {
+      if (focused && onShift) void readNotices(true);
     };
+  });
+  // Opened, or back in view from another tab, on a shift.
+  useEffect(() => {
+    if (focused && onShift) void readNotices(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused, onShift]);
+  // Back in the app from the phone's settings, or from anywhere else.
+  useEffect(() => {
+    const listening = AppState.addEventListener('change', (state) => {
+      if (state === 'active') readOnReturn.current();
+    });
+    return () => listening.remove();
   }, []);
+  /** On Android, why the app reads a location, said once before the phone first asks. */
+  const purpose = useLocationPurpose();
+  /**
+   * What the screen measures of itself as the phone lays it out, to put Clock in above the time card when it
+   * would not otherwise be whole on the screen without scrolling (`clockInFirst`). `scroll` is the scroll
+   * view's own height, the phone's navigation bar still in it when there is no tab bar.
+   */
+  const [measures, setMeasures] = useState<Partial<Omit<ClockMeasures, 'room'> & { scroll: number }>>({});
+  const measure = (key: 'scroll' | 'top' | 'card' | 'button', of: (layout: LayoutChangeEvent['nativeEvent']['layout']) => number) => (e: LayoutChangeEvent) => {
+    const value = of(e.nativeEvent.layout);
+    setMeasures((m) => (m[key] === value ? m : { ...m, [key]: value }));
+  };
 
   if (!me) return null;
 
@@ -147,7 +206,7 @@ export function ClockScreen() {
       return null;
     }
     setBusy(action);
-    const result = await locate(site, settings.demoLocation);
+    const result = await locate(site, settings.demoLocation, { beforeAsking: purpose.beforeAsking });
     setBusy(null);
     const reading: Reading = result.ok ? { fix: result.fix, source: result.source } : { none: result.reason };
     // Starting lunch and clocking out are never blocked: whatever the phone gave goes on the punch.
@@ -165,7 +224,7 @@ export function ClockScreen() {
   const finish = (
     result: { ok: true; shift: Shift } | { ok: false; error: string },
     message: string,
-    { off = false, tone }: { off?: boolean; tone?: ToastTone } = {},
+    { off = false, tone, ask = false }: { off?: boolean; tone?: ToastTone; ask?: boolean } = {},
   ) => {
     if (!result.ok) {
       haptic.error();
@@ -174,19 +233,22 @@ export function ClockScreen() {
     }
     haptic.success();
     actions.showToast(message, tone);
-    void armNotices(off ? undefined : result.shift);
+    void armNotices(off ? undefined : result.shift, ask);
   };
 
   /**
-   * Line the phone's scheduled notices up with the shift. While on a shift it
-   * first asks, once, whether notices are allowed: the lunch-is-over notice can
-   * only reach a locked phone if they are. This runs after the punch is on
+   * Line the phone's scheduled notices up with the shift. A clock-in first asks
+   * whether notices are allowed (`ask`): the lunch-is-over notice can only reach
+   * a locked phone if they are. No other punch asks, so a phone told no is not
+   * asked again at every punch (Android asks a second time, then never again);
+   * each only reads what the phone allows. This runs after the punch is on
    * record, so answering the phone's question never changes a punch time.
    */
-  const armNotices = async (current: Shift | undefined) => {
+  const armNotices = async (current: Shift | undefined, ask: boolean) => {
     if (current) {
-      setNotifyOk(await requestNotificationPermission());
-      setOnTime(await onTimeNotices());
+      if (ask) await requestNotificationPermission();
+      // The reminders are handed over just below.
+      await readNotices(false);
     }
     await syncReminders(current, settings.lunchReminders, rules);
   };
@@ -198,17 +260,18 @@ export function ClockScreen() {
   const allowOnTime = async () => {
     const ok = await allowOnTimeNotices();
     setOnTime(ok);
+    if (heard.current) heard.current = { ...heard.current, onTime: ok };
     if (ok) await syncReminders(openShiftOf(useStore.getState().shifts, me.id, Date.now()), settings.lunchReminders, rules);
   };
-  /** On a shift, with notifications allowed, while the phone may still hold the lunch-over notice back. */
-  const askOnTime = !onTime && notifyOk !== false && (status === 'on' || status === 'overdue' || status === 'lunch');
+  /** On a shift, with the lunch-over notice on, while the phone may still hold it back. */
+  const askOnTime = !onTime && (notice ?? 'on') === 'on' && (status === 'on' || status === 'overdue' || status === 'lunch');
 
   const clockIn = async () => {
     const where = await readLocation('clock_in');
     if (!where) return;
     const said = `Clocked in at ${fmtTime(Date.now())}`;
-    if (typeof where === 'string') finish(actions.clockIn(where), `${said}. ${NO_LOCATION_TOAST[where]}`, { tone: 'warn' });
-    else finish(actions.clockIn(where), said);
+    if (typeof where === 'string') finish(actions.clockIn(where), `${said}. ${NO_LOCATION_TOAST[where]}`, { tone: 'warn', ask: true });
+    else finish(actions.clockIn(where), said, { ask: true });
   };
   // One tap. The lunch ends by itself 30 minutes later and the app says so.
   const startLunch = async () => {
@@ -247,12 +310,30 @@ export function ClockScreen() {
             ? `Punched in on site, ${fmtDistance(lastGeo.distanceM)} from the pin`
             : 'GPS is checked when you punch';
 
+  // Off the clock on a short phone, Clock in goes above the time card, so it is on the screen without scrolling.
+  // With no tab bar, the phone's own navigation bar takes the foot of the scroll view.
+  const room = measures.scroll == null ? undefined : measures.scroll - (clockOnly ? insets.bottom : 0);
+  const buttonFirst = status === 'off' && clockInFirst({ room, top: measures.top, card: measures.card, button: measures.button });
+  const clockInButton = (
+    <View onLayout={measure('button', (l) => l.height)} style={buttonFirst ? { marginTop: space.lg } : undefined}>
+      <Button testID="clock-in" label="Clock in" icon={LogIn} size="xl" kind="yellow" loading={busy === 'clock_in'} onPress={clockIn} />
+    </View>
+  );
+
   return (
     <View style={styles.root}>
-      <StatusBar style={field.bar} />
-      <ScrollView testID="clock-screen" contentContainerStyle={{ paddingBottom: space.xxl }}>
+      <ScreenStatusBar style={field.bar} />
+      {/* In the tabs, the tab bar under the screen clears the phone's own navigation bar; alone, the screen does. */}
+      <ScrollView
+        testID="clock-screen"
+        onLayout={measure('scroll', (l) => l.height)}
+        contentContainerStyle={{ paddingBottom: space.xxl + (clockOnly ? insets.bottom : 0) }}
+      >
         {/* The whole top of the screen takes the colour of where you stand. */}
-        <View testID={`status-${status}`} style={[styles.field, { backgroundColor: field.bg, paddingTop: insets.top + space.md }]}>
+        <View
+          testID={`status-${status}`}
+          style={[styles.field, { backgroundColor: field.bg, paddingTop: insets.top + space.md, paddingBottom: buttonFirst ? FIELD_FOOT.button : FIELD_FOOT.card }]}
+        >
           {/* With a logo, the location line goes under it, where it has the whole width. */}
           <View style={company.logo ? styles.fieldTopStacked : styles.fieldTop}>
             <CompanyLogoPlate logo={company.logo} name={company.name} width={136} radius={6} />
@@ -280,18 +361,19 @@ export function ClockScreen() {
               <Text style={[styles.clockSec, { color: field.fg }]}>{clock.ampm}</Text>
             </View>
           </View>
-          <Txt v="body" c={field.muted}>{fmtDateLong(now)}</Txt>
+          <Txt v="body" c={field.muted} testID="clock-date" onLayout={measure('top', (l) => l.y + l.height)}>{fmtDateLong(now)}</Txt>
         </View>
 
         <View style={styles.body}>
-          <View style={{ marginTop: -44 }}>
-            <TimeCard shift={cardShift} now={now} name={fullName(me)} dateLabel={fmtDate(cardShift?.clockIn.at ?? now)} corner={field.bg} />
+          {/* One main action for where you are in the day: off the clock, above the card when it would not fit under it. */}
+          {buttonFirst ? clockInButton : null}
+
+          {/* The time card reaches up over the coloured top, unless Clock in is there. */}
+          <View style={{ marginTop: buttonFirst ? 0 : -CARD_REACH }} onLayout={measure('card', (l) => l.height)}>
+            <TimeCard shift={cardShift} now={now} name={fullName(me)} dateLabel={fmtDate(cardShift?.clockIn.at ?? now)} corner={buttonFirst ? color.kaolin : field.bg} />
           </View>
 
-          {/* One main action for where you are in the day. */}
-          {status === 'off' ? (
-            <Button testID="clock-in" label="Clock in" icon={LogIn} size="xl" kind="yellow" loading={busy === 'clock_in'} onPress={clockIn} />
-          ) : null}
+          {status === 'off' && !buttonFirst ? clockInButton : null}
 
           {/* At lunch there is nothing to tap: it ends by itself and the app says so. */}
           {status === 'lunch' && lastLunch && meal ? (
@@ -300,7 +382,7 @@ export function ClockScreen() {
               endsAt={lunchEndAt(lastLunch)}
               remainingMs={meal.lunchRemainingMs}
               elapsedMs={meal.lunchElapsedMs}
-              notifyOk={notifyOk !== false}
+              notice={notice ?? 'on'}
             />
           ) : null}
           {status === 'lunch' && askOnTime ? <OnTimeNotice onAllow={allowOnTime} /> : null}
@@ -355,7 +437,7 @@ export function ClockScreen() {
 
           <CheckedOutUnits employeeId={me.id} />
 
-          <PayPeriodLine employeeId={me.id} now={now} />
+          <PayPeriodLine employeeId={me.id} now={now} opens={!clockOnly} />
 
           {DEMO_MODE ? <DemoControls onShift={!!shift} lunchRemainingMs={status === 'lunch' ? meal?.lunchRemainingMs : undefined} /> : null}
         </View>
@@ -421,6 +503,8 @@ export function ClockScreen() {
           onPress={clockOut}
         />
       </Sheet>
+
+      {purpose.sheet}
     </View>
   );
 }
@@ -493,8 +577,9 @@ function AssignedToMe({ employeeId }: { employeeId: string }) {
 /**
  * Hours so far, a tap from the person's hours. With the company's pay period,
  * the period and the next payday; without one, this week and this month.
+ * With no My hours to open (`opens` false: the Clock screen alone) it is not a button.
  */
-function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number }) {
+function PayPeriodLine({ employeeId, now, opens }: { employeeId: string; now: number; opens: boolean }) {
   const navigation = useNavigation();
   const shifts = useStore((s) => s.shifts);
   const leave = useStore((s) => s.leave);
@@ -525,19 +610,10 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
 
   const said =
     line.payday != null
-      ? `${line.label}, ${fmtHrs(line.hours)} hours so far. Next payday ${fmtDate(line.payday)}. Open my hours.`
-      : `${fmtHrs(line.hours)} hours this week and ${fmtHrs(line.month ?? 0)} this month. Open my hours.`;
-  return (
-    <Pressable
-      testID="pay-period-line"
-      accessibilityRole="button"
-      accessibilityLabel={said}
-      onPress={() => {
-        haptic.tap();
-        navigation.navigate('Hours');
-      }}
-      style={({ pressed }) => [styles.payLine, pressed && { backgroundColor: color.kaolin }]}
-    >
+      ? `${line.label}, ${fmtHrs(line.hours)} hours so far. Next payday ${fmtDate(line.payday)}.`
+      : `${fmtHrs(line.hours)} hours this week and ${fmtHrs(line.month ?? 0)} this month.`;
+  const figures = (
+    <>
       <View style={{ flex: 1 }}>
         <Txt v="small" c={color.silica}>{line.label}</Txt>
         <Txt v="numSm" testID="pay-period-hours">{fmtHrs(line.hours)} hours</Txt>
@@ -553,6 +629,27 @@ function PayPeriodLine({ employeeId, now }: { employeeId: string; now: number })
           <Txt v="strong" testID="month-hours">{fmtHrs(line.month ?? 0)} hours</Txt>
         </View>
       )}
+    </>
+  );
+  if (!opens) {
+    return (
+      <View testID="pay-period-line" accessible accessibilityLabel={said} style={styles.payLine}>
+        {figures}
+      </View>
+    );
+  }
+  return (
+    <Pressable
+      testID="pay-period-line"
+      accessibilityRole="button"
+      accessibilityLabel={`${said} Open my hours.`}
+      onPress={() => {
+        haptic.tap();
+        navigation.navigate('Hours');
+      }}
+      style={({ pressed }) => [styles.payLine, pressed && { backgroundColor: color.kaolin }]}
+    >
+      {figures}
       <ChevronRight color={color.silicaLight} size={22} />
     </Pressable>
   );
@@ -592,10 +689,10 @@ function LunchDeadline({ shift, now, rules }: { shift: Shift; now: number; rules
 }
 
 /** The countdown to the end of lunch. There is no button: the lunch ends by itself. */
-function LunchTimer({ startedAt, endsAt, remainingMs, elapsedMs, notifyOk }: {
+function LunchTimer({ startedAt, endsAt, remainingMs, elapsedMs, notice }: {
   startedAt: number; endsAt: number; remainingMs: number; elapsedMs: number;
-  /** False when the phone has notifications turned off for the app. */
-  notifyOk: boolean;
+  /** Whether the phone will show the notice that lunch is over: off for the app, or (Android) that kind alone turned off. */
+  notice: LunchNotice;
 }) {
   return (
     <>
@@ -609,7 +706,7 @@ function LunchTimer({ startedAt, endsAt, remainingMs, elapsedMs, notifyOk }: {
         </View>
         <ProgressBar value={Math.min(1, elapsedMs / Math.max(1, elapsedMs + remainingMs))} tone="info" />
       </View>
-      {notifyOk ? (
+      {notice === 'on' ? (
         <Notice
           tone="info"
           icon={BellRing}
@@ -618,12 +715,7 @@ function LunchTimer({ startedAt, endsAt, remainingMs, elapsedMs, notifyOk }: {
         />
       ) : (
         <View testID="lunch-no-notice">
-          <Notice
-            tone="warn"
-            icon={BellRing}
-            title="Notifications are off for this app"
-            body={`Lunch still ends by itself at ${fmtTime(endsAt)}, but the app cannot tell you when it does. Turn notifications on in your phone settings.`}
-          />
+          <NoticeOff kind={notice} endsAt={endsAt} />
         </View>
       )}
     </>
@@ -739,7 +831,7 @@ function DemoControls({ onShift, lunchRemainingMs }: { onShift: boolean; lunchRe
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.kaolin },
-  field: { paddingHorizontal: space.xl, paddingBottom: 64 },
+  field: { paddingHorizontal: space.xl },
   fieldTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
   fieldTopStacked: { alignItems: 'flex-start', gap: space.sm },
   gps: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, minHeight: 44 },

@@ -1,3 +1,4 @@
+import { useFileChoice } from '../../components/FileChoice';
 import { ClipboardCheck, Factory, FileSpreadsheet, FileText } from '../../components/icons';
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -29,6 +30,8 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
   const exams = useStore((s) => s.exams);
   const [tab, setTab] = useState<Tab>('cards');
   const [range, setRange] = useState<Range>('1');
+  // Android asks which way each file goes: open it, save it to the phone, or send it to another app.
+  const files = useFileChoice();
 
   const to = addDays(startOfDay(now), 1);
   const from = addDays(to, -Number(range));
@@ -49,14 +52,14 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
             label="PDF for an MSHA inspector"
             icon={FileText}
             kind="outline"
-            onPress={() => exportPdf(() => inspectorReport({ ...useStore.getState() }, from, to, Date.now()))}
+            onPress={() => exportPdf(() => inspectorReport({ ...useStore.getState() }, from, to, Date.now()), files.choose)}
           />
           <Button
             testID="export-safety"
             label="Export safety log to Excel"
             icon={FileSpreadsheet}
             kind="ink"
-            onPress={() => exportReport(() => safetyReport({ ...useStore.getState() }, from, to, Date.now()))}
+            onPress={() => exportReport(() => safetyReport({ ...useStore.getState() }, from, to, Date.now()), files.choose)}
           />
         </>
       }
@@ -157,6 +160,7 @@ export function SafetyLogScreen({ navigation }: ScreenProps<'SafetyLog'>) {
           Showing the latest {SHOWN} of {shown}. The Excel export has all of them.
         </Txt>
       ) : null}
+      {files.sheet}
     </Page>
   );
 }

@@ -121,6 +121,11 @@ function MainTabs() {
   );
 }
 
+/** The Clock screen with no tab bar under it: it leaves room for the phone's own navigation bar itself. */
+function ClockAlone() {
+  return <ClockScreen clockOnly />;
+}
+
 export function RootNavigator() {
   // Nobody on the clock is signed out: someone taken off the roster, or the person this phone's sign-in is for once
   // that sign-in is off the company's roster, keeps the Clock screen alone, and End use, until they clock out.
@@ -151,7 +156,7 @@ export function RootNavigator() {
         </Stack.Group>
       ) : view === 'clock_only' ? (
         <Stack.Group navigationKey="clock_only">
-          <Stack.Screen name="Main" component={ClockScreen} />
+          <Stack.Screen name="Main" component={ClockAlone} />
           <Stack.Screen name="EndUse" component={EndUseScreen} />
           <Stack.Screen name="Site" component={SiteScreen} />
         </Stack.Group>

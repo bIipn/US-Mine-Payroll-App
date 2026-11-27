@@ -127,6 +127,13 @@ export const SERVER: ServerConfig | null = CAN_SEND ? BUILD_SERVER.server : null
 export const APP_NAME = 'MineMuster';
 
 /**
+ * Why the app reads a location, and who sees it. An iPhone shows this in its own prompt (app.json's
+ * `locationWhenInUsePermission`, held to this by a test). Android's prompt has no room for an app's
+ * reason, so on Android the app shows these words itself before the phone first asks (`useLocationPurpose`).
+ */
+export const LOCATION_PURPOSE = `${APP_NAME} reads your location once when you clock in, start lunch or clock out, and when a supervisor sets the mine boundary, to check you are at the mine. It is saved with that punch, so your company's supervisors can see where it was made. It is never read in the background.`;
+
+/**
  * MineMuster's own pages the app opens in the phone's browser: the privacy
  * policy, which the stores require a link to inside the app, and where to ask
  * for help. Every build offers them, before anyone has signed in.

@@ -5,6 +5,7 @@
 // listing depends on: iPhone only, local notifications only, no cloud backup of what stays on the phone,
 // and location while the app is in use only.
 
+import { LOCATION_PURPOSE } from '../../src/config';
 import { parseAreaSheets } from '../../src/domain/areaExam';
 import { parseCompany } from '../../src/domain/company';
 import { parsePersonName, parseRoster } from '../../src/domain/roster';
@@ -170,11 +171,18 @@ describe('the store settings (app.json)', () => {
     expect(why).toMatch(/clock in/);
     expect(why).toMatch(/supervisors can see/);
     expect(why).toMatch(/never read in the background/);
+    // The iPhone's prompt shows this; Android's has no room for it, so the app shows the same words first.
+    expect(why).toBe(LOCATION_PURPOSE);
   });
 
   it('sends local notifications only, with the white mark Android draws in the status bar', () => {
     const notifications = plugin('expo-notifications');
     expect(notifications.enableRemoteNotifications).toBe(false);
     expect(notifications.icon).toBe('./assets/notification-icon.png');
+  });
+
+  it('names no default Android channel: that is for messages from a server, and each local notice names its own', () => {
+    // The old shared channel ("lunch") is taken off the phone (src/services/notificationChannels.ts), so nothing points at it.
+    expect(plugin('expo-notifications').defaultChannel).toBeUndefined();
   });
 });

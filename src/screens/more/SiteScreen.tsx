@@ -2,6 +2,7 @@ import { LocateFixed, MapPin, Minus, Plus } from '../../components/icons';
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { useLocationPurpose } from '../../components/LocationPurpose';
 import { SiteMap } from '../../components/SiteMap';
 import { Button, Divider, IconButton, Notice, Page, Panel, Txt } from '../../components/ui';
 import { APP_NAME, DEMO_MODE } from '../../config';
@@ -42,6 +43,8 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
   const [fix, setFix] = useState<RawFix | null>(null);
   const [check, setCheck] = useState<FixCheck | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  /** On Android, why the app reads a location, said once before the phone first asks. */
+  const purpose = useLocationPurpose();
 
   const away = site ? townGap(site) : undefined;
 
@@ -49,7 +52,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
   const pinHere = async () => {
     setBusy(true);
     setFailed(null);
-    const result = await locate(site, settings.demoLocation);
+    const result = await locate(site, settings.demoLocation, { beforeAsking: purpose.beforeAsking });
     setBusy(false);
     if (!result.ok) {
       setFailed(noPosition(result.reason, true));
@@ -87,6 +90,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
         />
         {failed ? <Notice tone="warn" title="No position" body={failed} /> : null}
         {supervisor ? <Button testID="site-pin-here" label="Put the pin where I am" icon={MapPin} kind="ink" loading={busy} onPress={pinHere} /> : null}
+        {purpose.sheet}
       </Page>
     );
   }
@@ -94,7 +98,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
   const find = async () => {
     setBusy(true);
     setFailed(null);
-    const result = await locate(site, settings.demoLocation);
+    const result = await locate(site, settings.demoLocation, { beforeAsking: purpose.beforeAsking });
     setBusy(false);
     if (!result.ok) {
       setFix(null);
@@ -176,6 +180,7 @@ export function SiteScreen({ navigation }: ScreenProps<'Site'>) {
           </View>
         </Panel>
       ) : null}
+      {purpose.sheet}
     </Page>
   );
 }

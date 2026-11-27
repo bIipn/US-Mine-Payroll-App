@@ -1,4 +1,5 @@
 import { checkCompany } from './company';
+import { isReading } from './reading';
 import type { PersonName } from './roster';
 import { revOf, sharedSettings, stableJson, type HeldReason, type ReceivedRow, type ReferenceKind, type SharedSettings, type Standing, type Synced } from './sync';
 import type { AreaSheet, Employee, Equipment, EquipmentCategory, EquipmentStatus, Mrf, OperatingLog, Role, Settings } from './types';
@@ -166,8 +167,8 @@ function readEquipment(d: Obj): Equipment | null {
     (EQUIPMENT_CATEGORIES as readonly unknown[]).includes(d.category) &&
     STATUSES.includes(d.status) &&
     isNum(d.meter) &&
-    d.meter >= 0 &&
-    d.meter <= 10_000_000 &&
+    // From 0 to 10,000,000, as the server checks it: the same rule as a reading typed on the phone.
+    isReading(d.meter) &&
     (d.meterUnit === 'hrs' || d.meterUnit === 'mi');
   return ok ? (d as unknown as Equipment) : null;
 }

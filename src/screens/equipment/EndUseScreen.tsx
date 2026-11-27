@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, Page, Panel, Txt, UnitPlate } from '../../components/ui';
+import { GALLONS_PROBLEM, parseReading, READING_PROBLEM } from '../../domain/reading';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
@@ -26,30 +27,38 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
   const [notes, setNotes] = useState('');
   const [parked, setParked] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fuelError, setFuelError] = useState<string | null>(null);
   const sent = useRef(false);
 
   if (!log || !unit) return null;
 
-  const meterValue = Number(meter.replace(/,/g, ''));
-  const fuelValue = Number(fuel);
-  const used = Number.isFinite(meterValue) && meter.trim() ? meterValue - log.startMeter : null;
+  // Read as the store reads them (parseReading): a minus sign an Android number pad let through is turned back, not dropped.
+  const meterValue = parseReading(meter);
+  const fuelValue = parseReading(fuel);
+  const used = meterValue != null && !Number.isNaN(meterValue) ? meterValue - log.startMeter : null;
 
   const submit = () => {
     // A second tap that lands while the screen is going would go back twice.
     if (sent.current) return;
-    if (!meter.trim() || !Number.isFinite(meterValue)) {
-      setError('Enter the reading off the machine.');
+    if (meterValue == null || Number.isNaN(meterValue)) {
+      setError(READING_PROBLEM);
+      return;
+    }
+    if (fuelValue != null && Number.isNaN(fuelValue)) {
+      haptic.error();
+      setFuelError(GALLONS_PROBLEM);
       return;
     }
     const result = endUse(log.id, {
       endMeter: meterValue,
-      fuelGal: fuel.trim() && Number.isFinite(fuelValue) ? fuelValue : undefined,
+      fuelGal: fuelValue,
       notes: notes.trim() || undefined,
       parkedSafely: parked,
     });
     if (!result.ok) {
       haptic.error();
-      setError(result.error);
+      if (result.error === GALLONS_PROBLEM) setFuelError(result.error);
+      else setError(result.error);
       return;
     }
     sent.current = true;
@@ -88,7 +97,16 @@ export function EndUseScreen({ navigation, route }: ScreenProps<'EndUse'>) {
         error={error}
         hint={used != null && used >= 0 ? `${fmtMeter(used)} ${unit.meterUnit} this use` : `Started at ${fmtMeter(log.startMeter)}`}
       />
-      <Field testID="end-fuel" label="Gallons of fuel added" value={fuel} onChangeText={setFuel} keyboardType="decimal-pad" placeholder="0" hint="Leave blank if you did not fuel. It goes on the Fuel line of your card." />
+      <Field
+        testID="end-fuel"
+        label="Gallons of fuel added"
+        value={fuel}
+        onChangeText={(text) => { setFuel(text); setFuelError(null); }}
+        keyboardType="decimal-pad"
+        placeholder="0"
+        error={fuelError}
+        hint="Leave blank if you did not fuel. It goes on the Fuel line of your card."
+      />
       <Field testID="end-notes" label="Anything the next operator should know?" value={notes} onChangeText={setNotes} multiline placeholder="Optional" />
 
       <Panel>

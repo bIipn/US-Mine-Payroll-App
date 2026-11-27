@@ -283,6 +283,9 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
 
         {!blocked ? (
           <View style={{ gap: space.md }}>
+            {/* Neither box deletes from the keyboard, so deleting always takes the red button. Android's number
+                pad has a Done key, tapped to put the keyboard away: it would delete the account at once, or send
+                part of a passcode as a wrong try. */}
             {plan.needsPassword && plan.passwordLabel ? (
               <Field
                 testID="delete-password"
@@ -296,7 +299,6 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
                 autoCapitalize="none"
                 autoComplete="current-password"
                 hint={SECRET_HINT}
-                onSubmitEditing={() => void deleteIt()}
                 right={<IconButton icon={show ? EyeOff : Eye} label={show ? 'Hide password' : 'Show password'} onPress={() => setShow((v) => !v)} tint={color.silica} />}
               />
             ) : null}
@@ -312,7 +314,6 @@ export function DeleteAccountScreen({ navigation, route }: ScreenProps<'DeleteAc
                 }}
                 {...PASSCODE_BOX}
                 hint={SECRET_HINT}
-                onSubmitEditing={() => void deleteIt()}
               />
             ) : null}
             <Button testID="delete-confirm" label={plan.title} icon={UserX} kind="red" loading={busy} disabled={busy} onPress={() => (asksSecret ? void deleteIt() : setAsking(true))} />

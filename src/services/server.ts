@@ -60,37 +60,101 @@ export type Done<T = object> = ({ ok: true } & T) | { ok: false; error: string }
 /** Whether this build names a server the phone can talk to. */
 export const configured = SERVER != null;
 
-/** The session is kept where the app keeps everything else, which falls back to memory where a browser frame blocks storage. */
-const sessionStore = {
-  getItem: async (key: string): Promise<string | null> => (await safeStorage.getItem(key)) ?? null,
-  setItem: async (key: string, value: string): Promise<void> => {
-    await safeStorage.setItem(key, value);
-  },
-  removeItem: async (key: string): Promise<void> => {
-    await safeStorage.removeItem(key);
-  },
-};
+/**
+ * Where a client keeps the session: where the app keeps everything else, which falls back to memory where a
+ * browser frame blocks storage. Each client has its own way in, shut when the client is let go (`signOut`),
+ * so what that client still has under way, a sign-out or a refresh answered late, can neither put the
+ * session back on the phone nor take off one kept since.
+ */
+function sessionStore() {
+  let open = true;
+  return {
+    shut: () => {
+      open = false;
+    },
+    storage: {
+      getItem: async (key: string): Promise<string | null> => (open ? ((await safeStorage.getItem(key)) ?? null) : null),
+      setItem: async (key: string, value: string): Promise<void> => {
+        if (open) await safeStorage.setItem(key, value);
+      },
+      removeItem: async (key: string): Promise<void> => {
+        if (open) await safeStorage.removeItem(key);
+      },
+    },
+  };
+}
 
 /** Where supabase-js keeps the session on the phone. */
 const SESSION_KEY = 'minemuster-server-session';
 
+/**
+ * The longest one request supabase-js makes may take, from asking to the last of its answer: 30 seconds, as
+ * for a send; and for an edge function a little more than delete-account's own minute (DELETE_TIMEOUT_MS,
+ * which functions-js applies with its own signal), so that one is what ends it.
+ */
+export function requestLimitMs(url: string): number {
+  return url.includes('/functions/v1/') ? DELETE_TIMEOUT_MS + 5_000 : SEND_TIMEOUT_MS;
+}
+
+/**
+ * The fetch supabase-js is given, for every request it makes: signing in, refreshing the session, the
+ * server's functions and tables, delete-account. It gives up after `requestLimitMs`. Android's own fetch
+ * never does (OkHttp waits with no limit), so with one bar of signal a request whose answer stopped coming
+ * would wait for ever, and supabase-js makes every call after it wait on it: one refresh that never ends
+ * holds every round of sending. Given up, a request fails as one with no signal does, and is put in the same
+ * words. The time runs to the last of the answer, so one that stops halfway through is given up too; a
+ * caller's own signal (a round's, delete-account's) still stops it sooner. AbortSignal.any is not used:
+ * Hermes may not have it.
+ */
+export const timedFetch: typeof fetch = (input, init) => {
+  if (typeof AbortController !== 'function') return fetch(input, init);
+  const request = typeof input === 'object' && 'url' in input ? input : null;
+  const url = typeof input === 'string' ? input : request ? request.url : String(input);
+  const outer = init?.signal ?? request?.signal ?? null;
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  const over = () => {
+    clearTimeout(timer);
+    outer?.removeEventListener('abort', stop);
+  };
+  // Not cleared when the answer starts: stopping a request that is over does nothing.
+  const timer = setTimeout(() => {
+    stop();
+    over();
+  }, requestLimitMs(url));
+  if (outer?.aborted) stop();
+  else outer?.addEventListener('abort', stop);
+  return fetch(input, { ...init, signal: controller.signal }).catch((error: unknown) => {
+    over();
+    throw error;
+  });
+};
+
+/** How long the phone waits for the server to answer its sign-out before it takes the session off the phone without that answer. */
+export const SIGN_OUT_WAIT_MS = 10_000;
+
 let client: SupabaseClient | null = null;
 let watching: { unsubscribe(): void } | null = null;
 let listeningToApp = false;
+/** How to shut each client's way into the phone's storage, once it is let go. */
+const shutters = new WeakMap<SupabaseClient, () => void>();
 
 function api(): SupabaseClient {
   if (!SERVER) throw new Error('This build names no company server.');
   if (!client) {
+    const kept = sessionStore();
     client = createClient(SERVER.url, SERVER.key, {
       auth: {
-        storage: sessionStore,
+        storage: kept.storage,
         storageKey: SESSION_KEY,
         persistSession: true,
         autoRefreshToken: true,
         // Nothing comes back to the app through a link: an email is confirmed in the browser, then the person signs in here.
         detectSessionInUrl: false,
       },
+      global: { fetch: timedFetch },
     });
+    shutters.set(client, kept.shut);
     const { data } = client.auth.onAuthStateChange((event, session) => {
       // The first reading is made by `onAccountChange` itself: with no signal, supabase-js reports
       // a session it cannot refresh as none, though it is still on the phone and still theirs.
@@ -210,15 +274,29 @@ export async function signIn(email: string, password: string): Promise<Done<{ ac
  * in anywhere else. With no signal and an expired session, supabase-js keeps
  * the session (it cannot refresh it to sign out with) and would sign the phone
  * back in once there is signal, so the session is taken off the phone here
- * whatever the server answered, and the client that held it is let go.
+ * whatever the server answered, and the client that held it is let go. The
+ * server's answer is waited for only SIGN_OUT_WAIT_MS: with signal that stops
+ * halfway it may not come for a long time, and signing out of the server is
+ * only the server's side of it.
  */
 export async function signOut(): Promise<void> {
-  const held = client;
+  let held: SupabaseClient | null = null;
+  let gaveUp: ReturnType<typeof setTimeout> | undefined;
   try {
-    await api().auth.signOut({ scope: 'local' });
+    held = api();
+    await Promise.race([
+      held.auth.signOut({ scope: 'local' }),
+      new Promise<void>((waited) => {
+        gaveUp = setTimeout(waited, SIGN_OUT_WAIT_MS);
+      }),
+    ]);
   } catch {
     // No signal: the session is taken off the phone below all the same.
+  } finally {
+    clearTimeout(gaveUp);
   }
+  // Shut first, so a sign-out or a refresh still under way cannot put the session back once it is gone.
+  if (held) shutters.get(held)?.();
   await forgetSession();
   if (held && client === held) {
     try {

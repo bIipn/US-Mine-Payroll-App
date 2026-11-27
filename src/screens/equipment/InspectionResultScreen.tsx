@@ -2,9 +2,9 @@ import { CircleCheck, FileText, OctagonAlert, TriangleAlert, Wrench } from '../.
 import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
 
 import { DangerTag } from '../../components/DangerTag';
+import { ScreenStatusBar } from '../../components/ScreenStatusBar';
 import { StepCard } from '../../components/Standards';
 import { Button, Notice, Txt, UnitPlate } from '../../components/ui';
 import { BAD_ORDER_STEPS, CLEARED_REMINDERS, DEFECT_STEPS } from '../../domain/standards';
@@ -13,6 +13,7 @@ import { haptic } from '../../services/haptics';
 import { mrfItemsFromInspection, useMe, useStore } from '../../store/useStore';
 import { color, radius, space } from '../../theme/theme';
 import { fmtDate, fmtMeter, fmtTime, fullName } from '../../util/format';
+import { useBackPress } from '../../util/hooks';
 
 export function InspectionResultScreen({ navigation, route }: ScreenProps<'InspectionResult'>) {
   const insets = useSafeAreaInsets();
@@ -21,6 +22,16 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
   const unit = useStore((s) => s.equipment.find((e) => e.id === inspection?.equipmentId));
   const mrf = useStore((s) => s.mrfs.find((m) => m.id === inspection?.mrfId));
   const { decideAfterDefect, showToast } = useStore.getState();
+
+  // What is still owed here: the maintenance request for a Bad Order or a defect, then, after a defect, whether
+  // the person runs the unit or parks it. Until then only this screen's buttons leave it. iPhone has no back
+  // gesture on it; on Android the back button and the back gesture say what is left instead of going back.
+  // The buttons that settle it go on by themselves, and the request's own form, opened on top, goes back as ever.
+  const owed = !!inspection && !!unit && !!me && inspection.result !== 'pass' && (!mrf || (inspection.result === 'defect' && !inspection.decision));
+  useBackPress(owed, () => {
+    showToast(mrf ? 'Say whether you run it or park it' : 'Fill out the maintenance request first', 'warn');
+    return true;
+  });
 
   if (!inspection || !unit || !me) return null;
 
@@ -37,8 +48,9 @@ export function InspectionResultScreen({ navigation, route }: ScreenProps<'Inspe
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
-      <ScrollView testID={`result-${inspection.result}`} contentContainerStyle={{ paddingBottom: space.xxl }}>
+      <ScreenStatusBar style="light" />
+      {/* No tab bar under this screen: the phone's own navigation bar is, so the last button clears it. */}
+      <ScrollView testID={`result-${inspection.result}`} contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}>
         <View
           style={[
             styles.field,

@@ -43,6 +43,8 @@ type Node = { props: Record<string, unknown>; unstable_fiber: unknown };
 const React: typeof import('react') = require('react');
 const { createRoot } = require('test-renderer') as { createRoot: () => { render(e: unknown): void; unmount(): void; container: { queryAll(p: (n: Node) => boolean): Node[] } } };
 const { CompanySignInScreen } = require('../auth/CompanySignInScreen') as typeof import('../auth/CompanySignInScreen');
+const nav = require('@react-navigation/native') as typeof import('@react-navigation/native');
+const { createNativeStackNavigator } = require('@react-navigation/native-stack') as typeof import('@react-navigation/native-stack');
 const { useStore } = require('../../store/useStore') as typeof import('../../store/useStore');
 const connection = require('../../services/connection') as { server: Record<string, jest.Mock>; useServerAccount: typeof import('../../services/connection').useServerAccount };
 const act = (React as unknown as { act: (fn: () => Promise<void> | void) => Promise<void> }).act;
@@ -104,7 +106,10 @@ it('does not hand the deleted person’s name to the next person who signs in on
     await act(async () => onPress());
     await settle();
   };
-  await act(async () => root.render(React.createElement(CompanySignInScreen, { navigation: { navigate: jest.fn() }, route: { key: 'CompanySignIn', name: 'CompanySignIn' } } as never)));
+  // The screen in a navigator of its own, as the app draws it: it goes by whether it is the screen in front.
+  const Stack = createNativeStackNavigator();
+  const screen = React.createElement(Stack.Screen, { name: 'CompanySignIn', component: CompanySignInScreen } as never);
+  await act(async () => root.render(React.createElement(nav.NavigationContainer, null, React.createElement(Stack.Navigator, { screenOptions: { headerShown: false } } as never, screen))));
   await type('crew-code', 'abcd2345');
   await press('crew-mode-sign_in');
   // Nothing of Dana's is put in for Pat.

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { CompanyLogoPlate } from '../../components/Brand';
 import { Check } from '../../components/icons';
@@ -162,8 +162,13 @@ export function CompanyScreen({ navigation }: ScreenProps<'Company'>) {
                   hint="As year-month-day, like 2026-11-01. Every period runs from that weekday."
                   value={draft.firstDay}
                   onChangeText={(firstDay) => change({ firstDay })}
-                  keyboardType="numbers-and-punctuation"
+                  // The numbers-and-punctuation keyboard is the iPhone's alone: Android shows letters in its place.
+                  // Its number pad has the digits and a point, and the day may be typed with either (scheduleOf).
+                  // Android alone: on the web the number pad is inputMode="numeric", which an iPhone's Safari
+                  // shows as digits with no dash, and numbers-and-punctuation is the ordinary keyboard.
+                  keyboardType={Platform.OS === 'android' ? 'numeric' : 'numbers-and-punctuation'}
                   autoCapitalize="none"
+                  autoCorrect={false}
                 />
               ) : null}
 

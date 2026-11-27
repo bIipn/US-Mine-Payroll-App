@@ -2,9 +2,9 @@ import { ArrowLeft, CircleCheck, Siren, TriangleAlert, Wrench } from '../../comp
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
 
 import { ExamSheet } from '../../components/ExamSheet';
+import { ScreenStatusBar } from '../../components/ScreenStatusBar';
 import { StandardRefs, StepCard } from '../../components/Standards';
 import { Button, Field, IconButton, Sheet, Tag, Txt } from '../../components/ui';
 import { examCounts, examFindings, openFindings, shiftLabel, type Finding } from '../../domain/areaExam';
@@ -82,7 +82,7 @@ export function AreaExamDetailScreen({ navigation, route }: ScreenProps<'AreaExa
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <ScreenStatusBar style="light" />
       <ScrollView testID="exam-detail" contentContainerStyle={{ paddingBottom: space.xxl + insets.bottom }}>
         <View style={[styles.field, { backgroundColor: look.bg, paddingTop: insets.top + space.sm }]}>
           {fresh ? null : (

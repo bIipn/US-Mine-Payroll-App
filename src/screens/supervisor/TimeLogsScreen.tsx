@@ -1,3 +1,4 @@
+import { useFileChoice } from '../../components/FileChoice';
 import { CalendarClock, ChevronLeft, ChevronRight, FileSpreadsheet } from '../../components/icons';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -22,6 +23,8 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
   const denied = useStore((s) => s.denied);
   const startsOn = useStore((s) => s.settings.workweekStartsOn);
   const [day, setDay] = useState(() => startOfDay(Date.now()));
+  // Android asks which way the file goes: open it, save it to the phone, or send it to another app.
+  const files = useFileChoice();
 
   const next = addDays(day, 1);
   const isToday = day >= startOfDay(now);
@@ -52,7 +55,7 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
             exportReport(() => {
               const weekStart = startOfWeek(day, startsOn);
               return payrollReport({ ...useStore.getState() }, { start: weekStart, end: addDays(weekStart, 7) }, Date.now());
-            })
+            }, files.choose)
           }
         />
       }
@@ -130,6 +133,7 @@ export function TimeLogsScreen({ navigation }: ScreenProps<'TimeLogs'>) {
           ))}
         </Panel>
       ) : null}
+      {files.sheet}
     </Page>
   );
 }

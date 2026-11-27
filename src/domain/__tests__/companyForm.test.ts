@@ -55,6 +55,20 @@ describe('the company form', () => {
     expect(scheduleOf({ ...draft, often: 'none' })).toBeNull();
   });
 
+  it('takes the first day typed on a number pad with no dash, and saves it as year-month-day', () => {
+    // Android's number pad may have no minus key, but it has a point; some keyboards have a slash.
+    const draft = draftOf(company, NOW);
+    for (const firstDay of ['20261101', '2026/11/01', '2026.11.01', ' 2026 11 01 ']) {
+      expect({ firstDay, saved: scheduleOf({ ...draft, often: 'biweekly', firstDay })?.firstDay }).toEqual({ firstDay, saved: '2026-11-01' });
+    }
+    // Anything else stays as typed, for the schedule check to turn down.
+    for (const firstDay of ['2026111', '2026-1-01', '11/01/2026', '2026/11-01x']) {
+      const schedule = scheduleOf({ ...draft, often: 'weekly', firstDay });
+      expect(schedule?.firstDay).toBe(firstDay.trim());
+      expect(schedule && checkPaySchedule(schedule)).toBe('Give the first day of any one pay period as a date, like 2026-11-01.');
+    }
+  });
+
   it('pays a period by the week so many days after it ends, whatever was chosen for a month', () => {
     expect(paidByOf({ often: 'biweekly', paidBy: 'dayOfMonth' })).toBe('daysAfter');
     expect(paidByOf({ often: 'monthly', paidBy: 'dayOfMonth' })).toBe('dayOfMonth');

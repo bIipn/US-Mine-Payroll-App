@@ -440,6 +440,37 @@ describe('equipment', () => {
     expect(unit('L-12').meter).toBe(l12.meter + 6.5);
   });
 
+  it('turns back a reading or gallons that are not a number, whatever a keyboard let through', () => {
+    // Android's number pads can type a minus sign: nothing negative goes on the card, the fleet list or a request.
+    const l12 = unit('L-12');
+    const before = s().inspections.length;
+    expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: answers('L-12'), fuelGal: -12 })).toEqual({
+      ok: false, error: 'Enter the gallons added as a number, like 12.5, or leave it blank.',
+    });
+    expect(s().inspections).toHaveLength(before);
+    const signed = s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter: l12.meter, answers: answers('L-12') });
+    expect(signed).toMatchObject({ ok: true });
+    const log = s().opLogs.find((l) => l.equipmentId === l12.id && !l.endAt)!;
+    for (const fuelGal of [-12, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(s().endUse(log.id, { endMeter: l12.meter + 2, fuelGal, parkedSafely: true })).toEqual({
+        ok: false, error: 'Enter the gallons added as a number, like 12.5, or leave it blank.',
+      });
+    }
+    for (const endMeter of [Number.NaN, Number.POSITIVE_INFINITY, 10_000_001]) {
+      expect(s().endUse(log.id, { endMeter, parkedSafely: true })).toEqual({ ok: false, error: 'Enter the reading off the machine as a number, like 4250.5.' });
+    }
+    expect(s().opLogs.find((l) => l.id === log.id)?.endAt).toBeUndefined();
+    expect(unit('L-12').meter).toBe(l12.meter);
+    for (const meter of [-5, Number.NaN]) {
+      expect(s().createMrf({ equipmentId: l12.id, location: 'Shop', priority: 'routine', description: 'Wiper blade is worn', meter, taggedOut: false })).toEqual({
+        ok: false, error: 'Enter the reading off the machine as a number, like 4250.5.',
+      });
+    }
+    expect(s().createMrf({ equipmentId: l12.id, location: 'Shop', priority: 'routine', description: 'Wiper blade is worn', meter: l12.meter + 2, taggedOut: false })).toMatchObject({ ok: true });
+    // Blank is still allowed: no gallons, and a request with no reading.
+    expect(s().endUse(log.id, { endMeter: l12.meter + 2, fuelGal: undefined, parkedSafely: true })).toEqual({ ok: true });
+  });
+
   it('will not sign a checklist with a line left blank', () => {
     const l12 = unit('L-12');
     const before = s().inspections.length;
@@ -455,7 +486,7 @@ describe('equipment', () => {
     // A card needs the hours off the machine: a reading that is not a number never reaches the fleet list.
     for (const meter of [Number.NaN, -5, Number.POSITIVE_INFINITY]) {
       expect(s().submitInspection({ equipmentId: l12.id, startedAt: Date.now(), meter, answers: answers('L-12') })).toEqual({
-        ok: false, error: 'Enter the reading off the machine.',
+        ok: false, error: 'Enter the reading off the machine as a number, like 4250.5.',
       });
     }
     expect(unit('L-12').meter).toBe(l12.meter);
@@ -1188,6 +1219,14 @@ describe('what only a supervisor may do, in the store and not only on the screen
     s().setEmployeeRole('e06', 'supervisor');
     expect(s().employees.find((e) => e.id === 'e06')?.role).toBe('supervisor');
     expect(s().addEquipment({ unit: 'T-99', category: 'haul_truck', make: 'Test', model: 'One', meter: 0 })).toEqual({ ok: true });
+    // A reading a keyboard let through that is not one: the unit is not added at 0 hours without a word.
+    const fleet = s().equipment;
+    for (const meter of [-5, Number.NaN]) {
+      expect(s().addEquipment({ unit: 'T-98', category: 'haul_truck', make: 'Test', model: 'One', meter })).toEqual({
+        ok: false, error: 'Enter the equipment hours as a number, like 4250.5, or leave it blank.',
+      });
+    }
+    expect(s().equipment).toBe(fleet);
     s().setAllowSectionAllOk(false);
     expect(s().settings.allowSectionAllOk).toBe(false);
   });

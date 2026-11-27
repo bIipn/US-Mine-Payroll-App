@@ -7,6 +7,7 @@ import { useLeaveGuard } from '../../components/LeaveGuard';
 import { StandardRefs } from '../../components/Standards';
 import { Button, CheckRow, Field, ProgressBar, Sheet, Tag, TopBar, Txt, TriChoice, UnitPlate } from '../../components/ui';
 import { ANSWER_LEGEND, ANSWER_MARK, CATEGORY_LABEL, checklistFor, FUEL_LINE } from '../../domain/templates';
+import { GALLONS_PROBLEM, parseReading, READING_PROBLEM } from '../../domain/reading';
 import type { Answer, ChecklistItem, InspectionAnswer } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
 import { haptic } from '../../services/haptics';
@@ -61,10 +62,11 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
     if (a) counts[a] += 1;
   }
   const miles = unit.meterUnit === 'mi';
-  const meterValue = Number(meter.replace(/,/g, ''));
-  const meterOk = meter.trim() !== '' && Number.isFinite(meterValue) && meterValue >= 0;
-  const gallonsValue = Number(gallons.replace(/,/g, ''));
-  const gallonsOk = gallons.trim() === '' || (Number.isFinite(gallonsValue) && gallonsValue >= 0);
+  // Read as the store reads them (parseReading): left blank, gallons are none; a minus sign an Android number pad let through is no reading.
+  const meterValue = parseReading(meter) ?? Number.NaN;
+  const meterOk = !Number.isNaN(meterValue);
+  const gallonsValue = parseReading(gallons);
+  const gallonsOk = gallonsValue === undefined || !Number.isNaN(gallonsValue);
   const missingNote = (i: ChecklistItem) => draft[i.id]?.answer === 'bo' && !draft[i.id]?.note?.trim();
   const firstProblem = items.find((i) => !draft[i.id] || missingNote(i));
   const hazard = items.some((i) => draft[i.id]?.answer === 'bo' && (i.critical || draft[i.id]?.hazard));
@@ -114,7 +116,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
       startedAt,
       meter: meterValue,
       answers,
-      fuelGal: gallons.trim() ? gallonsValue : undefined,
+      fuelGal: gallonsValue,
       comments,
     });
     if (!result.ok) {
@@ -163,7 +165,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
             hint={`Last reading ${fmtMeter(unit.meter)} ${unit.meterUnit}`}
             error={
               showMissing && !meterOk
-                ? 'Enter the reading off the machine.'
+                ? READING_PROBLEM
                 : meterOk && meterValue < unit.meter
                   ? `That is lower than the last reading of ${fmtMeter(unit.meter)}. Check it before you sign.`
                   : null
@@ -233,7 +235,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
                   keyboardType="decimal-pad"
                   placeholder="0"
                   hint="Leave blank if you did not fuel. You can add it when you end use."
-                  error={showMissing && !gallonsOk ? 'Enter a number of gallons.' : null}
+                  error={showMissing && !gallonsOk ? GALLONS_PROBLEM : null}
                 />
               ) : null}
 
@@ -297,7 +299,7 @@ export function InspectionScreen({ navigation, route }: ScreenProps<'Inspection'
           <View style={{ flex: 1 }}>
             <Txt v="strong">{unit.make} {unit.model}</Txt>
             <Txt v="small" c={color.silica}>
-              {miles ? 'Odometer' : 'Equipment hours'} {fmtMeter(meterValue)}{gallons.trim() && gallonsValue > 0 ? `, ${gallonsValue} gallons added` : ''}
+              {miles ? 'Odometer' : 'Equipment hours'} {fmtMeter(meterValue)}{gallonsValue != null && gallonsValue > 0 ? `, ${gallonsValue} gallons added` : ''}
             </Txt>
           </View>
         </View>

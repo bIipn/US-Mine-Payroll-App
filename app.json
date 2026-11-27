@@ -68,7 +68,6 @@
         "expo-notifications",
         {
           "color": "#FFC400",
-          "defaultChannel": "lunch",
           "enableRemoteNotifications": false,
           "icon": "./assets/notification-icon.png"
         }

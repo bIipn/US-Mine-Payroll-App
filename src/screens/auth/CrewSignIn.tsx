@@ -12,6 +12,7 @@ import { server } from '../../services/connection';
 import { haptic } from '../../services/haptics';
 import { useStore } from '../../store/useStore';
 import { color, radius, space, TAP } from '../../theme/theme';
+import { useBackPress } from '../../util/hooks';
 
 /** A sign-in crew-auth answered: the session to keep, the company and whether a supervisor has yet to let the person in. */
 export type SignedIn = Extract<CrewAnswer, { kind: 'signed_in' }>;
@@ -119,17 +120,6 @@ export function CrewSignIn({
     };
   }, [typedCode, codeProblem, asked]);
 
-  if (!server) return null;
-  const link = server;
-  const looked = !codeProblem && lookup?.code === typedCode && lookup.asked === asked ? lookup.answer : null;
-  const company = looked?.kind === 'company' ? looked : null;
-  const codeWords = looked && !company ? crewWords(looked, Date.now()) : null;
-
-  /** What was typed changed: what the last answer said no longer stands. */
-  const edited = (set: (text: string) => void) => (text: string) => {
-    set(text);
-    setSaid(null);
-  };
   const toMode = (next: Mode) => {
     // A reset's new passcode is never the old one carried over, nor the old one the new.
     if (next === 'reset' || mode === 'reset') {
@@ -138,6 +128,24 @@ export function CrewSignIn({
       setResetCode('');
     }
     setMode(next);
+    setSaid(null);
+  };
+  const looked = !codeProblem && lookup?.code === typedCode && lookup.asked === asked ? lookup.answer : null;
+  const company = looked?.kind === 'company' ? looked : null;
+  const codeWords = looked && !company ? crewWords(looked, Date.now()) : null;
+  // Forgot your passcode? is not a screen of its own, so on Android the back button and the back gesture close
+  // it here while it shows, back to Sign in, as they would close a screen.
+  useBackPress(mode === 'reset' && !!company, () => {
+    toMode('sign_in');
+    return true;
+  });
+
+  if (!server) return null;
+  const link = server;
+
+  /** What was typed changed: what the last answer said no longer stands. */
+  const edited = (set: (text: string) => void) => (text: string) => {
+    set(text);
     setSaid(null);
   };
   const refuse = (words: Words) => {

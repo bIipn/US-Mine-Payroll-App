@@ -32,6 +32,21 @@ export async function requestNotificationPermission(): Promise<boolean> {
   }
 }
 
+/**
+ * Whether the notice that lunch is over can reach the person: `on`; `off`, notifications are off for the app; or,
+ * on Android only, `lunch_over_off`, notifications are on but the phone's settings turn off the Lunch is over kind.
+ */
+export type LunchNotice = 'on' | 'off' | 'lunch_over_off';
+
+/** What the browser allows. Never asks: only a clock-in and the Lunch reminders setting do. */
+export async function lunchNoticeState(): Promise<LunchNotice> {
+  try {
+    return supported() && Notification.permission === 'granted' ? 'on' : 'off';
+  } catch {
+    return 'off';
+  }
+}
+
 /** A browser has no battery hold on timers; the phone builds answer for Android. */
 export async function onTimeNotices(): Promise<boolean> {
   return true;

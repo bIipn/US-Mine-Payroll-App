@@ -1,4 +1,5 @@
 import { uid } from '../util/hash';
+import { isReading, parseReading } from './reading';
 import { cleanText } from './roster';
 import { CATEGORY_ORDER } from './templates';
 import type { Equipment, EquipmentCategory, OperatingLog } from './types';
@@ -37,21 +38,31 @@ export const unitNumber = (typed: string) => cleanText(typed).toUpperCase();
 
 const NO_TYPE = 'Choose the type of equipment.';
 
+/** What to say of a new unit's reading that is not one: the odometer of a light vehicle, the equipment hours of anything else. */
+export function unitReadingProblem(category: EquipmentCategory): string {
+  return meterUnitFor(category) === 'mi'
+    ? 'Enter the odometer as a number of miles, like 61200, or leave it blank.'
+    : 'Enter the equipment hours as a number, like 4250.5, or leave it blank.';
+}
+
 /**
  * A new unit for the fleet, or why it cannot be added. A unit number is taken
  * when a unit in the fleet has the same one, whatever its capitals. A new unit
- * starts ready, at the reading given.
+ * starts ready, at the reading given, which must be one a meter shows (`isReading`):
+ * one a keyboard let a minus sign into, or that could not be read, is turned back
+ * and never made 0.
  */
 export function newUnit(fleet: readonly Equipment[], input: UnitInput, id: string = newUnitId()): UnitResult {
   const name = unitNumber(input.unit);
   if (!name) return { ok: false, error: 'Enter a unit number.' };
   if (fleet.some((e) => e.unit.toUpperCase() === name)) return { ok: false, error: `Unit ${name} is already in the fleet.` };
   if (!CATEGORY_ORDER.includes(input.category)) return { ok: false, error: NO_TYPE };
+  if (!isReading(input.meter)) return { ok: false, error: unitReadingProblem(input.category) };
   return {
     ok: true,
     unit: {
       id, unit: name, category: input.category, make: cleanText(input.make), model: cleanText(input.model),
-      status: 'ready', meter: Number.isFinite(input.meter) ? input.meter : 0,
+      status: 'ready', meter: input.meter,
       meterUnit: meterUnitFor(input.category),
     },
   };
@@ -105,15 +116,13 @@ export function unitsCheckedOut(
 }
 
 /**
- * A reading as typed: "4,250.5" is 4250.5, and nothing typed is 0. Undefined
- * when it is not a number a meter shows.
+ * A new unit's reading as typed (`parseReading`): "4,250.5" is 4250.5, and nothing
+ * typed is 0. Undefined when it is not a number a meter shows: "-5" or "12 000".
  */
 export function readMeter(typed: string): number | undefined {
-  const text = typed.trim().replace(/,/g, '');
-  if (!text) return 0;
-  if (!/^\d+(\.\d+)?$/.test(text)) return undefined;
-  const n = Number(text);
-  return Number.isFinite(n) && n <= 9_999_999 ? n : undefined;
+  const n = parseReading(typed);
+  if (n === undefined) return 0;
+  return Number.isNaN(n) ? undefined : n;
 }
 
 /** The fleet in the order it is listed: by type, then by unit number, with L-2 ahead of L-10. */

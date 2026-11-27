@@ -80,6 +80,17 @@ export function draftOf(company: Company, now: number = Date.now()): CompanyDraf
 
 const whole = (text: string) => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : NaN);
 
+/**
+ * The first day of a period as it is saved, year-month-day. A number pad may have no dash (Android's has a
+ * point, and not every keyboard's has a minus key), so 20261101, 2026.11.01, 2026/11/01 and 2026 11 01 are
+ * taken as 2026-11-01. Anything else stays as typed, for `checkPaySchedule` to turn down.
+ */
+function dayOf(typed: string): string {
+  const text = typed.trim();
+  const match = /^(\d{4})([-/. ]?)(\d{2})\2(\d{2})$/.exec(text);
+  return match ? `${match[1]}-${match[3]}-${match[4]}` : text;
+}
+
 /** How the form says a period is paid: a period by the week is always paid so many days after it ends. */
 export function paidByOf(draft: Pick<CompanyDraft, 'often' | 'paidBy'>): PaidBy {
   return draft.often === 'weekly' || draft.often === 'biweekly' ? 'daysAfter' : draft.paidBy;
@@ -95,7 +106,7 @@ export function scheduleOf(draft: CompanyDraft): PaySchedule | null {
       : { dayOfMonth: draft.often === 'semimonthly' ? [whole(draft.firstHalf), whole(draft.secondHalf)] : [whole(draft.firstHalf)] };
   return {
     frequency: draft.often,
-    ...(byWeek ? { firstDay: draft.firstDay.trim() } : {}),
+    ...(byWeek ? { firstDay: dayOf(draft.firstDay) } : {}),
     payday,
     ifBankClosed: draft.ifBankClosed,
   };

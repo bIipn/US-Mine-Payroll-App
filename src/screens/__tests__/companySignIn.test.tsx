@@ -618,6 +618,85 @@ describe('Forgot your passcode?', () => {
   });
 });
 
+describe('Android’s back button on the sign-in', () => {
+  // Android's handling of a back press, as React Native's BackHandler does it there: the listener added last
+  // is asked first, until one says it dealt with the press. When none does, Android puts the app away.
+  const { BackHandler } = require('react-native') as typeof import('react-native');
+  type BackListener = Parameters<typeof BackHandler.addEventListener>[1];
+  const listeners: BackListener[] = [];
+  let spy: jest.SpyInstance | null = null;
+  // An Android phone: the screens listen for the back button only there.
+  let android: jest.ReplaceProperty<string> | null = null;
+  beforeEach(() => {
+    android = jest.replaceProperty(Platform, 'OS', 'android');
+    listeners.length = 0;
+    spy = jest.spyOn(BackHandler, 'addEventListener').mockImplementation((_name, handler) => {
+      if (!listeners.includes(handler)) listeners.push(handler);
+      return {
+        remove: () => {
+          const at = listeners.indexOf(handler);
+          if (at !== -1) listeners.splice(at, 1);
+        },
+      };
+    });
+  });
+  afterEach(() => {
+    spy?.mockRestore();
+    android?.restore();
+  });
+  /** A press of the back button: false when nothing in the app dealt with it, and Android put the app away. */
+  async function pressBack(): Promise<boolean> {
+    let dealt = false;
+    await act(async () => {
+      for (let i = listeners.length - 1; i >= 0 && !dealt; i -= 1) dealt = listeners[i]({ type: 'hardwareBackPress', timeStamp: 0 }) === true;
+    });
+    await settle();
+    return dealt;
+  }
+
+  it('closes Supervisor? Sign in with email, back to the crew sign-in, which then leaves the app as before', async () => {
+    const ref = await freshPhone();
+    await press('crew-use-email');
+    expect(byId('server-email')).not.toHaveLength(0);
+    expect(await pressBack()).toBe(true);
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    expect(byId('server-email')).toHaveLength(0);
+    expect(byId('crew-code')).not.toHaveLength(0);
+    expect(byId('crew-use-email')).not.toHaveLength(0);
+    // On the crew sign-in, back is Android's own again.
+    expect(await pressBack()).toBe(false);
+  });
+
+  it('closes Forgot your passcode?, back to Sign in with the name kept, which then leaves the app as before', async () => {
+    await freshPhone();
+    await atPitA('sign_in');
+    await press('crew-forgot');
+    expect(byId('crew-reset-code')).not.toHaveLength(0);
+    expect(await pressBack()).toBe(true);
+    expect(byId('crew-reset-code')).toHaveLength(0);
+    expect(byId('crew-passcode')).not.toHaveLength(0);
+    expect(byId('crew-forgot')).not.toHaveLength(0);
+    expect(input('crew-first').props.value).toBe('Sam');
+    expect(await pressBack()).toBe(false);
+  });
+
+  it('goes back as ever from a screen opened over the sign-in, though the email sign-in was open under it', async () => {
+    const ref = await freshPhone();
+    await press('crew-use-email');
+    await type('server-email', 'avery@example.test');
+    await type('server-password', 'haulroad88');
+    await press('server-submit');
+    expect(byId('company-no-company')).not.toHaveLength(0);
+    await press('company-delete-sign-in');
+    expect(ref.getCurrentRoute()?.name).toBe('DeleteAccount');
+    // Signed out of the server meanwhile: the email sign-in is open again under the screen in front.
+    await act(async () => useServerAccount.setState({ account: null }));
+    expect(await pressBack()).toBe(true);
+    expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');
+    expect(byId('server-email')).not.toHaveLength(0);
+  });
+});
+
 describe('Supervisor? Sign in with email', () => {
   it('signs in, picks the company and connects', async () => {
     await freshPhone();

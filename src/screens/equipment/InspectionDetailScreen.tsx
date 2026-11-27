@@ -1,4 +1,4 @@
-import { Check, FileText, Minus, X } from '../../components/icons';
+import { Check, FileText, Minus, Wrench, X } from '../../components/icons';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -7,7 +7,7 @@ import { Button, Divider, Notice, Page, Panel, Tag, Txt, UnitPlate } from '../..
 import { ANSWER_MARK, checklistFor, checklistSignedOn, countAnswers, findItem, FUEL_LINE, isHazard } from '../../domain/templates';
 import type { InspectionResult } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
-import { employeeName, useStore } from '../../store/useStore';
+import { employeeName, useMe, useStore } from '../../store/useStore';
 import { color, space, type Tone } from '../../theme/theme';
 import { fmtDate, fmtMeter, fmtTime } from '../../util/format';
 
@@ -24,6 +24,7 @@ export function InspectionDetailScreen({ navigation, route }: ScreenProps<'Inspe
   const log = useStore((s) => s.opLogs.find((l) => l.inspectionId === route.params.inspectionId));
   const employees = useStore((s) => s.employees);
   const mrf = useStore((s) => s.mrfs.find((m) => m.id === inspection?.mrfId));
+  const me = useMe();
 
   if (!inspection) return null;
   // The lines read the same on every machine; the unit's type only picks the standards.
@@ -34,6 +35,9 @@ export function InspectionDetailScreen({ navigation, route }: ScreenProps<'Inspe
   const tag = RESULT_TAG[inspection.result];
   const reading = unit?.meterUnit === 'mi' ? 'Odometer' : 'Equipment hours';
   const gallons = (inspection.fuelGal ?? 0) + (log?.fuelGal ?? 0);
+  // A Bad Order or a defect is sent to maintenance from its result screen. Someone who left that screen
+  // before sending it (the app closed, say) sends it from here, linked to this checklist as it would have been.
+  const owesRequest = !!unit && me?.id === inspection.employeeId && inspection.result !== 'pass' && !inspection.mrfId;
 
   return (
     <Page title="Equipment checklist" sub={`${fmtDate(inspection.submittedAt)}, ${fmtTime(inspection.submittedAt)}`} onBack={navigation.goBack} testID="inspection-detail">
@@ -63,6 +67,15 @@ export function InspectionDetailScreen({ navigation, route }: ScreenProps<'Inspe
       </Panel>
 
       <View style={{ gap: space.sm }}>
+        {owesRequest && unit ? (
+          <Button
+            testID="detail-send-mrf"
+            label="Fill out the maintenance request"
+            icon={Wrench}
+            kind="ink"
+            onPress={() => navigation.navigate('MrfForm', { equipmentId: unit.id, inspectionId: inspection.id })}
+          />
+        ) : null}
         <Button
           testID="open-card"
           label="See the whole card for the day"

@@ -214,7 +214,9 @@ describe('the account a phone joined to its company opens', () => {
     const signedIn = { session: g().session, connectedCompany: g().connectedCompany, accounts: g().accounts, receiving: g().receiving };
     expect(signedIn.session?.employeeId).toBe('emp-lee');
 
-    // The app is closed, then opened again: a new store, which reads what the last one saved on the device.
+    // The app is closed, then opened again: a new store, which reads what the last one saved on the device. The
+    // last one had read what was saved before it, as the app does before it opens, so it saves to the device.
+    await flush();
     const { storage, name } = useStore.persist.getOptions();
     const saved = await storage!.getItem(name!);
     const again = storeBuild();

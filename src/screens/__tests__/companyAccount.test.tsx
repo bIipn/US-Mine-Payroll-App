@@ -180,6 +180,14 @@ async function type(id: string, text: string) {
   await act(async () => (input(id).props.onChangeText as (t: string) => void)(text));
   await settle();
 }
+/**
+ * The keyboard's Done key in a text box, as React Native hands it on: on Android it comes as a submit on a
+ * one-line box, whatever the keyboard (ReactTextInputManager), and the box then loses focus.
+ */
+async function doneKey(id: string) {
+  await act(async () => (input(id).props.onSubmitEditing as ((e: unknown) => void) | undefined)?.({ nativeEvent: { text: '' } }));
+  await settle();
+}
 /** A tap, as a finger makes it: the onPress of the nearest component that has one, unless it is turned off. */
 async function press(id: string) {
   const found = byId(id)[0];
@@ -489,7 +497,14 @@ describe('Delete my account', () => {
     expect(byId('delete-password')).toHaveLength(0);
 
     server.deleteAccountWithPasscode.mockResolvedValue({ ok: true, closed: [] });
+    // The Done key on Android's number pad, tapped to put the keyboard away, after a few digits or all of
+    // them: it deletes nothing and sends no try against the lock. Only the red button deletes.
+    await type('delete-passcode', '58');
+    await doneKey('delete-passcode');
     await type('delete-passcode', '582039');
+    await doneKey('delete-passcode');
+    expect(server.deleteAccountWithPasscode).not.toHaveBeenCalled();
+    expect(useStore.getState().session).not.toBeNull();
     await press('delete-confirm');
     expect(server.deleteAccountWithPasscode).toHaveBeenCalledWith('582039');
     expect(server.deleteAccount).not.toHaveBeenCalled();
@@ -565,6 +580,9 @@ describe('Delete my account', () => {
     expect(byId('delete-passcode')).toHaveLength(0);
     server.deleteAccount.mockResolvedValue({ ok: true, closed: [] });
     await type('delete-password', 'haulroad88');
+    // The keyboard's Done or return key puts the keyboard away: deleting takes the red button, as with a passcode.
+    await doneKey('delete-password');
+    expect(server.deleteAccount).not.toHaveBeenCalled();
     await press('delete-confirm');
     expect(server.deleteAccount).toHaveBeenCalledWith('avery@example.test', 'haulroad88');
     expect(ref.getCurrentRoute()?.name).toBe('CompanySignIn');

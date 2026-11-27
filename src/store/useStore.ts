@@ -9,6 +9,7 @@ import { checkCompany, savedCompany, type Company } from '../domain/company';
 import { checkPaySchedule, type PaySchedule } from '../domain/payPeriod';
 import { floorWords, freshReceiving, mergeRows, signInGone, standingChange, withNotices, worseStatus, type Receiving } from '../domain/receive';
 import { newUnit, unitsCheckedOut, withoutUnit, type UnitInput } from '../domain/fleet';
+import { GALLONS_PROBLEM, isReading, READING_PROBLEM } from '../domain/reading';
 import { clockInTurnDown, type ClockInTurnDown } from '../domain/geofence';
 import { connectProblem, type ConnectedCompany } from '../domain/server';
 import { DELETED, markSent, REFERENCE_KINDS, sortedChanges, type Change, type CompanyRow, type PushAnswer, type ReceivedRow, type Standing, type Synced, type SyncStatus } from '../domain/sync';
@@ -46,7 +47,7 @@ import type {
   ShiftEdit,
   SiteConfig,
 } from '../domain/types';
-import { safeStorage } from '../services/storage';
+import { passedOverNewer, recordsRead, recordStorage, watchUnsaved } from '../services/storage';
 import { fmtDate, fmtTime, MIN, startOfDay } from '../util/format';
 import { sha256, uid } from '../util/hash';
 import { migratePersisted, STATE_VERSION } from './migrate';
@@ -198,8 +199,30 @@ export interface ShiftTimesPatch {
 
 interface Actions {
   hydrated: boolean;
+  /**
+   * The records saved on this phone could not be read when the app opened, or did not make sense. The app says
+   * so, instead of opening as a new phone, and nothing is written over them (recordStorage).
+   */
+  recordsUnreadable: boolean;
+  /**
+   * The last save of the records could not be written to the phone (it is full, say): what was done since is only
+   * in the app's memory until a save works. Said on every screen (RecordsNotSaved), and never saved itself.
+   */
+  recordsUnsaved: boolean;
+  /**
+   * The phone shut off while saving the records (a power cut, a forced restart) and opened on an older copy, so the
+   * last few minutes of changes may not be on it. Said once, as the app opens, until the person has seen it
+   * (RecordsNotSavedFrame); never saved itself.
+   */
+  shutOffWhileSaving: boolean;
   toast: Toast | null;
   setHydrated: () => void;
+  /** Read the records saved on this phone again, after they could not be read. */
+  readRecordsAgain: () => Promise<void>;
+  /** Save the records again as they are now, after a save could not be written. */
+  saveRecordsAgain: () => void;
+  /** The person has seen that the phone shut off while saving. */
+  dismissShutOffNotice: () => void;
   showToast: (message: string, tone?: ToastTone) => void;
   clearToast: () => void;
 
@@ -427,9 +450,16 @@ const initialData = (): Data => ({
 /** Whether what this build saves on the device is the sample crew's history, rather than only what people entered. */
 export const HOLDS_SAMPLES = DEMO_MODE && SAMPLE_CREW;
 
+/**
+ * The name the records are saved under. A device that has opened a preview with the sample crew has their sample
+ * history saved; a build without them keeps its own records somewhere else, so it never opens onto that. These
+ * names predate the MineMuster name. They stay as they are, so a device keeps what it has saved.
+ */
+const RECORDS_NAME = HOLDS_SAMPLES ? 'us-mine-crew' : 'us-mine-crew-records';
+
 export const useStore = create<Store>()(
   persist(
-    (set, get) => {
+    (set, get, api) => {
       /** Replace the signed-in employee's open shift with an updated copy. */
       const updateOpenShift = (change: (shift: Shift, now: number) => Shift | string): Result<{ shift: Shift }> => {
         const { session, shifts } = get();
@@ -565,8 +595,17 @@ export const useStore = create<Store>()(
       return {
         ...initialData(),
         hydrated: false,
+        recordsUnreadable: false,
+        recordsUnsaved: false,
+        shutOffWhileSaving: false,
         toast: null,
-        setHydrated: () => set({ hydrated: true }),
+        setHydrated: () => set({ hydrated: true, recordsUnreadable: false }),
+        readRecordsAgain: async () => {
+          await api.persist.rehydrate();
+        },
+        // Any change to the store saves all of it; this one changes nothing else.
+        saveRecordsAgain: () => set({}),
+        dismissShutOffNotice: () => set({ shutOffWhileSaving: false }),
         showToast: (message, tone = 'ok') => set({ toast: { id: Date.now(), message, tone } }),
         clearToast: () => set({ toast: null }),
 
@@ -958,8 +997,10 @@ export const useStore = create<Store>()(
             (i) => i.equipmentId === unit.id && i.employeeId === session.employeeId && i.startedAt === draft.startedAt,
           );
           if (signed) return { ok: true, inspection: signed };
-          // "Equp. hrs st" is a reading off the machine. Anything else would go on the card and into the fleet list.
-          if (!Number.isFinite(draft.meter) || draft.meter < 0) return { ok: false, error: 'Enter the reading off the machine.' };
+          // "Equp. hrs st" is a reading off the machine. Anything else would go on the card and into the fleet list,
+          // and so would gallons that are not a number: a minus sign an Android number pad let through, say.
+          if (!isReading(draft.meter)) return { ok: false, error: READING_PROBLEM };
+          if (draft.fuelGal != null && !isReading(draft.fuelGal)) return { ok: false, error: GALLONS_PROBLEM };
           const template = checklistFor(unit.category);
           // Nothing is signed with a line of the card left blank, or a Bad Order that does not say what is wrong.
           const { answers, blank } = signedAnswers(template, draft.answers);
@@ -1031,9 +1072,13 @@ export const useStore = create<Store>()(
           const { opLogs, equipment, receiving } = get();
           const log = opLogs.find((l) => l.id === logId);
           if (!log || log.endAt) return { ok: false, error: 'That unit has already been checked back in.' };
-          if (!(input.endMeter >= log.startMeter)) {
+          // The reading and the gallons go on the day's card, the fleet list and the safety log: each must be a
+          // number a meter shows, whatever a keyboard let through. Gallons left out are none.
+          if (!isReading(input.endMeter)) return { ok: false, error: READING_PROBLEM };
+          if (input.endMeter < log.startMeter) {
             return { ok: false, error: 'The ending meter cannot be lower than the starting meter.' };
           }
+          if (input.fuelGal != null && !isReading(input.fuelGal)) return { ok: false, error: GALLONS_PROBLEM };
           // A unit the company took out of the fleet while it was checked out here is kept in `gone`
           // only so its use can be ended: ending it lets the copy go.
           const kept = receiving?.gone[log.equipmentId];
@@ -1059,6 +1104,8 @@ export const useStore = create<Store>()(
           if (!clean(input.description)) return { ok: false, error: 'Describe the problem so maintenance knows what to look for.' };
           const location = input.location ? clean(input.location) : '';
           if (!input.equipmentId && !location) return { ok: false, error: 'Say where the problem is, or pick the unit it is on.' };
+          // A reading on the request is off the machine, or there is none.
+          if (input.meter != null && !isReading(input.meter)) return { ok: false, error: READING_PROBLEM };
           const description = clean(input.description);
 
           // A request only points at what is really there: a unit in the fleet, a checklist made
@@ -1623,23 +1670,36 @@ export const useStore = create<Store>()(
       };
     },
     {
-      // A device that has opened a preview with the sample crew has their sample history saved.
-      // A build without them keeps its own records somewhere else, so it never opens onto that.
-      // These keys predate the MineMuster name. They stay as they are, so a device keeps what it has saved.
-      name: HOLDS_SAMPLES ? 'us-mine-crew' : 'us-mine-crew-records',
+      name: RECORDS_NAME,
       version: STATE_VERSION,
       migrate: (saved, fromVersion) => migratePersisted(saved, fromVersion, HOLDS_SAMPLES, STARTING_COMPANY, STARTING_SITE) as unknown as Store,
-      storage: createJSONStorage(() => safeStorage),
+      storage: createJSONStorage(() => recordStorage),
       partialize: ({ session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked, receiving }) => ({
         session, employees, accounts, shifts, leave, denied, equipment, inspections, opLogs, areaSheets, exams, mrfs, mrfSeq, payRates, settings, seededAt, synced, syncedWith, connectedCompany, joinAsked, receiving,
       }),
-      onRehydrateStorage: () => (state) => {
-        state?.readUnreadableAgain();
-        state?.setHydrated();
+      onRehydrateStorage: () => (state, error) => {
+        if (error !== undefined || !state) {
+          // What is saved on the phone could not be read, or did not make sense. Opening as a new phone would hide
+          // the records, and its first save would put an empty phone's in their place: the app says so instead, and
+          // recordStorage writes nothing over them until they have been read.
+          useStore.setState({ recordsUnreadable: true });
+          return;
+        }
+        recordsRead(RECORDS_NAME);
+        // A newer copy was torn by the phone shutting off while it saved, and an older one was read: said once.
+        useStore.setState({ shutOffWhileSaving: passedOverNewer(RECORDS_NAME) });
+        state.readUnreadableAgain();
+        state.setHydrated();
       },
     },
   ),
 );
+
+// A save of the records that could not be written is said on every screen until one is. It is told only when that
+// changes; setting it saves the records again, which is one more try, and no more is told unless that changes it.
+watchUnsaved((unsaved) => {
+  if (useStore.getState().recordsUnsaved !== unsaved) useStore.setState({ recordsUnsaved: unsaved });
+});
 
 // ---- Lookups used across screens ---------------------------------------------------------
 

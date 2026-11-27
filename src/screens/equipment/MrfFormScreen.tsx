@@ -4,6 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { Button, Divider, Field, IconButton, Notice, Page, Panel, Row, Segmented, Sheet, Toggle, Txt, UnitPlate } from '../../components/ui';
 import { examFindings, ON_THE_SHEET } from '../../domain/areaExam';
+import { parseReading, READING_PROBLEM } from '../../domain/reading';
 import { CATEGORY_LABEL } from '../../domain/templates';
 import type { MrfPriority } from '../../domain/types';
 import type { ScreenProps } from '../../navigation/types';
@@ -41,7 +42,7 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
   const [location, setLocation] = useState(route.params.location ?? '');
   const [meter, setMeter] = useState(inspection ? String(inspection.meter) : unit ? String(unit.meter) : '');
   const [tagged, setTagged] = useState(forced);
-  const [error, setError] = useState<{ field: 'location' | 'problem'; text: string } | null>(null);
+  const [error, setError] = useState<{ field: 'location' | 'problem' | 'meter'; text: string } | null>(null);
 
   const taggedOut = !!unit && (priority === 'safety' || tagged);
   const sent = useRef(false);
@@ -54,14 +55,21 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
       setError({ field: 'location', text: 'Say where the problem is, or pick the unit it is on.' });
       return;
     }
-    const meterValue = Number(meter.replace(/,/g, ''));
+    // Read as the store reads it (parseReading): left blank there is none, and one an Android number pad let
+    // a minus sign into is turned back, not dropped without a word.
+    const meterValue = unit ? parseReading(meter) : undefined;
+    if (meterValue != null && Number.isNaN(meterValue)) {
+      haptic.error();
+      setError({ field: 'meter', text: READING_PROBLEM });
+      return;
+    }
     const result = createMrf({
       equipmentId: unit?.id,
       location,
       priority,
       description,
       items,
-      meter: unit && Number.isFinite(meterValue) && meter.trim() ? meterValue : undefined,
+      meter: meterValue,
       taggedOut,
       inspectionId: inspection?.id,
       examId: finding ? exam?.id : undefined,
@@ -69,7 +77,7 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
     });
     if (!result.ok) {
       haptic.error();
-      setError({ field: 'problem', text: result.error });
+      setError({ field: result.error === READING_PROBLEM ? 'meter' : 'problem', text: result.error });
       return;
     }
     sent.current = true;
@@ -184,8 +192,12 @@ export function MrfFormScreen({ navigation, route }: ScreenProps<'MrfForm'>) {
           testID="mrf-meter"
           label={unit.meterUnit === 'mi' ? 'Odometer (miles)' : 'Equipment hours'}
           value={meter}
-          onChangeText={setMeter}
+          onChangeText={(text) => {
+            setMeter(text);
+            setError(null);
+          }}
           keyboardType="decimal-pad"
+          error={error?.field === 'meter' ? error.text : null}
         />
       ) : null}
 

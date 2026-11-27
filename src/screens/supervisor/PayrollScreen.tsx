@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { LEAVE_LABEL, LEAVE_TYPES } from '../../components/DayTable';
+import { useFileChoice } from '../../components/FileChoice';
 import { ChevronLeft, ChevronRight, FileSpreadsheet, FileText } from '../../components/icons';
 import { paydayLine, workweekLine } from '../../components/PeriodSheet';
 import { Button, IconButton, Page, Segmented, Sheet, Stat, Tag, Txt } from '../../components/ui';
@@ -42,13 +43,15 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
   }, [employees, shifts, leave, start, end, now, startsOn, rules]);
   const totals = useMemo(() => sumPayroll(rows), [rows]);
   const [fileOpen, setFileOpen] = useState(false);
+  // Android asks which way each file goes: open it, save it to the phone, or send it to another app.
+  const files = useFileChoice();
   const missingIds = rows.filter((r) => r.total > 0 && !r.employee.payrollId).length;
   // On a phone joined to a company, payroll IDs are set on the dashboard and come with the roster.
   const fromTheOffice = useStore((s) => !!s.connectedCompany);
   const caughtUp = useStore((s) => s.receiving?.caughtUpAt != null && s.receiving.cursor > 0);
   const hoursFile = (layout: 'day' | 'period') => {
     setFileOpen(false);
-    void exportCsv(() => payrollHoursFile({ ...useStore.getState() }, { start, end }, layout, Date.now()));
+    void exportCsv(() => payrollHoursFile({ ...useStore.getState() }, { start, end }, layout, Date.now()), files.choose);
   };
   const paidLeave = totals.total - totals.paid;
 
@@ -72,8 +75,9 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
             icon={FileSpreadsheet}
             kind="yellow"
             onPress={() =>
-              exportReport(() =>
-                payrollReport({ ...useStore.getState() }, { start, end, payDate: span.payDate }, Date.now()),
+              exportReport(
+                () => payrollReport({ ...useStore.getState() }, { start, end, payDate: span.payDate }, Date.now()),
+                files.choose,
               )
             }
           />
@@ -187,6 +191,7 @@ export function PayrollScreen({ navigation }: ScreenProps<'Payroll'>) {
         <Button testID="hours-file-period" label="Totals for the period" kind="ink" onPress={() => hoursFile('period')} />
         <Button testID="hours-file-day" label="One line a day" kind="outline" onPress={() => hoursFile('day')} />
       </Sheet>
+      {files.sheet}
     </Page>
   );
 }
