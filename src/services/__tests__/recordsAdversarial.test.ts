@@ -12,9 +12,11 @@
  *   It can jump, an hour or more either way (`jump`).
  * - The steady clock (performance.now). It never jumps, stops while the phone sleeps (`sleep`), and goes back near
  *   0 at a reboot (`reboot`, and every power cut). Under `start` it counts from each start of the app instead, as
- *   React Native says it may one day: a design must stay safe under both, so the tests of what must never happen run
- *   under both; those of what must be done in time across short starts run under `boot`, the way React Native 0.88
- *   counts it, since under `start` no short start can ever know a copy has settled.
+ *   React Native says it may one day. The rules count on `boot`, the way React Native 0.88 counts it, and
+ *   steadyClock.test.ts fails if that changes: under `start` a start that first reads the clock 10 s or more in can
+ *   take copies an earlier start wrote seconds before for settled. The tests of what must never happen run under
+ *   both where a start reads it in under 10 s, as these do; those of what must be done in time across short starts
+ *   run under `boot`, since under `start` no short start can ever know a copy has settled.
  * - The test's own timeline (`real`), and the phone's awake time over every boot (`awake`). A power cut goes by
  *   these: it tears every file written in its window (half of what it held is left), the kernel's writeback stopping
  *   in sleep as the steady clock does. A clean reboot puts everything on the disk first, so no cut tears what was
@@ -533,10 +535,13 @@ interface Save extends Stamp {
  * phone's clock as well, so that an hour asleep never loses what was saved before it. With nothing torn, the last
  * save. Saves before `floor` (a clear) are never owed.
  *
- * The rules miss this by one save in one case, which no test here meets and AGENTS.md names: a start of the phone that
- * the next start of the app cannot see on the steady clock (it first reads the records past the time of the last copy
- * before it), while the five copies are already kept for other reasons. Randomized runs of 200 short starts with
- * sleeps, reboots and jumps of an hour either way, a power cut tried after their saves, met it 2 times in 54.
+ * The rules miss this in one case, which no test here meets and AGENTS.md names: a start of the phone that the next
+ * start of the app cannot see on the steady clock (it first reads the records past the time of the last copy before
+ * it), while the five copies are kept for other reasons. Then a power cut that tears the last two minutes of awake time
+ * can open on a whole copy, with the notice, up to 4 saves older than owed: about 3.5 minutes of awake time at most, and
+ * up to hours older in real time with the phone asleep between. Randomized runs of 200 short starts with sleeps,
+ * reboots and jumps of an hour either way, a power cut tried after their saves, met it 2 times in 54, and 3 times in
+ * 120 more (recordsLifetimes.test.ts, UNSEEN_REBOOT_SAVES, and its test (f) of I2).
  */
 function owed(saves: readonly Save[], torn: (stamp: Stamp) => boolean, cut: Cut, floor: number): number | null {
   const live = saves.filter((s) => s.n >= floor);

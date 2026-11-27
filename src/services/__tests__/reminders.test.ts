@@ -178,6 +178,40 @@ it('a hand-over made again after a clock-out is planned from the clock-out, neve
   expect(phone.cancelLocal).toHaveBeenCalledTimes(1);
 });
 
+it('a punch’s hand-over made again after a clock-out is planned from the clock-out, never from the lunch it was asked for during', async () => {
+  jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
+  const { reminders, useStore, phone } = load();
+  const now = Date.now();
+  onShift(useStore, [{ start: { at: now, noLocation: 'off' }, end: { at: now + 30 * 60_000, auto: true } }]);
+  const slow = later();
+  phone.scheduleLocal.mockImplementationOnce(() => slow.answered);
+
+  // Lunch started: its hand-over takes the deadline reminders off and hands over the notice that lunch is over, and
+  // the phone takes longer than a turn to answer.
+  void reminders.syncReminders();
+  await ticks();
+  expect(phone.cancelLocal.mock.calls).toEqual([[DEADLINE_IDS]]);
+  expect(ids(phone.scheduleLocal.mock.calls[0])).toEqual(['lunch-end']);
+  await jest.advanceTimersByTimeAsync(reminders.TURN_MS);
+
+  // The person clocks out, and the clock-out's own hand-over takes everything off the phone.
+  clockedOut(useStore);
+  const punch = reminders.syncReminders();
+  await jest.advanceTimersByTimeAsync(0);
+  await punch;
+  expect(phone.cancelLocal.mock.calls[1]).toEqual([[...DEADLINE_IDS, 'lunch-end']]);
+  const byTheClockOut = phone.scheduleLocal.mock.calls.length;
+
+  // Then the slow call answers, and the lunch's hand-over is made once more, in a turn of its own: planned then, from
+  // the closed shift, it hands nothing over. Planned when it was asked for, it would put the notice that lunch is over
+  // back on the phone after the person had left.
+  slow.answer();
+  await jest.advanceTimersByTimeAsync(reminders.TURN_MS);
+  await ticks();
+  const afterTheClockOut = phone.scheduleLocal.mock.calls.slice(byTheClockOut);
+  expect(afterTheClockOut.filter((call) => ids(call).includes('lunch-end'))).toEqual([]);
+});
+
 it('makes a hand-over again once at most, however late the phone answers', async () => {
   jest.useFakeTimers({ doNotFake: ['setImmediate', 'clearImmediate'] });
   const { reminders, useStore, phone } = load();

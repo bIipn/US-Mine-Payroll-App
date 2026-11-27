@@ -689,6 +689,48 @@ describe('on Android, a copy that is not whole', () => {
   });
 });
 
+describe('on Android, once the store has read the records', () => {
+  it('puts what was read in place before anything is saved: the torn copy newer than it goes, a drop it is older than is marked undone, and a settled copy older than it goes', async () => {
+    clockAt();
+    // Copies of earlier starts in this boot, by the steady clock: two whole and settled, a drop after the newer of them,
+    // and the drop's own save, which a power cut tore.
+    const old = copy(T0 - 10 * MIN, S0 - 10 * MIN, 'b', S0 - 11 * MIN);
+    const read = copy(T0 - 5 * MIN, S0 - 5 * MIN, 'b', S0 - 6 * MIN);
+    const torn = copy(T0 - 3 * MIN, S0 - 3 * MIN, 'b', S0 - 6 * MIN);
+    const dropped = `${FILES}${KEY}.dropped-${T0 - 4 * MIN}-acct_1.json`;
+    const files: [string, string][] = [
+      [old, value(1)],
+      [read, value(2)],
+      [dropped, ''],
+      [torn, half(value(3))],
+    ];
+    const dev = device(new Map(files), new Map(), {}, new Map([[old, T0 - 10 * MIN], [read, T0 - 5 * MIN], [dropped, T0 - 4 * MIN], [torn, T0 - 3 * MIN]]));
+    const phone = storageOn('android', dev);
+    expect(await phone.recordStorage.getItem(KEY)).toBe(value(2));
+    expect(phone.undoneDrops(KEY)).toEqual(['acct_1']);
+    phone.recordsRead(KEY);
+    await flush();
+    // Nothing saved, nothing written: only taken away and renamed.
+    expect(dev.log.filter((step) => step.startsWith('write'))).toEqual([]);
+    expect([...dev.disk.keys()].sort()).toEqual([read, `${FILES}${KEY}.undone-${T0 - 4 * MIN}-acct_1.json`].sort());
+  });
+
+  it('an older version’s row is still in AsyncStorage right after a read whose copy has settled, and goes at the first save', async () => {
+    clockAt();
+    const settled = copy(T0 - 5 * MIN, S0 - 5 * MIN, 'b', S0 - 6 * MIN);
+    const dev = device(new Map([[settled, value(2)]]), new Map([[KEY, value(1)], [SESSION, 'tokens']]), {}, new Map([[settled, T0 - 5 * MIN]]));
+    const phone = storageOn('android', dev);
+    expect(await phone.recordStorage.getItem(KEY)).toBe(value(2));
+    phone.recordsRead(KEY);
+    await flush();
+    // The copy read has settled, so there is an anchor: the row still is not taken away at a read.
+    expect(dev.rows.get(KEY)).toBe(value(1));
+    await phone.recordStorage.setItem(KEY, value(3));
+    expect(dev.rows.has(KEY)).toBe(false);
+    expect(dev.rows.get(SESSION)).toBe('tokens');
+  });
+});
+
 describe('on Android, a phone killed at any step of a save', () => {
   beforeEach(() => clockAt());
 
@@ -1483,6 +1525,39 @@ describe('moving an older version’s records into the file', () => {
     expect(dev.rows.get(SESSION)).toBe('tokens');
   });
 
+  it('a phone the Android build before this one left (47614f9: the records in one AsyncStorage row, no files): the store opens on the row, which is moved into a copy and not removed at the read, and goes once a copy has settled', async () => {
+    fakeTimers();
+    const clock = clockAt();
+    // That build saved the store's records as this one does, the same fields at STATE_VERSION 10, in AsyncStorage on
+    // Android as on the iPhone: under the records key, beside the server session.
+    const row = saved(await usedPhone('ios'), KEY)!;
+    expect(JSON.parse(row).version).toBe(10);
+    jest.clearAllTimers();
+    const dev = device(new Map(), new Map([[KEY, row], [SESSION, 'tokens']]));
+    const store = storeOn('android', dev);
+    await flush();
+    expect(store.getState().recordsUnreadable).toBe(false);
+    expect(store.getState().hydrated).toBe(true);
+    expect(store.getState().mrfSeq).toBe(41);
+    expect(store.getState().denied).toHaveLength(20);
+    expect(store.getState().shutOffWhileSaving).toBe(false);
+    // Moved into a copy of its own as it was read; the row stays where it was.
+    expect(copiesOn(dev).some((c) => c.text === row)).toBe(true);
+    expect(dev.rows.get(KEY)).toBe(row);
+    // Not before a copy has had two minutes to reach the disk by the steady clock, with the app idle.
+    await waitFor(clock, 2 * MIN - 1_000);
+    expect(dev.rows.get(KEY)).toBe(row);
+    await waitFor(clock, 1_000);
+    expect(dev.rows.has(KEY)).toBe(false);
+    expect(dev.rows.get(SESSION)).toBe('tokens');
+    // From then on the phone opens on its copies.
+    jest.clearAllTimers();
+    const again = storeOn('android', reopen(dev));
+    await flush();
+    expect(again.getState().mrfSeq).toBe(41);
+    expect(again.getState().denied).toHaveLength(20);
+  });
+
   it('keeps the row when the file does not read back the same, and leaves no copy that differs', async () => {
     const row = value(7);
     const dev = device(new Map(), new Map([[KEY, row]]), { writes: (_n, content) => content.slice(0, 10) });
@@ -2062,6 +2137,32 @@ describe('the store on Android, emptying the phone or deleting an account', () =
     expect(again.getState().shutOffWhileSaving).toBe(true);
   });
 
+  it('emptying a full phone, with no room for the mark of the clear and no copy that can be made into it: nothing of the clear is written, and the app says the phone is full while it holds it in memory, until a save can make it', async () => {
+    const clock = clockAt();
+    const { dev, store } = await inUse(clock);
+    const before = new Map(dev.disk);
+    dev.trouble.refused = (name) => /\.cleared-/.test(name);
+    dev.trouble.renameRefused = (_from, to) => /\.cleared-/.test(to);
+    dev.log.length = 0;
+    store.getState().resetDemo();
+    await flush();
+    expect(store.getState().recordsUnsaved).toBe(true);
+    expect(store.getState().payRates).toEqual({});
+    // The save is not written: the half copy it made is taken away, and nothing is renamed into place.
+    expect(dev.log.filter((step) => step.startsWith(`rename ${KEY}.json.part`))).toEqual([]);
+    expect(dev.disk.has(`${FILES}${KEY}.json.part`)).toBe(false);
+    expect(new Map(dev.disk)).toEqual(before);
+    // Room again: the next save makes the mark and the clear, and the notice goes.
+    dev.trouble.refused = undefined;
+    dev.trouble.renameRefused = undefined;
+    store.getState().saveRecordsAgain();
+    await flush();
+    expect(store.getState().recordsUnsaved).toBe(false);
+    expect(JSON.parse(newestOn(dev)!).state.payRates).toEqual({});
+    expect(holdingRate(dev)).toEqual([]);
+    expect(marksOn(dev)).toHaveLength(1);
+  });
+
   /** The files on a phone that hold this text anywhere in them. */
   const holding = (dev: Device, text: string) => [...dev.disk].filter(([, kept]) => kept.includes(text)).map(([uri]) => uri.slice(FILES.length));
   /** The store closed and opened again on the same phone: the one that was running goes, and its timers with it. */
@@ -2131,6 +2232,42 @@ describe('the store on Android, emptying the phone or deleting an account', () =
     expect(again.getState().deletionNotFinished).toBe(false);
     clock.pass(5_000);
     const later = await reopened(dev);
+    expect(later.getState().deletionNotFinished).toBe(true);
+  });
+
+  it('deleting an account on a phone that moved an older version’s row as it opened, then a power cut that sends it back to the row with the account on the clock: the phone says to delete it again, at the next start too (G1)', async () => {
+    const clock = clockAt();
+    const shift = { id: 'sh_1', employeeId: 'emp-1', clockIn: { at: clock.now - 3 * MIN, noLocation: 'off' as const }, lunches: [], breaks: [] };
+    // The records as the phone kept them in AsyncStorage before this version: the account, its rate, its shift open.
+    const before = device();
+    const old = storeOn('android', before);
+    await flush();
+    old.setState({ mrfSeq: 41, accounts: [ACCOUNT], session: { accountId: 'acct_1', employeeId: 'emp-1' }, shifts: [shift], payRates: { 'emp-1': RATE } });
+    await flush();
+    const row = newestOn(before)!;
+    jest.clearAllTimers();
+    const dev = device(new Map(), new Map([[KEY, row]]));
+    const store = storeOn('android', dev);
+    await flush();
+    expect(store.getState().mrfSeq).toBe(41);
+    // Clocked out, and the account deleted, within the two minutes a power cut then takes back.
+    clock.pass(10_000);
+    store.setState({ shifts: [{ ...shift, clockOut: { at: clock.now } }] });
+    await flush();
+    clock.pass(10_000);
+    expect(store.getState().deleteMyAccount({ clearPhone: false })).toEqual({ ok: true, cleared: false });
+    await flush();
+    clock.pass(1_000);
+    // Every copy of the file was written in the last two minutes: the phone opens on the row.
+    const again = await powerCut(clock, dev);
+    expect(again.getState().shutOffWhileSaving).toBe(true);
+    expect(again.getState().accounts).toEqual([ACCOUNT]);
+    expect(again.getState().deletionNotFinished).toBe(true);
+    again.getState().dismissDeletionNotice();
+    await flush();
+    clock.pass(5_000);
+    const later = await reopened(dev);
+    expect(later.getState().accounts).toEqual([ACCOUNT]);
     expect(later.getState().deletionNotFinished).toBe(true);
   });
 

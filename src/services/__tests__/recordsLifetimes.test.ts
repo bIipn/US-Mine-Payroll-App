@@ -12,9 +12,11 @@
  *   It can jump, an hour or more either way (`jump`).
  * - The steady clock (performance.now). It never jumps, stops while the phone sleeps (`sleep`), and goes back near
  *   0 at a reboot (`reboot`, and every power cut). Under `start` it counts from each start of the app instead, as
- *   React Native says it may one day: a design must stay safe under both, so the tests of what must never happen run
- *   under both; those of what must be done in time across short starts run under `boot`, the way React Native 0.88
- *   counts it, since under `start` no short start can ever know a copy has settled.
+ *   React Native says it may one day. The rules count on `boot`, the way React Native 0.88 counts it, and
+ *   steadyClock.test.ts fails if that changes: under `start` a start that first reads the clock 10 s or more in can
+ *   take copies an earlier start wrote seconds before for settled. The tests of what must never happen run under
+ *   both where a start reads it in under 10 s, as these do; those of what must be done in time across short starts
+ *   run under `boot`, since under `start` no short start can ever know a copy has settled.
  * - The test's own timeline (`real`), and the phone's awake time over every boot (`awake`). A power cut goes by
  *   these: it tears every file written in its window (half of what it held is left), the kernel's writeback stopping
  *   in sleep as the steady clock does. A clean reboot puts everything on the disk first, so no cut tears what was
@@ -500,15 +502,25 @@ interface Save extends Stamp {
 }
 
 /**
+ * The known limit (AGENTS.md): after a start of the phone that the next start of the app cannot see on the steady clock,
+ * a power cut that tears the last two minutes of awake time can open on a copy up to this many saves older than owed,
+ * always whole and with the notice. Measured on the rules of round 6: 2 of 54 randomized runs of 200 short starts with
+ * sleeps, reboots and jumps of an hour either way, a power cut tried after their saves (round 5's judge), and 3 of 120
+ * more (seeds 1000 to 1039, 2000 to 2039 and 3000 to 3039, round 5's review), the copy opened on at most 4 saves
+ * (seed 3012) and 206 s of awake time (seed 1029) older than owed, and up to 140 minutes older in real time, the phone
+ * asleep between (seed 3012).
+ */
+const UNSEEN_REBOOT_SAVES = 4;
+
+/**
  * I2: the newest save a cut may not go further back than, or null when it may open on nothing: the newest save made
  * a minute or more (SLACK_MS) before the first save the cut tore, in awake time, or, for a cut since waking, by the
  * phone's clock as well, so that an hour asleep never loses what was saved before it. With nothing torn, the last
  * save. Saves before `floor` (a clear) are never owed.
  *
- * The rules miss this by one save in one case, which no test here meets and AGENTS.md names: a start of the phone that
- * the next start of the app cannot see on the steady clock (it first reads the records past the time of the last copy
- * before it), while the five copies are already kept for other reasons. Randomized runs of 200 short starts with
- * sleeps, reboots and jumps of an hour either way, a power cut tried after their saves, met it 2 times in 54.
+ * The rules miss this in one case, which AGENTS.md names and (f) of I2 meets: a start of the phone that the next start
+ * of the app cannot see on the steady clock (it first reads the records past the time of the last copy before it),
+ * while the five copies are kept for other reasons (UNSEEN_REBOOT_SAVES).
  */
 function owed(saves: readonly Save[], torn: (stamp: Stamp) => boolean, cut: Cut, floor: number): number | null {
   const live = saves.filter((s) => s.n >= floor);
@@ -644,10 +656,10 @@ class Phone {
     return save;
   }
 
-  /** The store is about to empty the phone or take one person's records off it, as it says just before that save. */
-  forget(how: Forgetting): void {
+  /** The store is about to empty the phone or take one person's records off it (a drop names their account), as it says just before that save. */
+  forget(how: Forgetting, id?: string): void {
     if (!this.api) throw new Error('The app is not running.');
-    this.api.forgetCopies(KEY, how);
+    this.api.forgetCopies(KEY, how, id);
     if (how === 'clear') this.clearing = true;
   }
 
@@ -1013,6 +1025,116 @@ describe('I2 I4: a power cut opens on a whole copy that is never older than it m
     phone.expectBounded();
   });
 
+  it.each(MEANINGS)('(c) I2: the app open while the phone sleeps an hour after a save, then two saves as it wakes: a cut tearing what was written since waking opens on the save before the sleep, which only the copy before the latest sleep keeps ($from)', async ({ meaning }) => {
+    const phone = await usedPhone(meaning);
+    phone.idle(10 * MIN);
+    await phone.start();
+    await phone.pass(3_000);
+    const before = await phone.save();
+    phone.sleep(60 * MIN);
+    await phone.pass(3_000);
+    await phone.save();
+    await phone.pass(10_000);
+    await phone.save();
+    await phone.pass(2_000);
+    const after = await phone.cutAndRead(sinceWake);
+    expectReadAfterCut(after, phone, 'cut tearing what was written since waking');
+    expect(numberIn(after.read)).toBe(before.n);
+  });
+
+  it('(c) I4: the copy a save replaces, written 65 s before by the phone clock (15 s of it asleep, too short to count as a sleep, and 50 s awake) in the same minute of steady time, is kept by that save, which only the copy a save replaced keeps (steady clock from boot)', async () => {
+    const phone = await usedPhone('boot');
+    phone.idle(10 * MIN);
+    await phone.start();
+    await phone.pass(MIN - (phone.clock.steady % MIN) + 500);
+    const replaced = await phone.save();
+    phone.sleep(15_000);
+    await phone.pass(50_000);
+    expect(Math.floor(phone.clock.steady / MIN)).toBe(Math.floor((phone.clock.steady - 50_000) / MIN));
+    await phone.save();
+    expect(filesHolding(phone.dev, tagOf(replaced.n)).filter((name) => fullCopies(phone.dev).includes(name))).toHaveLength(1);
+  });
+
+  it('(d) I1: a sleep, then saves across three minutes of steady time, the last after 25 s asleep and 45 s awake, so that the copy before the sleep, the copy it replaces and the newest of each minute all ask to be kept: at most 5 full copies (steady clock from boot, R5-6)', async () => {
+    const phone = await usedPhone('boot');
+    phone.idle(10 * MIN);
+    await phone.start();
+    await phone.pass(MIN - (phone.clock.steady % MIN) + 50_000);
+    await phone.save();
+    phone.sleep(60 * MIN);
+    await phone.pass(5_000);
+    await phone.save();
+    await phone.pass(10_000);
+    await phone.save();
+    await phone.pass(57_000);
+    await phone.save();
+    phone.sleep(25_000);
+    await phone.pass(45_000);
+    await phone.save();
+    phone.expectBounded();
+    await phone.expectDurable('after the last save');
+  });
+
+  it('(d) I1: a new phone that saves across four minutes of steady time with a sleep between, the last save 61 s by the phone clock after the one before (12 s of it asleep): at most 5 full copies (steady clock from boot)', async () => {
+    const phone = new Phone('boot');
+    await phone.start();
+    await phone.save();
+    await phone.pass(139_000);
+    await phone.save();
+    await phone.pass(1_500);
+    await phone.save();
+    phone.sleep(10 * MIN);
+    await phone.pass(49_500);
+    await phone.save();
+    await phone.pass(10_500);
+    await phone.save();
+    await phone.pass(49_000);
+    phone.sleep(12_000);
+    await phone.save();
+    phone.expectBounded();
+    await phone.expectDurable('after the last save');
+  });
+
+  it('(f) I2, the known limit: two reboots close together, the second one the steady clock cannot see, then short starts asleep between: a power cut tearing the last two minutes awake opens on a whole copy, says it shut off while saving, and no more than 2 saves further back than owed (steady clock from boot, R5-8)', async () => {
+    const phone = await usedPhone('boot');
+    const brief = async (saves: number) => {
+      await phone.start();
+      for (let i = 0; i < saves; i++) {
+        await phone.pass(i === 0 ? 3_000 : 12_000);
+        await phone.save();
+      }
+      await phone.pass(5_000);
+      phone.close();
+    };
+    phone.idle(10 * MIN);
+    await brief(1);
+    phone.reboot();
+    phone.idle(166_000);
+    await brief(2);
+    phone.reboot();
+    // The next start first reads the records 36 s past the steady time of the last copy of the boot before.
+    phone.idle(217_000);
+    await brief(1);
+    phone.sleep(27 * MIN);
+    await brief(1);
+    phone.sleep(3 * 60 * MIN);
+    await brief(2);
+    phone.sleep(5 * 60 * MIN);
+    await phone.start();
+    await phone.pass(3_000);
+    await phone.save();
+    const after = await phone.cutAndRead(lastAwake());
+    expect(after.error).toBeUndefined();
+    expect(after.read !== null && isWhole(after.read)).toBe(true);
+    expect(after.passedOver).toBe(true);
+    const read = phone.saves.find((s) => s.text === after.read)!;
+    expect(after.owed).not.toBeNull();
+    // The last copy before the reboot the steady clock cannot see is on the disk, and is let go of: the copy read is
+    // older. Here 2 saves; at most 4 (UNSEEN_REBOOT_SAVES) in the randomized runs measured.
+    expect(after.owed! - read.n).toBeLessThanOrEqual(2);
+    expect(after.owed! - read.n).toBeLessThanOrEqual(UNSEEN_REBOOT_SAVES);
+  });
+
   it.each(MEANINGS)('(e) I3: the phone clock jumps an hour forward right after a save; a power cut tearing the last 30 s at any time in the 3 minutes after opens on a whole copy no more than about 3 minutes of awake time old ($from)', async ({ meaning }) => {
     const phone = await usedPhone(meaning);
     phone.idle(10 * MIN);
@@ -1195,6 +1317,58 @@ describe('I6: a drop takes one person’s records off the phone, and a power cut
     expect(done.read).toBe(phone.last!.text);
     expect(dropUndoneOf(done.api)(KEY)).toBe(false);
     expect(filesHolding(phone.dev, RATE)).toEqual([]);
+  });
+
+  it('(i) I6 I7 F5: a drop on a phone that moved an older version’s row at this start, whose saves a power cut tears so that the phone opens on the row: dropUndone is true, and when the store cannot make the drop again (the account’s shift is open in the row) it is said again at the next start (R5-5)', async () => {
+    const phone = new Phone('boot');
+    phone.dev.rows.set(KEY, withRate(1));
+    phone.older(1, withRate(1));
+    const first = await phone.start();
+    expect(first.read).toBe(withRate(1));
+    await phone.pass(3_000);
+    await phone.save(withRate);
+    await phone.pass(10_000);
+    phone.forget('drop', 'acct_1');
+    await phone.save(value);
+    await phone.pass(10_000);
+    // Every copy of the file was written in the last two minutes: the cut tears them all, and the row is read.
+    phone.powerCut(lastAwake());
+    const second = await phone.start();
+    expect(second.read).toBe(withRate(1));
+    expect(second.passedOver).toBe(true);
+    expect(second.api.undoneDrops(KEY)).toEqual(['acct_1']);
+    // The store cannot make the drop again: it saves what it read, the rate still in it.
+    await phone.pass(3_000);
+    await phone.save(withRate);
+    await phone.pass(5_000);
+    phone.close();
+    phone.idle(5 * MIN);
+    const third = await phone.start();
+    expect(third.read).toBe(phone.last!.text);
+    expect(third.read).toContain(RATE);
+    expect(third.api.undoneDrops(KEY)).toEqual(['acct_1']);
+  });
+
+  it('(i) I6 I7 F5: the same, with the app killed at the start after the cut before it saved anything: the start after that still opens on the row and says the drop was undone', async () => {
+    const phone = new Phone('boot');
+    phone.dev.rows.set(KEY, withRate(1));
+    phone.older(1, withRate(1));
+    await phone.start();
+    await phone.pass(3_000);
+    await phone.save(withRate);
+    await phone.pass(10_000);
+    phone.forget('drop', 'acct_1');
+    await phone.save(value);
+    await phone.pass(10_000);
+    phone.powerCut(lastAwake());
+    const second = await phone.start();
+    expect(second.read).toBe(withRate(1));
+    expect(second.api.undoneDrops(KEY)).toEqual(['acct_1']);
+    // Killed as it opened: the store had read the records and put what it read in place, and saved nothing.
+    phone.close();
+    const third = await phone.start();
+    expect(third.read).toBe(withRate(1));
+    expect(third.api.undoneDrops(KEY)).toEqual(['acct_1']);
   });
 
   it('(i) I6 F5 I8: a disk 64669fa left with a drop mark, copies from before it with the rate, and a torn file after it: the phone opens on the newest copy from before, says it shut off while saving, and dropUndone is true', async () => {

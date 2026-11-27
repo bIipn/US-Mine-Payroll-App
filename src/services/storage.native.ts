@@ -50,12 +50,16 @@ import { guardRecords } from './recordGuard';
  * On Android a save cannot make what it writes reach the disk before the app goes on (recordCopies.ts), so a
  * power cut can tear what was written in the last half a minute or so. Each save is a copy of its own, named by its
  * place, by when it was written on the steady clock and by the start of the app that wrote it, and older copies go by
- * rules that keep a whole copy that has had time to reach the disk always there; whether one has is judged by the
- * steady clock, never by the phone's own, which can jump. A copy is read only if it is whole JSON. When a newer copy
- * was torn and an older one was read, the store is told (`passedOverNewer`) and the app says so once. When the store
- * empties the phone, or takes one person's account off it, it says so first (`forgetCopies`): after a clear the copies
- * from before go with its save, after a drop as soon as a copy after it has settled; when a power cut undoes a drop,
- * the store is told whose account it was (`undoneDrops`), and makes it again.
+ * rules that keep a whole copy that has had time to reach the disk always there, and five copies at most; whether one
+ * has is judged by the steady clock, never by the phone's own, which can jump, and the rules count on that clock
+ * counting from the phone's start, as React Native 0.88's does (recordCopies.ts, held by steadyClock.test.ts). A copy is
+ * read only if it is whole JSON. When a newer copy was torn and an older one was read, the store is told
+ * (`passedOverNewer`) and the app says so once. When the store empties the phone, or takes one person's account off
+ * it, it says so first (`forgetCopies`): after a clear the copies from before go with its save, after a drop as soon as
+ * a copy after it has settled; when a power cut undoes a drop, the store is told whose account it was (`undoneDrops`),
+ * and makes it again, and the store's read, or failing that the first save after it, marks that drop undone, so that it
+ * is said at every start until the store has made it again (an older version's row, read when no copy is whole, is
+ * older than every drop).
  *
  * Everything else, the company server's session among it, stays in AsyncStorage (`safeStorage`). A row there that
  * cannot be read or written falls back to memory for the rest of the session on its own, not every row with it.
@@ -280,7 +284,8 @@ type Found =
   | { kind: 'torn'; text: string; markers: Marker[] }
   /** Emptied by a clear, and nothing saved since is whole. */
   | { kind: 'cleared'; passedOver: boolean }
-  | { kind: 'none' };
+  /** No copy: the marks of drops may still be there. */
+  | { kind: 'none'; markers: Marker[] };
 
 /**
  * The records in the files: the newest copy that is whole, newest first by place. Never a copy still being written
@@ -310,7 +315,7 @@ async function readFile(key: string): Promise<Found> {
     session.readFrom = { cleared: readable };
     return { kind: 'cleared', passedOver: newest !== null };
   }
-  return newest === null ? { kind: 'none' } : { kind: 'torn', text: newest, markers };
+  return newest === null ? { kind: 'none', markers } : { kind: 'torn', text: newest, markers };
 }
 
 /**
@@ -318,9 +323,9 @@ async function readFile(key: string): Promise<Found> {
  * place: take away every copy newer than it, which were torn, so that none is ever taken for a whole copy settled on
  * the disk; the file an earlier build kept when the new copy beside it was read, and any copy that build kept, older
  * than the one read, that is not whole; and when what was read is older than a drop, mark that drop undone, naming the
- * same account (`undoneDrops`), so that nothing saved from now on counts as made after it. Then give the file and the
- * copy beside it that an earlier build kept names of their own, by the places they were read at. Done again until it
- * works.
+ * same account (`undoneDrops`), so that nothing saved from now on counts as made after it. An older version's row,
+ * read when no copy is whole, is older than every drop. Then give the file and the copy beside it that an earlier build
+ * kept names of their own, by the places they were read at. Done again until it works.
  */
 async function settle(key: string, session: Session): Promise<void> {
   const names = namesOf(key);
@@ -351,12 +356,14 @@ async function settle(key: string, session: Session): Promise<void> {
         }
         if (!whole(text)) deleted(session, copy.name);
       }
-      for (const marker of listing.markers) {
-        if (marker.how !== 'drop' || marker.after <= from.copy) continue;
-        const undone = markerName(key, 'undone', marker.after, marker.id);
-        if (at(undone).exists) at(marker.name).delete();
-        else at(marker.name).rename(undone);
-      }
+    }
+    // The drops what was read is older than: those after the copy read, and every one when an older version's row was
+    // read, since that row is older than every copy and every drop.
+    for (const marker of listing.markers) {
+      if (marker.how !== 'drop' || ('copy' in from ? marker.after <= from.copy : !('row' in from))) continue;
+      const undone = markerName(key, 'undone', marker.after, marker.id);
+      if (at(undone).exists) at(marker.name).delete();
+      else at(marker.name).rename(undone);
     }
     session.readFrom = undefined;
     listing = listed(key, session, steady);
@@ -793,11 +800,13 @@ async function readRecords(key: string): Promise<string | null> {
     session.fresh = true;
     return null;
   }
-  if (found.kind === 'torn') {
-    // Files are there, but none is whole: a power cut soon after the row was moved tore what was written since.
-    // The row is read; the torn files go at the first save (`settle`), and the row once a copy has settled.
+  if (found.kind === 'torn' || found.markers.length > 0) {
+    // Files are there, but none is whole: a power cut soon after the row was moved tore what was written since. Or no
+    // copy is there at all, but the mark of a drop made since is: the start that read the row after such a power cut
+    // was killed before it saved. The row is read; the torn files go once the store has read it (`settle`), and the
+    // row once a copy has settled.
     session.readFrom = { row: true };
-    session.passedOver = true;
+    session.passedOver = found.kind === 'torn';
     session.row = true;
     // Older than every copy: older than every drop made since, too.
     session.undone = found.markers.filter((m) => m.how === 'undone' || m.how === 'drop');
@@ -896,8 +905,9 @@ export function dropUndone(key: string): boolean {
 
 /**
  * The drops `dropUndone` says a power cut undid, each by the id of the account it took off, as the store named it
- * (`forgetCopies(key, 'drop', id)`), or null for one whose mark names none (an earlier build's). The store makes each
- * again. Empty on the iPhone and the web, which keep one copy.
+ * (`forgetCopies(key, 'drop', id)`), or null for one whose mark names none (only an earlier test build wrote one): the
+ * store cannot tell whose that was, and says so once. The store makes each other one again. Empty on the iPhone and the
+ * web, which keep one copy.
  */
 export function undoneDrops(key: string): (string | null)[] {
   if (!IN_FILE) return [];

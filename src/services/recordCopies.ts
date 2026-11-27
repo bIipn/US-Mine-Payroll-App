@@ -7,7 +7,7 @@
  * crash, and the records are saved several times within seconds of a punch. So each save is a copy of its own: it
  * is written whole beside the others and renamed to a name that says its place, when it was written by the steady
  * clock and which start of the app wrote it, and older copies go only by the rules here. A whole copy that has had time
- * to reach the disk is always there, and five copies at most.
+ * to reach the disk is always there, and five copies at most (`MOST_COPIES`, `toLetGo`).
  *
  * Two clocks. The phone's clock (Date.now, and a file's modificationTime) can jump either way: network time setting
  * right a clock that started from zero after the battery ran flat, or someone setting the date by hand. It gives the
@@ -16,13 +16,23 @@
  * as the kernel's writeback does). A copy whose steady time is at or below now and two minutes or more before it has
  * had two minutes of awake time since, whatever that clock counts from.
  *
- * Some rules count on more: that the steady clock counts from the phone's start, as React Native 0.88 reads it
- * (NativePerformance::now, std::chrono::steady_clock, CLOCK_MONOTONIC on Android). A copy whose steady time is above
- * now was then written before the phone last started, so it is on the disk; and copies of earlier starts of the app in
- * the same boot can be set beside this start's, so that starts a few seconds long still thin and settle them. React
- * Native's own comment says its clock "should be carefully changed eventually": steadyClock.test.ts reads its source
- * and fails once it no longer reads that clock, so an upgrade that made it count from the app's start is caught before
- * it ships. A start whose clock reads less than BOOT_CLOCK_MS as it first reads the records is not trusted with it.
+ * The rules count on more, and do so on purpose: that the steady clock counts from the phone's start, as React Native
+ * 0.88 reads it (NativePerformance::now, std::chrono::steady_clock, CLOCK_MONOTONIC on Android). A copy whose steady
+ * time is above now was then written before the phone last started, so it is on the disk; and copies of earlier starts
+ * of the app in the same boot can be set beside this start's, so that starts a few seconds long still thin and settle
+ * them. Without that, the copies could not be kept to a few after starts of the phone close together (34 were
+ * measured), and under a clock that counted from the app's start, a start that first read it 10 s or more in could take
+ * copies an earlier start wrote seconds before for settled, so that a power cut then left nothing whole to read (Records
+ * not read). React Native's own comment says its clock "should be carefully changed eventually": steadyClock.test.ts
+ * reads its source and fails once it no longer reads that clock, so an upgrade that made it count from the app's start
+ * is caught before it ships, and these rules are looked at again. A start whose clock reads less than BOOT_CLOCK_MS as
+ * it first reads the records is not trusted with it.
+ *
+ * Known limit: a start of the phone that the next start of the app cannot see on the steady clock (it first reads the
+ * records past the time of the last copy before it) makes that copy look like one of this boot's, written shortly before.
+ * While the five copies are kept for other reasons, it can go, and a power cut that tears the last two minutes of
+ * awake time then opens up to four saves further back than it should, about 3.5 minutes of awake time at most, always
+ * on a whole copy and saying the phone shut off while saving (recordsLifetimes.test.ts, `UNSEEN_REBOOT_SAVES`).
  */
 
 /** Copies kept in the same minute of steady time: only the newest. */
@@ -40,9 +50,8 @@ export const SETTLED_MS = 120_000;
 export const SLEPT_MS = 30_000;
 
 /**
- * The most copies kept for the sleeps before the latest one: the copy before each is kept while no more than this many
- * copies are, in all. The rules above keep no more than this many of their own (the file, the copy beside it and three
- * more, as the earlier builds kept them).
+ * The most copies kept, the anchor among them (`toLetGo`), as the earlier builds kept them: the file, the copy beside it
+ * and three more.
  */
 export const MOST_COPIES = 5;
 
@@ -226,12 +235,17 @@ export interface Letting {
 
 /**
  * The copies that can go. Every one from before a clear, and every one older than the anchor. Of the copies newer
- * than it, kept: the newest; every one whose steady time cannot be set beside this session's; the newest of each
- * minute of steady time; the older of the newest neighbouring pair the phone may have slept between (the copy before
- * the latest sleep); and the copy a save replaced, when the phone's clock says it was written a minute or more ago.
+ * than it, kept while no more than MOST_COPIES are kept in all, the anchor among them, in this order: the newest; the
+ * older of the newest neighbouring pair the phone may have slept between (the copy before the latest sleep); the copy
+ * a save replaced, when the phone's clock says it was written a minute or more ago; then, newest first, the newest of
+ * each minute of steady time; then the copies the steady clock may be wrong about. Besides, every one whose steady
+ * time cannot be set beside this session's (`comparable`) is kept until it settles, whatever the count: under React
+ * Native 0.88's clock, only a copy of another boot just as the phone or this start began, or one an earlier build named
+ * with no time.
  *
- * So a copy that goes for being in a minute with a newer one has that newer one, or a settled one newer still, less
- * than a minute after it by the steady clock, whatever goes later: the minute does not move.
+ * So, while the minutes find room, a copy that goes for being in a minute with a newer one has that newer one, or a
+ * settled one newer still, less than a minute after it by the steady clock, whatever goes later: the minute does not
+ * move. The four rules before the minutes keep four at most, the anchor among them, so there is always room for one.
  */
 export function toLetGo(copies: readonly Copy[], letting: Letting): Copy[] {
   const { anchor, now, start, replaced, readable } = letting;
@@ -243,17 +257,6 @@ export function toLetGo(copies: readonly Copy[], letting: Letting): Copy[] {
     else if (copy !== anchor) newer.push(copy);
   }
   if (newer.length === 0) return go;
-  const keep = new Set<Copy>([newer[0]]);
-  const minutes = new Set<number>();
-  for (const copy of newer) {
-    if (!comparable(copy, start)) keep.add(copy);
-    else {
-      const minute = Math.floor(copy.steady! / MINUTE_MS);
-      if (!minutes.has(minute)) keep.add(copy);
-      minutes.add(minute);
-    }
-  }
-  // The older copy of the newest pair the phone may have slept between: the copy before the latest sleep.
   const chain = anchor ? [...newer, anchor] : newer;
   const slept = (i: number) => sleptBetween(chain[i + 1], chain[i], now, start);
   // The phone may have started between two copies of different starts of the app, and the steady clock does not show
@@ -261,19 +264,32 @@ export function toLetGo(copies: readonly Copy[], letting: Letting): Copy[] {
   const restarted = (i: number) => chain[i].session == null || chain[i].session !== chain[i + 1].session;
   let pinned = 0;
   while (pinned + 1 < chain.length && !slept(pinned)) pinned++;
-  if (pinned + 1 < chain.length) keep.add(chain[pinned + 1]);
-  if (replaced && replaced.wall !== null && replaced.wall <= now.wall && now.wall - replaced.wall >= MINUTE_MS) keep.add(replaced);
-  // While no more than MOST_COPIES are kept, the anchor among them, the copies the steady clock may be wrong about are
-  // kept too, newest first: the copy before each pair older than the one above that the phone may have slept between
-  // (the phone's clock jumping forward looks like a sleep, so that one may not be the latest), and the last copy of each
-  // start of the app before the next (the phone may have started between them, and once the next start has read the
-  // steady clock past that copy's time the steady time between them says nothing of the awake time between them).
-  let kept = keep.size + (anchor ? 1 : 0);
-  for (let i = 0; i + 1 < chain.length && kept < MOST_COPIES; i++) {
-    const copy = chain[i + 1];
-    if (keep.has(copy) || copy === anchor || !(restarted(i) || (i > pinned && slept(i)))) continue;
-    keep.add(copy);
-    kept++;
+  const keep = new Set<Copy>();
+  const room = () => keep.size + (anchor ? 1 : 0) < MOST_COPIES;
+  /** Keep a copy newer than the anchor, while there is room or `always`. */
+  const take = (copy: Copy | undefined, always = false) => {
+    if (copy && newer.includes(copy) && (always || room())) keep.add(copy);
+  };
+  take(newer[0]);
+  // The older copy of the newest pair the phone may have slept between: the copy before the latest sleep.
+  if (pinned + 1 < chain.length) take(chain[pinned + 1]);
+  if (replaced && replaced.wall !== null && replaced.wall <= now.wall && now.wall - replaced.wall >= MINUTE_MS) take(replaced);
+  const minutes = new Set<number>();
+  for (const copy of newer) {
+    if (!comparable(copy, start)) take(copy, true);
+    else {
+      const minute = Math.floor(copy.steady! / MINUTE_MS);
+      if (!minutes.has(minute)) take(copy);
+      minutes.add(minute);
+    }
+  }
+  // Then, newest first, the copies the steady clock may be wrong about: the copy before each pair older than the one
+  // above that the phone may have slept between (the phone's clock jumping forward looks like a sleep, so that one may
+  // not be the latest), and the last copy of each start of the app before the next (the phone may have started between
+  // them, and once the next start has read the steady clock past that copy's time the steady time between them says
+  // nothing of the awake time between them).
+  for (let i = 0; i + 1 < chain.length && room(); i++) {
+    if (restarted(i) || (i > pinned && slept(i))) take(chain[i + 1]);
   }
   for (const copy of newer) if (!keep.has(copy)) go.push(copy);
   return go;

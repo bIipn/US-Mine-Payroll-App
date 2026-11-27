@@ -232,9 +232,10 @@ interface Actions {
   recordsElsewhere: boolean;
   /**
    * The phone shut off before an account deleted on it was off it for good (a power cut, a forced restart), and it
-   * could not be deleted again by itself: the copy the phone opened on has that account's shift still open, or names
-   * no account (an earlier version's). Said until the person taps OK, and again at each start until it is deleted
-   * again (`finishUndoneDrops`); never saved itself.
+   * could not be deleted again by itself (`finishUndoneDrops`): the copy the phone opened on has that account's shift
+   * still open, said until the person taps OK and again at each start until it is deleted again; or the mark of the
+   * deletion names no account (only an earlier test build wrote one), said once, since the app cannot tell whose it
+   * was. Never saved itself.
    */
   deletionNotFinished: boolean;
   toast: Toast | null;
@@ -251,7 +252,8 @@ interface Actions {
    * A power cut undid deleting these accounts from the phone (`undoneDrops`, on Android): what the person confirmed is
    * done again, here only, as deleteMyAccount and deleteAccountWithPassword did it (the account, its session and its
    * hourly rate off the phone). Nothing is asked of the server: what it deleted stays deleted. One whose shift is open
-   * in the copy the phone opened on, or that the mark does not name, is left and said (`deletionNotFinished`).
+   * in the copy the phone opened on is left and said (`deletionNotFinished`), at every start until it is deleted; one
+   * the mark does not name is said once, and its mark goes with the drop made here.
    */
   finishUndoneDrops: (ids: readonly (string | null)[]) => void;
   /**

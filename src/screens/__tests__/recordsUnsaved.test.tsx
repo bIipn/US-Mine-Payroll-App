@@ -350,6 +350,28 @@ describe('when the phone shut off before an account deleted on it was off it for
     expect(shown()).toContain('The app');
   });
 
+  it('says so on its own, with its OK, when the phone opened on what it saved last (no shut-off notice with it)', async () => {
+    useStore.setState({ deletionNotFinished: true, shutOffWhileSaving: false });
+    await opened();
+    expect(shown()).toContain(BACK);
+    expect(shown()).not.toContain(SHUT_OFF);
+    expect(root!.container.queryAll((n) => n.props.testID === 'deletion-not-finished-ok').length).toBeGreaterThan(0);
+    await act(async () => tap('deletion-not-finished-ok')());
+    expect(useStore.getState().deletionNotFinished).toBe(false);
+    expect(shown()).not.toContain(BACK);
+    expect(shown()).toContain('The app');
+  });
+
+  it('stays once the shut-off notice beside it has been seen first', async () => {
+    useStore.setState({ deletionNotFinished: true, shutOffWhileSaving: true });
+    await opened();
+    await act(async () => tap('shut-off-ok')());
+    expect(useStore.getState().shutOffWhileSaving).toBe(false);
+    expect(shown()).not.toContain(SHUT_OFF);
+    expect(shown()).toContain(BACK);
+    expect(useStore.getState().deletionNotFinished).toBe(true);
+  });
+
   it('says nothing when there is none', async () => {
     await opened();
     expect(shown()).not.toContain(BACK);
